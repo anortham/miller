@@ -1,11 +1,78 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Store;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
 
 public sealed class StoreWalCheckpointTests
 {
+    [Fact]
+    public void FamilyCheckpointDoesNotReportSuccessWhenTheCoordinatorIsUnreadable()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        File.WriteAllText(Path.Combine(fixture.Binding.StoreRoot, "coord.db"), "not a SQLite database");
+        StoreWalCheckpoint.MarkOwed(fixture.Binding.StoreRoot);
+
+        Assert.Equal(StoreWalCheckpointStatus.Skipped, StoreWalCheckpoint.TryCompleteOwedFamily(fixture.Binding.StoreRoot));
+        Assert.True(StoreWalCheckpoint.IsOwed(fixture.Binding.StoreRoot));
+    }
+
+    [Fact]
+    public async Task FamilyCheckpointKeepsDebtUntilAnActiveReaderReleasesItsSnapshot()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string storeRoot = fixture.Binding.StoreRoot;
+        string generation = Path.Combine(storeRoot, "gen-001");
+        string database = Path.Combine(generation, "store.db");
+        using var setup = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false,
+        }.ToString());
+        setup.Open();
+        using SqliteCommand write = setup.CreateCommand();
+        write.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE t(x); INSERT INTO t VALUES (1);";
+        write.ExecuteNonQuery();
+        using var ready = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Task readerTask = Task.Run(() =>
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = database,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "BEGIN; SELECT COUNT(*) FROM t;";
+            command.ExecuteScalar();
+            ready.Set();
+            release.Wait(TimeSpan.FromSeconds(4), cancellationToken);
+            command.CommandText = "ROLLBACK;";
+            command.ExecuteNonQuery();
+        }, cancellationToken);
+
+        try
+        {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10), cancellationToken));
+            write.CommandText = "INSERT INTO t VALUES (2);";
+            write.ExecuteNonQuery();
+            StoreWalCheckpoint.MarkOwed(storeRoot);
+            Assert.Equal(StoreWalCheckpointStatus.Busy, StoreWalCheckpoint.TryCompleteOwedFamily(storeRoot));
+            Assert.True(StoreWalCheckpoint.IsOwed(storeRoot));
+        }
+        finally
+        {
+            release.Set();
+            await readerTask;
+        }
+        Assert.Equal(StoreWalCheckpointStatus.Ok, StoreWalCheckpoint.TryCompleteOwedFamily(storeRoot));
+        Assert.False(StoreWalCheckpoint.IsOwed(storeRoot));
+    }
+
     [Fact]
     public void TruncateReportsBusyWhileAWriterTransactionIsHeld()
     {

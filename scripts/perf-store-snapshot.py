@@ -476,6 +476,9 @@ def _copy_family_files(source: Path, destination: Path) -> tuple[list[tuple[Path
     copied: list[Path] = []
     for directory in TRANSIENT_STORE_DIRECTORIES:
         (destination / directory).mkdir(parents=True, exist_ok=True)
+    for bases in source.glob("gen-*/bases"):
+        if bases.is_dir():
+            (destination / bases.relative_to(source)).mkdir(parents=True, exist_ok=True)
     for relative in _source_files(source):
         if relative.parts and relative.parts[0] in TRANSIENT_STORE_DIRECTORIES:
             continue

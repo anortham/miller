@@ -1082,8 +1082,17 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private void PublishFreshnessStampIfMissing()
     {
         if (StoreFreshnessStamp.TryRead(_binding.StoreRoot, _binding.ViewId) is not null)
+        {
+            TryCheckpointOwedWal();
             return;
+        }
         PublishFreshnessStamp();
+    }
+
+    private void TryCheckpointOwedWal()
+    {
+        if (StoreWalCheckpoint.IsOwed(_binding.StoreRoot))
+            StoreWalCheckpoint.TryCompleteOwedFamily(_binding.StoreRoot);
     }
 
     private void PublishFreshnessStamp()
@@ -1101,11 +1110,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
             StoreFreshnessStamp.Write(stamp);
             StoreWalCheckpoint.MarkOwed(_binding.StoreRoot);
+            TryCheckpointOwedWal();
         }
         catch (Exception)
         {
-            // Stamp publish is best-effort. The next committed write retries. A missing stamp
-            // only falls back to opening store.db; it must not fail the scan.
         }
     }
 

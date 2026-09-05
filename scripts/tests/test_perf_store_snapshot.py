@@ -89,6 +89,14 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         self.assertFalse(list(self.destination.rglob("*.db-wal")))
         self.assertFalse(list(self.destination.rglob("*.db-shm")))
 
+    def test_snapshot_preserves_empty_generation_directories_required_by_the_producer(self) -> None:
+        (self.source_generation / "bases").mkdir()
+
+        snapshot.snapshot_family(self.source, self.destination, live_root=self.live)
+
+        self.assertTrue((self.destination / "gen-001" / "bases").is_dir())
+        self.assertEqual([], list((self.destination / "gen-001" / "bases").iterdir()))
+
     def test_snapshot_does_not_copy_transient_store_directory_contents(self) -> None:
         spool_file = self.source / "spool" / "stale.spool"
         scratch_file = self.source / "scratch" / "working.tmp"

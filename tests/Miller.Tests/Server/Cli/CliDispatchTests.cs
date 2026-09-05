@@ -6005,26 +6005,37 @@ public sealed class CliDispatchTests : IDisposable
             {
                 command.CommandText =
                     """
+                    INSERT INTO file_versions VALUES
+                      (101,'web/api.ts','blake3:client',1,'typescript',24,5,NULL,1,2,3),
+                      (102,'other/api.ts','blake3:other-client',1,'typescript',24,5,NULL,1,2,3),
+                      (103,'web/app/api/visible/route.ts','blake3:handler',1,'typescript',12,1,NULL,1,2,3);
+                    INSERT INTO manifest_entries VALUES
+                      ('view-a',1,'web/api.ts','typescript',101,'indexed','blake3:client',
+                       '2026-08-09T00:00:00Z',NULL,NULL),
+                      ('view-a',1,'other/api.ts','typescript',102,'indexed','blake3:other-client',
+                       '2026-08-09T00:00:00Z',NULL,NULL),
+                      ('view-a',1,'web/app/api/visible/route.ts','typescript',103,'indexed','blake3:handler',
+                       '2026-08-09T00:00:00Z',NULL,NULL);
                     INSERT INTO symbols
                         (version_id, symbol_id, path, language, name, kind, signature, visibility,
                          start_line, start_column, end_line, end_column, start_byte, end_byte,
                          is_test, test_container, test_lifecycle)
                     VALUES
-                        (1, 'sym-client', 'web/api.ts', 'typescript', 'FetchVisible', 'function',
+                        (101, 'sym-client', 'web/api.ts', 'typescript', 'FetchVisible', 'function',
                          'function FetchVisible()', 'public', 5, 1, 5, 24, 0, 23, 0, 0, 0),
-                        (1, 'sym-client-other', 'other/api.ts', 'typescript', 'FetchVisible', 'function',
+                        (102, 'sym-client-other', 'other/api.ts', 'typescript', 'FetchVisible', 'function',
                          'function FetchVisible()', 'public', 5, 1, 5, 24, 0, 23, 0, 0, 0),
-                        (1, 'sym-handler', 'web/app/api/visible/route.ts', 'typescript', 'GET', 'function',
+                        (103, 'sym-handler', 'web/app/api/visible/route.ts', 'typescript', 'GET', 'function',
                          'function GET()', 'public', 1, 1, 1, 12, 0, 11, 0, 0, 0);
                     INSERT INTO structural_facts
                         (structural_fact_id, version_id, path, language, pattern_id, capture_name, node_kind,
                          containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
                          confidence, metadata_json)
                     VALUES
-                        ('fact-client-visible', 1, 'web/api.ts', 'typescript', 'http.client_request.v1',
+                        ('fact-client-visible', 101, 'web/api.ts', 'typescript', 'http.client_request.v1',
                          'client_request', 'call_expression', 'sym-client', 5, 1, 5, 24, 0, 23, 1.0,
                          '{"client":"fetch","framework":"fetch","target_path":"/api/visible","url_kind":"path","verb":"GET","verb_source":"default"}'),
-                        ('fact-handler-visible', 1, 'web/app/api/visible/route.ts', 'typescript', 'nextjs.route_handler.v1',
+                        ('fact-handler-visible', 103, 'web/app/api/visible/route.ts', 'typescript', 'nextjs.route_handler.v1',
                          'route_handler', 'export_statement', 'sym-handler', 1, 1, 1, 12, 0, 11, 1.0,
                          '{"framework":"nextjs","router":"app","route_path":"/api/visible","verb":"GET","verb_source":"attested"}');
                     """;

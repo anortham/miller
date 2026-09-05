@@ -15,6 +15,32 @@ namespace Miller.Tests.Indexing;
 public sealed class FamilyStoreReadSessionTests
 {
     [Fact]
+    public void SymbolPathQueryUsesTheManifestPathIndexBeforeReadingSymbols()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        List<string> plan = session.Read(connection =>
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "EXPLAIN QUERY PLAN SELECT symbol_id FROM symbols WHERE name IS NOT NULL AND path=$path";
+            command.Parameters.AddWithValue("$path", "same.cs");
+            using SqliteDataReader reader = command.ExecuteReader();
+            var steps = new List<string>();
+            while (reader.Read())
+                steps.Add(reader.GetString(3));
+            return steps;
+        });
+
+        Assert.Contains(plan, step => step.Contains("SEARCH e", StringComparison.Ordinal) &&
+            step.Contains("(path=?)", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN s", StringComparison.Ordinal));
+        IndexedSymbol symbol = Assert.Single(SqliteSymbolReader.ReadForPaths(session, ["same.cs"]));
+        Assert.Equal("Visible", symbol.Name);
+        Assert.Empty(SqliteSymbolReader.ReadForPaths(session, ["missing.cs"]));
+    }
+
+    [Fact]
     public void CurrentManifestFiltersRetainedVersionsBeforeReaderQueries()
     {
         using StoreFixture fixture = StoreFixture.Create();

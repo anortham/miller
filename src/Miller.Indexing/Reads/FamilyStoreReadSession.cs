@@ -968,7 +968,7 @@ public sealed class FamilyStoreReadSession :
                    s.body_start_byte,s.body_end_byte,s.body_hash,s.semantic_group,s.confidence,
                    s.content_type,s.is_test,s.test_container,s.test_lifecycle,s.metadata_json
             FROM main.symbols AS s
-            JOIN _miller_visible_entries AS e ON e.version_id=s.version_id;
+            JOIN _miller_visible_entries AS e ON e.version_id=s.version_id AND e.path=s.path;
             CREATE TEMP VIEW symbol_annotations AS
             SELECT a.annotation_id,a.symbol_id,
                    a.annotation,a.annotation_key,a.raw_text,a.carrier,a.metadata_json

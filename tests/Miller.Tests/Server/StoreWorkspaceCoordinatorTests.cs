@@ -4,12 +4,42 @@ using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
 public sealed class StoreWorkspaceCoordinatorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SuccessfulWorkReclaimsOwedWalWithoutAResidentIndexer(bool unchangedScan)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var client = new RecordingStoreClient(StoreOperation.Update);
+        var coordinator = new StoreWorkspaceCoordinator(
+            fixture.Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => new StoreWorkspaceState(2, "full"),
+            () => "request-a",
+            fromArtifact: null,
+            inspectTree: () => new StoreTreeDelta([], []),
+            millerDirectory: fixture.Root);
+        StoreWalCheckpoint.MarkOwed(fixture.Binding.StoreRoot);
+
+        if (unchangedScan)
+            coordinator.Scan();
+        else
+            coordinator.Update(Path.Combine(fixture.Binding.WorkspaceRoot, "same.cs"));
+
+        Assert.False(StoreWalCheckpoint.IsOwed(fixture.Binding.StoreRoot));
+        StoreWalCheckpoint.MarkOwed(fixture.Binding.StoreRoot);
+        coordinator.Scan();
+        Assert.False(StoreWalCheckpoint.IsOwed(fixture.Binding.StoreRoot));
+    }
+
     private static readonly StoreFamilyBinding Binding = new(
         Guid.Parse("11111111-1111-4111-8111-111111111111"),
         Path.GetFullPath("/family"),

@@ -1574,18 +1574,16 @@ public sealed class IndexerService : BackgroundService
         if (DateTime.UtcNow < _nextWalCheckpointUtc)
             return;
 
-        StoreWalCheckpointStatus status = StoreWalCheckpoint.TryTruncateFamily(pointer.StoreRoot);
-        if (status == StoreWalCheckpointStatus.Busy)
+        StoreWalCheckpointStatus status = StoreWalCheckpoint.TryCompleteOwedFamily(pointer.StoreRoot);
+        if (status != StoreWalCheckpointStatus.Ok)
         {
             _nextWalCheckpointUtc = DateTime.UtcNow.AddSeconds(30);
-            _logger.LogDebug("Family store WAL checkpoint busy for {StoreRoot}; retrying later.", pointer.StoreRoot);
+            _logger.LogDebug("Family store WAL checkpoint {Status} for {StoreRoot}; retrying later.", status, pointer.StoreRoot);
             return;
         }
 
         _walCheckpointOwed = false;
-        StoreWalCheckpoint.ClearOwed(pointer.StoreRoot);
-        if (status == StoreWalCheckpointStatus.Ok)
-            _logger.LogInformation("Family store WAL checkpoint truncated {StoreRoot}.", pointer.StoreRoot);
+        _logger.LogInformation("Family store WAL checkpoint truncated {StoreRoot}.", pointer.StoreRoot);
     }
 
     private StoreSidecarConvergenceResult TryConvergeStoreSidecars()

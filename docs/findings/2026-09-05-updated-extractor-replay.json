@@ -1,0 +1,1336 @@
+{
+  "before": [
+    {
+      "phase": "open",
+      "ms": 73.5165
+    },
+    {
+      "phase": "read",
+      "iteration": 0,
+      "ms": 329.8794,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 1,
+      "ms": 325.8549,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 2,
+      "ms": 329.1957,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 3,
+      "ms": 325.2787,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 4,
+      "ms": 341.739,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 5,
+      "ms": 326.8228,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "language",
+      "language": "bash",
+      "path": "fixtures/extraction/bash/basic/source.sh",
+      "count": 16,
+      "hash": "E826A2C245972A917EE0A562DCEECBFBE83A14EB6C1CA82A165EBDE9EECC2571"
+    },
+    {
+      "phase": "language",
+      "language": "c",
+      "path": "fixtures/extraction/c/basic/source.c",
+      "count": 28,
+      "hash": "8B699C082B40F489D0766DF41C5ABDA15A0D720C3C4C94436C69038A986DDA69"
+    },
+    {
+      "phase": "language",
+      "language": "cpp",
+      "path": "fixtures/extraction/cpp/basic/source.cpp",
+      "count": 33,
+      "hash": "9CD10EC75396A17BCA54699372C159D3FBB92A4159C5743CD82D5F10ED9A6C92"
+    },
+    {
+      "phase": "language",
+      "language": "csharp",
+      "path": "fixtures/extraction/csharp/aspnet_attribute_routes/source.cs",
+      "count": 13,
+      "hash": "C17DAFBCD692A57BC153B1F39FEA128D08B686FE584A0B41A2B0D86320B133F9"
+    },
+    {
+      "phase": "language",
+      "language": "css",
+      "path": "docs/site/style.css",
+      "count": 103,
+      "hash": "59A047D6DE5A37EFDCBFE7721DFE4CE5194EBEA0086F2B1012A6BBF1DBAC0E94"
+    },
+    {
+      "phase": "language",
+      "language": "dart",
+      "path": "fixtures/extraction/dart/basic/source.dart",
+      "count": 40,
+      "hash": "3E99AE692CDF4D61F468A14A12BCE5F03E315EDF53AFC1775012F36CDA465558"
+    },
+    {
+      "phase": "language",
+      "language": "elixir",
+      "path": "fixtures/elixir/basic.ex",
+      "count": 32,
+      "hash": "C6EC4E2150CC83309578F23B87E812FCE756B91F476FEDBC5BF081E8BA7B5D58"
+    },
+    {
+      "phase": "language",
+      "language": "erlang",
+      "path": "fixtures/extraction/erlang/basic/source.erl",
+      "count": 38,
+      "hash": "74383F620D425649461776B128E9E3537EC4640DFF42FD5657361CAE02F2C52B"
+    },
+    {
+      "phase": "language",
+      "language": "fsharp",
+      "path": "fixtures/extraction/fsharp/basic/source.fs",
+      "count": 43,
+      "hash": "C2E1786203C41C6BDBA32A36E87EB4DA497748B8D29A9BE315EA35CE3054E054"
+    },
+    {
+      "phase": "language",
+      "language": "gdscript",
+      "path": "fixtures/extraction/gdscript/basic/source.gd",
+      "count": 35,
+      "hash": "31CDDEFA1DC7C76497AE28AF0B748B760440DA2E5A59FF6A31A3DDB1A82BE71B"
+    },
+    {
+      "phase": "language",
+      "language": "go",
+      "path": "fixtures/extraction/go/backend_http_boundaries/source.go",
+      "count": 13,
+      "hash": "726D7FC94C867C0C980631111FB15821B77287663E4E537350BF05107C364634"
+    },
+    {
+      "phase": "language",
+      "language": "html",
+      "path": "docs/plans/2026-08-08-index-store-ph2c-resolution-design.html",
+      "count": 141,
+      "hash": "2CB6E66A9A07E803AD7DC7B29D3963BA82D49244D276F438F9B60891D068DFEE"
+    },
+    {
+      "phase": "language",
+      "language": "java",
+      "path": "fixtures/extraction/java/backend_http_boundaries/source.java",
+      "count": 12,
+      "hash": "8ADF9A43A856DBA13504CCFDA451F13192CFD0394C0402F928DA6BC6C762CBE3"
+    },
+    {
+      "phase": "language",
+      "language": "javascript",
+      "path": "docs/site/script.js",
+      "count": 9,
+      "hash": "B58B4DD6B8712DD5A999EF7FECA029783EB51554C0E4C07E5DEBCB6BA40718D4"
+    },
+    {
+      "phase": "language",
+      "language": "json",
+      "path": ".mcp.json",
+      "count": 6,
+      "hash": "C715E053572BDADC0DAC19CDC82F4F574A30AB533059A9FC2433745CE08FF3B3"
+    },
+    {
+      "phase": "language",
+      "language": "jsx",
+      "path": "fixtures/extraction/jsx/backend_http_boundaries/source.jsx",
+      "count": 12,
+      "hash": "31E7E79E5964555EFE48865B06CC922490FA6D7EB6B177A6E13109EB75812C21"
+    },
+    {
+      "phase": "language",
+      "language": "kotlin",
+      "path": "fixtures/extraction/kotlin/basic/source.kt",
+      "count": 30,
+      "hash": "608A7D34A12C31765EF6112AEAE2B583C0BB23AF51BE3C2BCA8D8ECA985E5C7F"
+    },
+    {
+      "phase": "language",
+      "language": "lua",
+      "path": "fixtures/extraction/lua/basic/source.lua",
+      "count": 24,
+      "hash": "FB419A223AC4877DA068CD3B14C2C48EB6D8DA61476E66FE3010C3343C2ED4FE"
+    },
+    {
+      "phase": "language",
+      "language": "markdown",
+      "path": "AGENTS.md",
+      "count": 11,
+      "hash": "6CD385EB91EBC14D29C25E407C372771402FDB2F544A69165A9F1913484DFEB7"
+    },
+    {
+      "phase": "language",
+      "language": "php",
+      "path": "fixtures/extraction/php/basic/source.php",
+      "count": 34,
+      "hash": "A30227509F23E9FED200C335C731CB36BF4BCCA132BA6E2AE2603D1599165B50"
+    },
+    {
+      "phase": "language",
+      "language": "powershell",
+      "path": "fixtures/extraction/powershell/basic/source.ps1",
+      "count": 34,
+      "hash": "13C9C2A60C3223EE105E234D98DB6EF95AD66F2FC6819F64DF246CB0DBA5D3F1"
+    },
+    {
+      "phase": "language",
+      "language": "python",
+      "path": "docs/release-evidence/v2.29.0/probe5.py",
+      "count": 42,
+      "hash": "D6F42CAB39B17C3568AFFB6EB82956E09B43830B81B1305C1D58CF16AE736565"
+    },
+    {
+      "phase": "language",
+      "language": "qml",
+      "path": "fixtures/extraction/qml/basic/source.qml",
+      "count": 37,
+      "hash": "41CCBED48E0DAB654022F2531124D453FEB68728B85A45EFD96D1FF7106027C6"
+    },
+    {
+      "phase": "language",
+      "language": "qmldir",
+      "path": "fixtures/extraction/qmldir/basic/qmldir",
+      "count": 4,
+      "hash": "FD12AA397D274EAC0F19D03F59A585A2ED1A88992406C5E0A69CE356B5E2BD8E"
+    },
+    {
+      "phase": "language",
+      "language": "r",
+      "path": "fixtures/extraction/r/basic/source.r",
+      "count": 20,
+      "hash": "F0A37C0D359B36753E9A4DEFB479000E0A82EA241C1BC3EA3473CF99629BE93B"
+    },
+    {
+      "phase": "language",
+      "language": "razor",
+      "path": "fixtures/extraction/razor/attribute-expressions/directives/source.razor",
+      "count": 4,
+      "hash": "AFC8667DCA0CA397FC0DD2FA55963342B8101A96AE19C0E0B3EFCB8C6E9D2E1C"
+    },
+    {
+      "phase": "language",
+      "language": "regex",
+      "path": "fixtures/extraction/regex/basic/source.regex",
+      "count": 5,
+      "hash": "9E6CF9A144AB2C2BE4B2B1E2E88FB8B85ECDEC3AD879A38BA2F470BD4B836BD9"
+    },
+    {
+      "phase": "language",
+      "language": "ruby",
+      "path": "fixtures/extraction/ruby/backend_http_boundaries/source.rb",
+      "count": 3,
+      "hash": "C696016236241D83981F0F6B716EF3640034EE5F6BA1123108F358F5FA796802"
+    },
+    {
+      "phase": "language",
+      "language": "rust",
+      "path": "crates/julie-extract-artifact/src/jsonl.rs",
+      "count": 346,
+      "hash": "E0C82DEB77DCF54A843945A023802395B266DB79ADD75D67FB257C77B7E91975"
+    },
+    {
+      "phase": "language",
+      "language": "scala",
+      "path": "fixtures/extraction/scala/basic/source.scala",
+      "count": 49,
+      "hash": "9B80372B07B243181BC4FDB5C2619661B6C1B3D43AA9B2342A0F7E05F9EB639C"
+    },
+    {
+      "phase": "language",
+      "language": "sql",
+      "path": "fixtures/extraction/sql/advanced_dml/source.sql",
+      "count": 4,
+      "hash": "551881FAE1615E7227F6972D15316A11FC9F31DF2CA2825DD30F332147D0D2BB"
+    },
+    {
+      "phase": "language",
+      "language": "swift",
+      "path": "fixtures/extraction/swift/basic/source.swift",
+      "count": 48,
+      "hash": "6FBFAFE40A1F202CF870B6DB07F488335E2E88A523BA6431AA57D9B5C10CA39C"
+    },
+    {
+      "phase": "language",
+      "language": "toml",
+      "path": ".cargo/config.toml",
+      "count": 2,
+      "hash": "35502E86C8385822F186D28E49187C606176363B20151FF40397B1C497B708A5"
+    },
+    {
+      "phase": "language",
+      "language": "tsx",
+      "path": "fixtures/extraction/tsx/backend_http_boundaries/source.tsx",
+      "count": 7,
+      "hash": "587D17D985606697A3A75E8AD1115F3671B31EA7598B8D21DE2E989D7C017A77"
+    },
+    {
+      "phase": "language",
+      "language": "typescript",
+      "path": "fixtures/extraction/resolution_contract/typescript/nested_same_member_receiver/inner.ts",
+      "count": 3,
+      "hash": "73FE1F7273C987729343E650A37628C8430BD5F539087F4EDA22D1856B1644D7"
+    },
+    {
+      "phase": "language",
+      "language": "vbnet",
+      "path": "fixtures/extraction/vbnet/basic/source.vb",
+      "count": 37,
+      "hash": "535F9AC46360DC1F3965C669E60F7D259FF2729F5187B1547297236FD3E1E8DF"
+    },
+    {
+      "phase": "language",
+      "language": "vue",
+      "path": "fixtures/extraction/vue/basic/source.vue",
+      "count": 27,
+      "hash": "9FA95972CF8865C4F1EF244EEC4481F62B0BECA28C25A25B5C22F6EEACE7FA90"
+    },
+    {
+      "phase": "language",
+      "language": "xml",
+      "path": "fixtures/extraction/xml/basic/source.xml",
+      "count": 6,
+      "hash": "F5E2CBE0C24B34806929D89252B42835F40C50A6F49E7746FD4A3BD3F3C2850A"
+    },
+    {
+      "phase": "language",
+      "language": "yaml",
+      "path": ".github/workflows/ci.yml",
+      "count": 77,
+      "hash": "9D205972ECBD4ACA33D7F9689F9FDAC7170AC4AEECCDBB52DFB4A44218570E29"
+    },
+    {
+      "phase": "language",
+      "language": "zig",
+      "path": "fixtures/extraction/zig/basic/source.zig",
+      "count": 50,
+      "hash": "43199DCF4CCA1A468A4149DF87F4E1DAE2C686D4F23CC101008FF14213128C63"
+    }
+  ],
+  "after": [
+    {
+      "phase": "open",
+      "ms": 57.4653
+    },
+    {
+      "phase": "read",
+      "iteration": 0,
+      "ms": 10.5058,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 1,
+      "ms": 4.9972,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 2,
+      "ms": 5.2323,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 3,
+      "ms": 5.4244,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 4,
+      "ms": 5.7404,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 5,
+      "ms": 5.693,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "language",
+      "language": "bash",
+      "path": "fixtures/extraction/bash/basic/source.sh",
+      "count": 16,
+      "hash": "E826A2C245972A917EE0A562DCEECBFBE83A14EB6C1CA82A165EBDE9EECC2571"
+    },
+    {
+      "phase": "language",
+      "language": "c",
+      "path": "fixtures/extraction/c/basic/source.c",
+      "count": 28,
+      "hash": "8B699C082B40F489D0766DF41C5ABDA15A0D720C3C4C94436C69038A986DDA69"
+    },
+    {
+      "phase": "language",
+      "language": "cpp",
+      "path": "fixtures/extraction/cpp/basic/source.cpp",
+      "count": 33,
+      "hash": "9CD10EC75396A17BCA54699372C159D3FBB92A4159C5743CD82D5F10ED9A6C92"
+    },
+    {
+      "phase": "language",
+      "language": "csharp",
+      "path": "fixtures/extraction/csharp/aspnet_attribute_routes/source.cs",
+      "count": 13,
+      "hash": "C17DAFBCD692A57BC153B1F39FEA128D08B686FE584A0B41A2B0D86320B133F9"
+    },
+    {
+      "phase": "language",
+      "language": "css",
+      "path": "docs/site/style.css",
+      "count": 103,
+      "hash": "59A047D6DE5A37EFDCBFE7721DFE4CE5194EBEA0086F2B1012A6BBF1DBAC0E94"
+    },
+    {
+      "phase": "language",
+      "language": "dart",
+      "path": "fixtures/extraction/dart/basic/source.dart",
+      "count": 40,
+      "hash": "3E99AE692CDF4D61F468A14A12BCE5F03E315EDF53AFC1775012F36CDA465558"
+    },
+    {
+      "phase": "language",
+      "language": "elixir",
+      "path": "fixtures/elixir/basic.ex",
+      "count": 32,
+      "hash": "C6EC4E2150CC83309578F23B87E812FCE756B91F476FEDBC5BF081E8BA7B5D58"
+    },
+    {
+      "phase": "language",
+      "language": "erlang",
+      "path": "fixtures/extraction/erlang/basic/source.erl",
+      "count": 38,
+      "hash": "74383F620D425649461776B128E9E3537EC4640DFF42FD5657361CAE02F2C52B"
+    },
+    {
+      "phase": "language",
+      "language": "fsharp",
+      "path": "fixtures/extraction/fsharp/basic/source.fs",
+      "count": 43,
+      "hash": "C2E1786203C41C6BDBA32A36E87EB4DA497748B8D29A9BE315EA35CE3054E054"
+    },
+    {
+      "phase": "language",
+      "language": "gdscript",
+      "path": "fixtures/extraction/gdscript/basic/source.gd",
+      "count": 35,
+      "hash": "31CDDEFA1DC7C76497AE28AF0B748B760440DA2E5A59FF6A31A3DDB1A82BE71B"
+    },
+    {
+      "phase": "language",
+      "language": "go",
+      "path": "fixtures/extraction/go/backend_http_boundaries/source.go",
+      "count": 13,
+      "hash": "726D7FC94C867C0C980631111FB15821B77287663E4E537350BF05107C364634"
+    },
+    {
+      "phase": "language",
+      "language": "html",
+      "path": "docs/plans/2026-08-08-index-store-ph2c-resolution-design.html",
+      "count": 141,
+      "hash": "2CB6E66A9A07E803AD7DC7B29D3963BA82D49244D276F438F9B60891D068DFEE"
+    },
+    {
+      "phase": "language",
+      "language": "java",
+      "path": "fixtures/extraction/java/backend_http_boundaries/source.java",
+      "count": 12,
+      "hash": "8ADF9A43A856DBA13504CCFDA451F13192CFD0394C0402F928DA6BC6C762CBE3"
+    },
+    {
+      "phase": "language",
+      "language": "javascript",
+      "path": "docs/site/script.js",
+      "count": 9,
+      "hash": "B58B4DD6B8712DD5A999EF7FECA029783EB51554C0E4C07E5DEBCB6BA40718D4"
+    },
+    {
+      "phase": "language",
+      "language": "json",
+      "path": ".mcp.json",
+      "count": 6,
+      "hash": "C715E053572BDADC0DAC19CDC82F4F574A30AB533059A9FC2433745CE08FF3B3"
+    },
+    {
+      "phase": "language",
+      "language": "jsx",
+      "path": "fixtures/extraction/jsx/backend_http_boundaries/source.jsx",
+      "count": 12,
+      "hash": "31E7E79E5964555EFE48865B06CC922490FA6D7EB6B177A6E13109EB75812C21"
+    },
+    {
+      "phase": "language",
+      "language": "kotlin",
+      "path": "fixtures/extraction/kotlin/basic/source.kt",
+      "count": 30,
+      "hash": "608A7D34A12C31765EF6112AEAE2B583C0BB23AF51BE3C2BCA8D8ECA985E5C7F"
+    },
+    {
+      "phase": "language",
+      "language": "lua",
+      "path": "fixtures/extraction/lua/basic/source.lua",
+      "count": 24,
+      "hash": "FB419A223AC4877DA068CD3B14C2C48EB6D8DA61476E66FE3010C3343C2ED4FE"
+    },
+    {
+      "phase": "language",
+      "language": "markdown",
+      "path": "AGENTS.md",
+      "count": 11,
+      "hash": "6CD385EB91EBC14D29C25E407C372771402FDB2F544A69165A9F1913484DFEB7"
+    },
+    {
+      "phase": "language",
+      "language": "php",
+      "path": "fixtures/extraction/php/basic/source.php",
+      "count": 34,
+      "hash": "A30227509F23E9FED200C335C731CB36BF4BCCA132BA6E2AE2603D1599165B50"
+    },
+    {
+      "phase": "language",
+      "language": "powershell",
+      "path": "fixtures/extraction/powershell/basic/source.ps1",
+      "count": 34,
+      "hash": "13C9C2A60C3223EE105E234D98DB6EF95AD66F2FC6819F64DF246CB0DBA5D3F1"
+    },
+    {
+      "phase": "language",
+      "language": "python",
+      "path": "docs/release-evidence/v2.29.0/probe5.py",
+      "count": 42,
+      "hash": "D6F42CAB39B17C3568AFFB6EB82956E09B43830B81B1305C1D58CF16AE736565"
+    },
+    {
+      "phase": "language",
+      "language": "qml",
+      "path": "fixtures/extraction/qml/basic/source.qml",
+      "count": 37,
+      "hash": "41CCBED48E0DAB654022F2531124D453FEB68728B85A45EFD96D1FF7106027C6"
+    },
+    {
+      "phase": "language",
+      "language": "qmldir",
+      "path": "fixtures/extraction/qmldir/basic/qmldir",
+      "count": 4,
+      "hash": "FD12AA397D274EAC0F19D03F59A585A2ED1A88992406C5E0A69CE356B5E2BD8E"
+    },
+    {
+      "phase": "language",
+      "language": "r",
+      "path": "fixtures/extraction/r/basic/source.r",
+      "count": 20,
+      "hash": "F0A37C0D359B36753E9A4DEFB479000E0A82EA241C1BC3EA3473CF99629BE93B"
+    },
+    {
+      "phase": "language",
+      "language": "razor",
+      "path": "fixtures/extraction/razor/attribute-expressions/directives/source.razor",
+      "count": 4,
+      "hash": "AFC8667DCA0CA397FC0DD2FA55963342B8101A96AE19C0E0B3EFCB8C6E9D2E1C"
+    },
+    {
+      "phase": "language",
+      "language": "regex",
+      "path": "fixtures/extraction/regex/basic/source.regex",
+      "count": 5,
+      "hash": "9E6CF9A144AB2C2BE4B2B1E2E88FB8B85ECDEC3AD879A38BA2F470BD4B836BD9"
+    },
+    {
+      "phase": "language",
+      "language": "ruby",
+      "path": "fixtures/extraction/ruby/backend_http_boundaries/source.rb",
+      "count": 3,
+      "hash": "C696016236241D83981F0F6B716EF3640034EE5F6BA1123108F358F5FA796802"
+    },
+    {
+      "phase": "language",
+      "language": "rust",
+      "path": "crates/julie-extract-artifact/src/jsonl.rs",
+      "count": 346,
+      "hash": "E0C82DEB77DCF54A843945A023802395B266DB79ADD75D67FB257C77B7E91975"
+    },
+    {
+      "phase": "language",
+      "language": "scala",
+      "path": "fixtures/extraction/scala/basic/source.scala",
+      "count": 49,
+      "hash": "9B80372B07B243181BC4FDB5C2619661B6C1B3D43AA9B2342A0F7E05F9EB639C"
+    },
+    {
+      "phase": "language",
+      "language": "sql",
+      "path": "fixtures/extraction/sql/advanced_dml/source.sql",
+      "count": 4,
+      "hash": "551881FAE1615E7227F6972D15316A11FC9F31DF2CA2825DD30F332147D0D2BB"
+    },
+    {
+      "phase": "language",
+      "language": "swift",
+      "path": "fixtures/extraction/swift/basic/source.swift",
+      "count": 48,
+      "hash": "6FBFAFE40A1F202CF870B6DB07F488335E2E88A523BA6431AA57D9B5C10CA39C"
+    },
+    {
+      "phase": "language",
+      "language": "toml",
+      "path": ".cargo/config.toml",
+      "count": 2,
+      "hash": "35502E86C8385822F186D28E49187C606176363B20151FF40397B1C497B708A5"
+    },
+    {
+      "phase": "language",
+      "language": "tsx",
+      "path": "fixtures/extraction/tsx/backend_http_boundaries/source.tsx",
+      "count": 7,
+      "hash": "587D17D985606697A3A75E8AD1115F3671B31EA7598B8D21DE2E989D7C017A77"
+    },
+    {
+      "phase": "language",
+      "language": "typescript",
+      "path": "fixtures/extraction/resolution_contract/typescript/nested_same_member_receiver/inner.ts",
+      "count": 3,
+      "hash": "73FE1F7273C987729343E650A37628C8430BD5F539087F4EDA22D1856B1644D7"
+    },
+    {
+      "phase": "language",
+      "language": "vbnet",
+      "path": "fixtures/extraction/vbnet/basic/source.vb",
+      "count": 37,
+      "hash": "535F9AC46360DC1F3965C669E60F7D259FF2729F5187B1547297236FD3E1E8DF"
+    },
+    {
+      "phase": "language",
+      "language": "vue",
+      "path": "fixtures/extraction/vue/basic/source.vue",
+      "count": 27,
+      "hash": "9FA95972CF8865C4F1EF244EEC4481F62B0BECA28C25A25B5C22F6EEACE7FA90"
+    },
+    {
+      "phase": "language",
+      "language": "xml",
+      "path": "fixtures/extraction/xml/basic/source.xml",
+      "count": 6,
+      "hash": "F5E2CBE0C24B34806929D89252B42835F40C50A6F49E7746FD4A3BD3F3C2850A"
+    },
+    {
+      "phase": "language",
+      "language": "yaml",
+      "path": ".github/workflows/ci.yml",
+      "count": 77,
+      "hash": "9D205972ECBD4ACA33D7F9689F9FDAC7170AC4AEECCDBB52DFB4A44218570E29"
+    },
+    {
+      "phase": "language",
+      "language": "zig",
+      "path": "fixtures/extraction/zig/basic/source.zig",
+      "count": 50,
+      "hash": "43199DCF4CCA1A468A4149DF87F4E1DAE2C686D4F23CC101008FF14213128C63"
+    }
+  ],
+  "wal_before": [
+    {
+      "phase": "wal_before",
+      "bytes": 47684912
+    },
+    {
+      "phase": "scan",
+      "ms": 1247.9312,
+      "Status": "no_change",
+      "bytes": 47684912,
+      "owed": true
+    },
+    {
+      "phase": "open",
+      "ms": 17.7881
+    },
+    {
+      "phase": "read",
+      "iteration": 0,
+      "ms": 360.8186,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 1,
+      "ms": 350.154,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 2,
+      "ms": 347.8395,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 3,
+      "ms": 347.8232,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 4,
+      "ms": 347.5666,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 5,
+      "ms": 343.1883,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "language",
+      "language": "bash",
+      "path": "fixtures/extraction/bash/basic/source.sh",
+      "count": 16,
+      "hash": "E826A2C245972A917EE0A562DCEECBFBE83A14EB6C1CA82A165EBDE9EECC2571"
+    },
+    {
+      "phase": "language",
+      "language": "c",
+      "path": "fixtures/extraction/c/basic/source.c",
+      "count": 28,
+      "hash": "8B699C082B40F489D0766DF41C5ABDA15A0D720C3C4C94436C69038A986DDA69"
+    },
+    {
+      "phase": "language",
+      "language": "cpp",
+      "path": "fixtures/extraction/cpp/basic/source.cpp",
+      "count": 33,
+      "hash": "9CD10EC75396A17BCA54699372C159D3FBB92A4159C5743CD82D5F10ED9A6C92"
+    },
+    {
+      "phase": "language",
+      "language": "csharp",
+      "path": "fixtures/extraction/csharp/aspnet_attribute_routes/source.cs",
+      "count": 13,
+      "hash": "C17DAFBCD692A57BC153B1F39FEA128D08B686FE584A0B41A2B0D86320B133F9"
+    },
+    {
+      "phase": "language",
+      "language": "css",
+      "path": "docs/site/style.css",
+      "count": 103,
+      "hash": "59A047D6DE5A37EFDCBFE7721DFE4CE5194EBEA0086F2B1012A6BBF1DBAC0E94"
+    },
+    {
+      "phase": "language",
+      "language": "dart",
+      "path": "fixtures/extraction/dart/basic/source.dart",
+      "count": 40,
+      "hash": "3E99AE692CDF4D61F468A14A12BCE5F03E315EDF53AFC1775012F36CDA465558"
+    },
+    {
+      "phase": "language",
+      "language": "elixir",
+      "path": "fixtures/elixir/basic.ex",
+      "count": 32,
+      "hash": "C6EC4E2150CC83309578F23B87E812FCE756B91F476FEDBC5BF081E8BA7B5D58"
+    },
+    {
+      "phase": "language",
+      "language": "erlang",
+      "path": "fixtures/extraction/erlang/basic/source.erl",
+      "count": 38,
+      "hash": "74383F620D425649461776B128E9E3537EC4640DFF42FD5657361CAE02F2C52B"
+    },
+    {
+      "phase": "language",
+      "language": "fsharp",
+      "path": "fixtures/extraction/fsharp/basic/source.fs",
+      "count": 43,
+      "hash": "C2E1786203C41C6BDBA32A36E87EB4DA497748B8D29A9BE315EA35CE3054E054"
+    },
+    {
+      "phase": "language",
+      "language": "gdscript",
+      "path": "fixtures/extraction/gdscript/basic/source.gd",
+      "count": 35,
+      "hash": "31CDDEFA1DC7C76497AE28AF0B748B760440DA2E5A59FF6A31A3DDB1A82BE71B"
+    },
+    {
+      "phase": "language",
+      "language": "go",
+      "path": "fixtures/extraction/go/backend_http_boundaries/source.go",
+      "count": 13,
+      "hash": "726D7FC94C867C0C980631111FB15821B77287663E4E537350BF05107C364634"
+    },
+    {
+      "phase": "language",
+      "language": "html",
+      "path": "docs/plans/2026-08-08-index-store-ph2c-resolution-design.html",
+      "count": 141,
+      "hash": "2CB6E66A9A07E803AD7DC7B29D3963BA82D49244D276F438F9B60891D068DFEE"
+    },
+    {
+      "phase": "language",
+      "language": "java",
+      "path": "fixtures/extraction/java/backend_http_boundaries/source.java",
+      "count": 12,
+      "hash": "8ADF9A43A856DBA13504CCFDA451F13192CFD0394C0402F928DA6BC6C762CBE3"
+    },
+    {
+      "phase": "language",
+      "language": "javascript",
+      "path": "docs/site/script.js",
+      "count": 9,
+      "hash": "B58B4DD6B8712DD5A999EF7FECA029783EB51554C0E4C07E5DEBCB6BA40718D4"
+    },
+    {
+      "phase": "language",
+      "language": "json",
+      "path": ".mcp.json",
+      "count": 6,
+      "hash": "C715E053572BDADC0DAC19CDC82F4F574A30AB533059A9FC2433745CE08FF3B3"
+    },
+    {
+      "phase": "language",
+      "language": "jsx",
+      "path": "fixtures/extraction/jsx/backend_http_boundaries/source.jsx",
+      "count": 12,
+      "hash": "31E7E79E5964555EFE48865B06CC922490FA6D7EB6B177A6E13109EB75812C21"
+    },
+    {
+      "phase": "language",
+      "language": "kotlin",
+      "path": "fixtures/extraction/kotlin/basic/source.kt",
+      "count": 30,
+      "hash": "608A7D34A12C31765EF6112AEAE2B583C0BB23AF51BE3C2BCA8D8ECA985E5C7F"
+    },
+    {
+      "phase": "language",
+      "language": "lua",
+      "path": "fixtures/extraction/lua/basic/source.lua",
+      "count": 24,
+      "hash": "FB419A223AC4877DA068CD3B14C2C48EB6D8DA61476E66FE3010C3343C2ED4FE"
+    },
+    {
+      "phase": "language",
+      "language": "markdown",
+      "path": "AGENTS.md",
+      "count": 11,
+      "hash": "6CD385EB91EBC14D29C25E407C372771402FDB2F544A69165A9F1913484DFEB7"
+    },
+    {
+      "phase": "language",
+      "language": "php",
+      "path": "fixtures/extraction/php/basic/source.php",
+      "count": 34,
+      "hash": "A30227509F23E9FED200C335C731CB36BF4BCCA132BA6E2AE2603D1599165B50"
+    },
+    {
+      "phase": "language",
+      "language": "powershell",
+      "path": "fixtures/extraction/powershell/basic/source.ps1",
+      "count": 34,
+      "hash": "13C9C2A60C3223EE105E234D98DB6EF95AD66F2FC6819F64DF246CB0DBA5D3F1"
+    },
+    {
+      "phase": "language",
+      "language": "python",
+      "path": "docs/release-evidence/v2.29.0/probe5.py",
+      "count": 42,
+      "hash": "D6F42CAB39B17C3568AFFB6EB82956E09B43830B81B1305C1D58CF16AE736565"
+    },
+    {
+      "phase": "language",
+      "language": "qml",
+      "path": "fixtures/extraction/qml/basic/source.qml",
+      "count": 37,
+      "hash": "41CCBED48E0DAB654022F2531124D453FEB68728B85A45EFD96D1FF7106027C6"
+    },
+    {
+      "phase": "language",
+      "language": "qmldir",
+      "path": "fixtures/extraction/qmldir/basic/qmldir",
+      "count": 4,
+      "hash": "FD12AA397D274EAC0F19D03F59A585A2ED1A88992406C5E0A69CE356B5E2BD8E"
+    },
+    {
+      "phase": "language",
+      "language": "r",
+      "path": "fixtures/extraction/r/basic/source.r",
+      "count": 20,
+      "hash": "F0A37C0D359B36753E9A4DEFB479000E0A82EA241C1BC3EA3473CF99629BE93B"
+    },
+    {
+      "phase": "language",
+      "language": "razor",
+      "path": "fixtures/extraction/razor/attribute-expressions/directives/source.razor",
+      "count": 4,
+      "hash": "AFC8667DCA0CA397FC0DD2FA55963342B8101A96AE19C0E0B3EFCB8C6E9D2E1C"
+    },
+    {
+      "phase": "language",
+      "language": "regex",
+      "path": "fixtures/extraction/regex/basic/source.regex",
+      "count": 5,
+      "hash": "9E6CF9A144AB2C2BE4B2B1E2E88FB8B85ECDEC3AD879A38BA2F470BD4B836BD9"
+    },
+    {
+      "phase": "language",
+      "language": "ruby",
+      "path": "fixtures/extraction/ruby/backend_http_boundaries/source.rb",
+      "count": 3,
+      "hash": "C696016236241D83981F0F6B716EF3640034EE5F6BA1123108F358F5FA796802"
+    },
+    {
+      "phase": "language",
+      "language": "rust",
+      "path": "crates/julie-extract-artifact/src/jsonl.rs",
+      "count": 346,
+      "hash": "E0C82DEB77DCF54A843945A023802395B266DB79ADD75D67FB257C77B7E91975"
+    },
+    {
+      "phase": "language",
+      "language": "scala",
+      "path": "fixtures/extraction/scala/basic/source.scala",
+      "count": 49,
+      "hash": "9B80372B07B243181BC4FDB5C2619661B6C1B3D43AA9B2342A0F7E05F9EB639C"
+    },
+    {
+      "phase": "language",
+      "language": "sql",
+      "path": "fixtures/extraction/sql/advanced_dml/source.sql",
+      "count": 4,
+      "hash": "551881FAE1615E7227F6972D15316A11FC9F31DF2CA2825DD30F332147D0D2BB"
+    },
+    {
+      "phase": "language",
+      "language": "swift",
+      "path": "fixtures/extraction/swift/basic/source.swift",
+      "count": 48,
+      "hash": "6FBFAFE40A1F202CF870B6DB07F488335E2E88A523BA6431AA57D9B5C10CA39C"
+    },
+    {
+      "phase": "language",
+      "language": "toml",
+      "path": ".cargo/config.toml",
+      "count": 2,
+      "hash": "35502E86C8385822F186D28E49187C606176363B20151FF40397B1C497B708A5"
+    },
+    {
+      "phase": "language",
+      "language": "tsx",
+      "path": "fixtures/extraction/tsx/backend_http_boundaries/source.tsx",
+      "count": 7,
+      "hash": "587D17D985606697A3A75E8AD1115F3671B31EA7598B8D21DE2E989D7C017A77"
+    },
+    {
+      "phase": "language",
+      "language": "typescript",
+      "path": "fixtures/extraction/resolution_contract/typescript/nested_same_member_receiver/inner.ts",
+      "count": 3,
+      "hash": "73FE1F7273C987729343E650A37628C8430BD5F539087F4EDA22D1856B1644D7"
+    },
+    {
+      "phase": "language",
+      "language": "vbnet",
+      "path": "fixtures/extraction/vbnet/basic/source.vb",
+      "count": 37,
+      "hash": "535F9AC46360DC1F3965C669E60F7D259FF2729F5187B1547297236FD3E1E8DF"
+    },
+    {
+      "phase": "language",
+      "language": "vue",
+      "path": "fixtures/extraction/vue/basic/source.vue",
+      "count": 27,
+      "hash": "9FA95972CF8865C4F1EF244EEC4481F62B0BECA28C25A25B5C22F6EEACE7FA90"
+    },
+    {
+      "phase": "language",
+      "language": "xml",
+      "path": "fixtures/extraction/xml/basic/source.xml",
+      "count": 6,
+      "hash": "F5E2CBE0C24B34806929D89252B42835F40C50A6F49E7746FD4A3BD3F3C2850A"
+    },
+    {
+      "phase": "language",
+      "language": "yaml",
+      "path": ".github/workflows/ci.yml",
+      "count": 77,
+      "hash": "9D205972ECBD4ACA33D7F9689F9FDAC7170AC4AEECCDBB52DFB4A44218570E29"
+    },
+    {
+      "phase": "language",
+      "language": "zig",
+      "path": "fixtures/extraction/zig/basic/source.zig",
+      "count": 50,
+      "hash": "43199DCF4CCA1A468A4149DF87F4E1DAE2C686D4F23CC101008FF14213128C63"
+    }
+  ],
+  "wal_after": [
+    {
+      "phase": "wal_before",
+      "bytes": 47684912
+    },
+    {
+      "phase": "scan",
+      "ms": 1408.0153,
+      "Status": "no_change",
+      "bytes": 0,
+      "owed": false
+    },
+    {
+      "phase": "open",
+      "ms": 7.046
+    },
+    {
+      "phase": "read",
+      "iteration": 0,
+      "ms": 10.1559,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 1,
+      "ms": 4.9451,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 2,
+      "ms": 5.0537,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 3,
+      "ms": 5.06,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 4,
+      "ms": 5.0275,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "read",
+      "iteration": 5,
+      "ms": 4.9613,
+      "count": 193,
+      "hash": "42DCA371AAED784EF55E23135405E73E7853F683CA0A063F6EBB4D52A3A2CFED"
+    },
+    {
+      "phase": "language",
+      "language": "bash",
+      "path": "fixtures/extraction/bash/basic/source.sh",
+      "count": 16,
+      "hash": "E826A2C245972A917EE0A562DCEECBFBE83A14EB6C1CA82A165EBDE9EECC2571"
+    },
+    {
+      "phase": "language",
+      "language": "c",
+      "path": "fixtures/extraction/c/basic/source.c",
+      "count": 28,
+      "hash": "8B699C082B40F489D0766DF41C5ABDA15A0D720C3C4C94436C69038A986DDA69"
+    },
+    {
+      "phase": "language",
+      "language": "cpp",
+      "path": "fixtures/extraction/cpp/basic/source.cpp",
+      "count": 33,
+      "hash": "9CD10EC75396A17BCA54699372C159D3FBB92A4159C5743CD82D5F10ED9A6C92"
+    },
+    {
+      "phase": "language",
+      "language": "csharp",
+      "path": "fixtures/extraction/csharp/aspnet_attribute_routes/source.cs",
+      "count": 13,
+      "hash": "C17DAFBCD692A57BC153B1F39FEA128D08B686FE584A0B41A2B0D86320B133F9"
+    },
+    {
+      "phase": "language",
+      "language": "css",
+      "path": "docs/site/style.css",
+      "count": 103,
+      "hash": "59A047D6DE5A37EFDCBFE7721DFE4CE5194EBEA0086F2B1012A6BBF1DBAC0E94"
+    },
+    {
+      "phase": "language",
+      "language": "dart",
+      "path": "fixtures/extraction/dart/basic/source.dart",
+      "count": 40,
+      "hash": "3E99AE692CDF4D61F468A14A12BCE5F03E315EDF53AFC1775012F36CDA465558"
+    },
+    {
+      "phase": "language",
+      "language": "elixir",
+      "path": "fixtures/elixir/basic.ex",
+      "count": 32,
+      "hash": "C6EC4E2150CC83309578F23B87E812FCE756B91F476FEDBC5BF081E8BA7B5D58"
+    },
+    {
+      "phase": "language",
+      "language": "erlang",
+      "path": "fixtures/extraction/erlang/basic/source.erl",
+      "count": 38,
+      "hash": "74383F620D425649461776B128E9E3537EC4640DFF42FD5657361CAE02F2C52B"
+    },
+    {
+      "phase": "language",
+      "language": "fsharp",
+      "path": "fixtures/extraction/fsharp/basic/source.fs",
+      "count": 43,
+      "hash": "C2E1786203C41C6BDBA32A36E87EB4DA497748B8D29A9BE315EA35CE3054E054"
+    },
+    {
+      "phase": "language",
+      "language": "gdscript",
+      "path": "fixtures/extraction/gdscript/basic/source.gd",
+      "count": 35,
+      "hash": "31CDDEFA1DC7C76497AE28AF0B748B760440DA2E5A59FF6A31A3DDB1A82BE71B"
+    },
+    {
+      "phase": "language",
+      "language": "go",
+      "path": "fixtures/extraction/go/backend_http_boundaries/source.go",
+      "count": 13,
+      "hash": "726D7FC94C867C0C980631111FB15821B77287663E4E537350BF05107C364634"
+    },
+    {
+      "phase": "language",
+      "language": "html",
+      "path": "docs/plans/2026-08-08-index-store-ph2c-resolution-design.html",
+      "count": 141,
+      "hash": "2CB6E66A9A07E803AD7DC7B29D3963BA82D49244D276F438F9B60891D068DFEE"
+    },
+    {
+      "phase": "language",
+      "language": "java",
+      "path": "fixtures/extraction/java/backend_http_boundaries/source.java",
+      "count": 12,
+      "hash": "8ADF9A43A856DBA13504CCFDA451F13192CFD0394C0402F928DA6BC6C762CBE3"
+    },
+    {
+      "phase": "language",
+      "language": "javascript",
+      "path": "docs/site/script.js",
+      "count": 9,
+      "hash": "B58B4DD6B8712DD5A999EF7FECA029783EB51554C0E4C07E5DEBCB6BA40718D4"
+    },
+    {
+      "phase": "language",
+      "language": "json",
+      "path": ".mcp.json",
+      "count": 6,
+      "hash": "C715E053572BDADC0DAC19CDC82F4F574A30AB533059A9FC2433745CE08FF3B3"
+    },
+    {
+      "phase": "language",
+      "language": "jsx",
+      "path": "fixtures/extraction/jsx/backend_http_boundaries/source.jsx",
+      "count": 12,
+      "hash": "31E7E79E5964555EFE48865B06CC922490FA6D7EB6B177A6E13109EB75812C21"
+    },
+    {
+      "phase": "language",
+      "language": "kotlin",
+      "path": "fixtures/extraction/kotlin/basic/source.kt",
+      "count": 30,
+      "hash": "608A7D34A12C31765EF6112AEAE2B583C0BB23AF51BE3C2BCA8D8ECA985E5C7F"
+    },
+    {
+      "phase": "language",
+      "language": "lua",
+      "path": "fixtures/extraction/lua/basic/source.lua",
+      "count": 24,
+      "hash": "FB419A223AC4877DA068CD3B14C2C48EB6D8DA61476E66FE3010C3343C2ED4FE"
+    },
+    {
+      "phase": "language",
+      "language": "markdown",
+      "path": "AGENTS.md",
+      "count": 11,
+      "hash": "6CD385EB91EBC14D29C25E407C372771402FDB2F544A69165A9F1913484DFEB7"
+    },
+    {
+      "phase": "language",
+      "language": "php",
+      "path": "fixtures/extraction/php/basic/source.php",
+      "count": 34,
+      "hash": "A30227509F23E9FED200C335C731CB36BF4BCCA132BA6E2AE2603D1599165B50"
+    },
+    {
+      "phase": "language",
+      "language": "powershell",
+      "path": "fixtures/extraction/powershell/basic/source.ps1",
+      "count": 34,
+      "hash": "13C9C2A60C3223EE105E234D98DB6EF95AD66F2FC6819F64DF246CB0DBA5D3F1"
+    },
+    {
+      "phase": "language",
+      "language": "python",
+      "path": "docs/release-evidence/v2.29.0/probe5.py",
+      "count": 42,
+      "hash": "D6F42CAB39B17C3568AFFB6EB82956E09B43830B81B1305C1D58CF16AE736565"
+    },
+    {
+      "phase": "language",
+      "language": "qml",
+      "path": "fixtures/extraction/qml/basic/source.qml",
+      "count": 37,
+      "hash": "41CCBED48E0DAB654022F2531124D453FEB68728B85A45EFD96D1FF7106027C6"
+    },
+    {
+      "phase": "language",
+      "language": "qmldir",
+      "path": "fixtures/extraction/qmldir/basic/qmldir",
+      "count": 4,
+      "hash": "FD12AA397D274EAC0F19D03F59A585A2ED1A88992406C5E0A69CE356B5E2BD8E"
+    },
+    {
+      "phase": "language",
+      "language": "r",
+      "path": "fixtures/extraction/r/basic/source.r",
+      "count": 20,
+      "hash": "F0A37C0D359B36753E9A4DEFB479000E0A82EA241C1BC3EA3473CF99629BE93B"
+    },
+    {
+      "phase": "language",
+      "language": "razor",
+      "path": "fixtures/extraction/razor/attribute-expressions/directives/source.razor",
+      "count": 4,
+      "hash": "AFC8667DCA0CA397FC0DD2FA55963342B8101A96AE19C0E0B3EFCB8C6E9D2E1C"
+    },
+    {
+      "phase": "language",
+      "language": "regex",
+      "path": "fixtures/extraction/regex/basic/source.regex",
+      "count": 5,
+      "hash": "9E6CF9A144AB2C2BE4B2B1E2E88FB8B85ECDEC3AD879A38BA2F470BD4B836BD9"
+    },
+    {
+      "phase": "language",
+      "language": "ruby",
+      "path": "fixtures/extraction/ruby/backend_http_boundaries/source.rb",
+      "count": 3,
+      "hash": "C696016236241D83981F0F6B716EF3640034EE5F6BA1123108F358F5FA796802"
+    },
+    {
+      "phase": "language",
+      "language": "rust",
+      "path": "crates/julie-extract-artifact/src/jsonl.rs",
+      "count": 346,
+      "hash": "E0C82DEB77DCF54A843945A023802395B266DB79ADD75D67FB257C77B7E91975"
+    },
+    {
+      "phase": "language",
+      "language": "scala",
+      "path": "fixtures/extraction/scala/basic/source.scala",
+      "count": 49,
+      "hash": "9B80372B07B243181BC4FDB5C2619661B6C1B3D43AA9B2342A0F7E05F9EB639C"
+    },
+    {
+      "phase": "language",
+      "language": "sql",
+      "path": "fixtures/extraction/sql/advanced_dml/source.sql",
+      "count": 4,
+      "hash": "551881FAE1615E7227F6972D15316A11FC9F31DF2CA2825DD30F332147D0D2BB"
+    },
+    {
+      "phase": "language",
+      "language": "swift",
+      "path": "fixtures/extraction/swift/basic/source.swift",
+      "count": 48,
+      "hash": "6FBFAFE40A1F202CF870B6DB07F488335E2E88A523BA6431AA57D9B5C10CA39C"
+    },
+    {
+      "phase": "language",
+      "language": "toml",
+      "path": ".cargo/config.toml",
+      "count": 2,
+      "hash": "35502E86C8385822F186D28E49187C606176363B20151FF40397B1C497B708A5"
+    },
+    {
+      "phase": "language",
+      "language": "tsx",
+      "path": "fixtures/extraction/tsx/backend_http_boundaries/source.tsx",
+      "count": 7,
+      "hash": "587D17D985606697A3A75E8AD1115F3671B31EA7598B8D21DE2E989D7C017A77"
+    },
+    {
+      "phase": "language",
+      "language": "typescript",
+      "path": "fixtures/extraction/resolution_contract/typescript/nested_same_member_receiver/inner.ts",
+      "count": 3,
+      "hash": "73FE1F7273C987729343E650A37628C8430BD5F539087F4EDA22D1856B1644D7"
+    },
+    {
+      "phase": "language",
+      "language": "vbnet",
+      "path": "fixtures/extraction/vbnet/basic/source.vb",
+      "count": 37,
+      "hash": "535F9AC46360DC1F3965C669E60F7D259FF2729F5187B1547297236FD3E1E8DF"
+    },
+    {
+      "phase": "language",
+      "language": "vue",
+      "path": "fixtures/extraction/vue/basic/source.vue",
+      "count": 27,
+      "hash": "9FA95972CF8865C4F1EF244EEC4481F62B0BECA28C25A25B5C22F6EEACE7FA90"
+    },
+    {
+      "phase": "language",
+      "language": "xml",
+      "path": "fixtures/extraction/xml/basic/source.xml",
+      "count": 6,
+      "hash": "F5E2CBE0C24B34806929D89252B42835F40C50A6F49E7746FD4A3BD3F3C2850A"
+    },
+    {
+      "phase": "language",
+      "language": "yaml",
+      "path": ".github/workflows/ci.yml",
+      "count": 77,
+      "hash": "9D205972ECBD4ACA33D7F9689F9FDAC7170AC4AEECCDBB52DFB4A44218570E29"
+    },
+    {
+      "phase": "language",
+      "language": "zig",
+      "path": "fixtures/extraction/zig/basic/source.zig",
+      "count": 50,
+      "hash": "43199DCF4CCA1A468A4149DF87F4E1DAE2C686D4F23CC101008FF14213128C63"
+    }
+  ]
+}

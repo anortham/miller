@@ -49,6 +49,15 @@ public static class StoreWalCheckpoint
         }
     }
 
+    /// <summary>Clears checkpoint debt only after both family databases checkpoint successfully.</summary>
+    public static StoreWalCheckpointStatus TryCompleteOwedFamily(string storeRoot)
+    {
+        StoreWalCheckpointStatus status = TryTruncateFamily(storeRoot);
+        if (status == StoreWalCheckpointStatus.Ok)
+            ClearOwed(storeRoot);
+        return status;
+    }
+
     public static StoreWalCheckpointStatus TryTruncateFamily(string storeRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
@@ -79,7 +88,7 @@ public static class StoreWalCheckpoint
         StoreWalCheckpointStatus coord = TryTruncate(coordDb, timeoutSeconds: 300);
         if (store == StoreWalCheckpointStatus.Busy || coord == StoreWalCheckpointStatus.Busy)
             return StoreWalCheckpointStatus.Busy;
-        if (store == StoreWalCheckpointStatus.Ok || coord == StoreWalCheckpointStatus.Ok)
+        if (store == StoreWalCheckpointStatus.Ok && coord == StoreWalCheckpointStatus.Ok)
             return StoreWalCheckpointStatus.Ok;
         return StoreWalCheckpointStatus.Skipped;
     }
