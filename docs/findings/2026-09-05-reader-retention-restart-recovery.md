@@ -114,11 +114,35 @@ The complete Linux Scale gate on published 2.40.1 passed with 217 passes,
 24 toolchain/platform/opt-in skips, zero failures, 74 seconds. It includes the
 native reader lifecycle and supported-language inventory/projection tests.
 
+Windows full Release fast verification on exact candidate
+`820359c53567f5de31eddafae262b56318e79793`, restored from the published Windows
+archive on NTFS, passed with 9,841 passes, 35 platform/availability skips and zero
+failures in 11 minutes 50 seconds. The effective command was `dotnet test -c
+Release --no-build --filter Category!=Scale --blame-hang
+--blame-hang-timeout 2m --logger console`. The collector reported all tests finished
+and no hang sequence was needed. The earlier run was manually aborted after
+5,928 passes because buffered output was mistaken for a stall; it is not counted
+as passing. The retry's nested PowerShell quoting lost the optional verbose-log
+redirect and emitted a separate `verbosity=normal` command error after the test
+summary. The actual full test process completed successfully; no green suite was
+rerun just to repair log formatting. These runner issues are not Miller MCP
+latency evidence.
+
+The separate Windows installed-producer gate ran
+`RealProducerReaderRetentionScaleTests` and `ReaderRetentionLanguageScaleTests`:
+13 passed, zero skips/failures, 98 seconds. This includes the legacy dead-request
+upgrade and the supported-language reader inventory/projection checks.
+
+The final Linux Release solution build passed with zero warnings/errors in
+2.40 seconds. Later finding/checkpoint edits are documentation only.
+
 ## Integration boundary
 
 Julie 2.40.1 is published. Miller's paired bootstrap retry, explicit reader
-capability qualification, pin and regressions are being verified on
-`fix/reader-admission-bootstrap-retry` before the approved local main merge.
+capability qualification, pin and regressions passed the Linux and Windows gates
+on `820359c53567f5de31eddafae262b56318e79793`. The approved integration is a local
+fast-forward of `fix/reader-admission-bootstrap-retry` into main, with only this
+finding, the program status and checkpoints added after the tested candidate.
 The running resident process still uses the earlier build and needs the user's
 rebuild/restart after integration. Stored-data recovery alone is not proof of a
 healthy resident restart. M3 remains unstarted. No semantic runtime or Miller
