@@ -42,6 +42,94 @@ public sealed class JulieStoreContractException : JulieStoreProcessException
 
 public sealed class JulieStoreClient : IJulieStoreClient
 {
+    // Reader admission must not use OpenStoreMutationAnchor: it precedes every generation handle.
+    internal ReaderProcessResult InvokeReader(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+        InvokeReaderAsync(arguments, cancellationToken).GetAwaiter().GetResult();
+
+    private async Task<ReaderProcessResult> InvokeReaderAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(StoreReaderRegistrationRunner.ProcessTimeout);
+        var startInfo = new ProcessStartInfo(_binaryPath)
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
+        };
+        foreach (string argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = new Process { StartInfo = startInfo };
+        try
+        {
+            if (!process.Start()) return new(null, "", "", TransportLost: true);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            throw new StoreReaderRegistrationException(ReaderFailure.Operational);
+        }
+
+        WindowsKillOnCloseJobAttachment attachment = WindowsKillOnCloseJob.Attach(process);
+        using WindowsKillOnCloseJob? containment = attachment.Job;
+        if (attachment.FailureReason is not null)
+        {
+            KillReader(process);
+            return new(null, "", "", TransportLost: true);
+        }
+
+        Task<string> stdout = ReadReaderOutputAsync(process.StandardOutput.BaseStream, timeout.Token);
+        Task<string> stderr = ReadReaderOutputAsync(process.StandardError.BaseStream, timeout.Token);
+        Task exited = process.WaitForExitAsync(timeout.Token);
+        try
+        {
+            // Fail early on a capture overflow; WhenAll alone would wait for a noisy child to exit.
+            var pending = new List<Task> { stdout, stderr, exited };
+            while (pending.Count > 0)
+            {
+                Task finished = await Task.WhenAny(pending).ConfigureAwait(false);
+                await finished.ConfigureAwait(false);
+                pending.Remove(finished);
+            }
+            return new(process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false));
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException or StoreReaderRegistrationException)
+        {
+            timeout.Cancel();
+            KillReader(process);
+            ObserveReaderTask(stdout); ObserveReaderTask(stderr); ObserveReaderTask(exited);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(null, "", "", TransportLost: true);
+        }
+    }
+
+    private static void KillReader(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { }
+        catch (System.ComponentModel.Win32Exception) { }
+    }
+
+    private static void ObserveReaderTask(Task task) =>
+        _ = task.ContinueWith(completed => _ = completed.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+    internal static async Task<string> ReadReaderOutputAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        byte[] buffer = new byte[StoreReaderRegistrationRunner.MaximumOutputBytes + 1];
+        int count = 0;
+        while (count < buffer.Length)
+        {
+            int read = await stream.ReadAsync(buffer.AsMemory(count), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                try { return new UTF8Encoding(false, true).GetString(buffer, 0, count); }
+                catch (DecoderFallbackException)
+                {
+                    throw new StoreReaderRegistrationException(ReaderFailure.InvalidReport, mayHaveAcquired: true);
+                }
+            }
+            count += read;
+        }
+        throw new StoreReaderRegistrationException(ReaderFailure.InvalidReport, mayHaveAcquired: true);
+    }
+
     private const int MaxProgressEntries = 512;
 
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(10);
