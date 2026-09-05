@@ -44,7 +44,18 @@ public sealed class JulieStoreClient : IJulieStoreClient
 {
     // Reader admission must not use OpenStoreMutationAnchor: it precedes every generation handle.
     internal ReaderProcessResult InvokeReader(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
-        InvokeReaderAsync(arguments, cancellationToken).GetAwaiter().GetResult();
+        _readerTransport is { } transport
+            ? transport(arguments, cancellationToken)
+            : InvokeReaderAsync(arguments, cancellationToken).GetAwaiter().GetResult();
+
+    private readonly Func<IReadOnlyList<string>, CancellationToken, ReaderProcessResult>? _readerTransport;
+
+    internal JulieStoreClient(string binaryPath,
+        Func<IReadOnlyList<string>, CancellationToken, ReaderProcessResult> readerTransport)
+        : this(binaryPath)
+    {
+        _readerTransport = readerTransport ?? throw new ArgumentNullException(nameof(readerTransport));
+    }
 
     private async Task<ReaderProcessResult> InvokeReaderAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {

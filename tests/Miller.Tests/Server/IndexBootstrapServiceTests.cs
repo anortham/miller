@@ -1,6 +1,9 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
+using Miller.Tests.Support;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Tests.Indexing;
@@ -18,6 +21,56 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class IndexBootstrapServiceTests
 {
+    [Fact]
+    public void ReadyStoreBootstrapUsesTheCallerProducerForOneReadLifetime()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+
+        Assert.True(IndexBootstrapService.TryReadReadyStoreBinding(
+            fixture.Binding.WorkspaceRoot, "workspace-a", out StoreFamilyBinding? binding, reader.Client));
+
+        Assert.Equal(fixture.Binding, binding);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Fact]
+    public void ReadyStoreBootstrapKeepsItsAdmittedGenerationWhenCurrentMoves()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply)
+        {
+            AfterAcquire = () => File.WriteAllText(Path.Combine(fixture.Binding.StoreRoot, "CURRENT"), "gen-999\n"),
+        };
+
+        Assert.True(IndexBootstrapService.TryReadReadyStoreBinding(
+            fixture.Binding.WorkspaceRoot, "workspace-a", out StoreFamilyBinding? binding, reader.Client));
+
+        Assert.Equal(fixture.Binding, binding);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+    }
+
+    [Fact]
+    public void LazyStoreBootstrapLoadFailureRetainsTheCallerProducerAfterItsInitialScopeEnds()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string identity;
+        using (FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding))
+            identity = session.Snapshot.IndexIdentity;
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        using (StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client)) { }
+
+        // This small family fixture lacks bridge fact tables. Loading reaches SQLite and fails there.
+        Assert.Throws<SqliteException>(() => IndexBootstrapService.LoadStoreGeneration(
+            fixture.Binding, "workspace-a", identity, reader.Client));
+
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
     [Fact]
     public void DecideBootstrapScan_MissingDb_DeltaScansBeforeFirstLoad()
     {

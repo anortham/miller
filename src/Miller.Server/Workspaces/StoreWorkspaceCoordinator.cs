@@ -340,7 +340,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             binding,
             client,
             levelPolicy,
-            candidate => ReadState(candidate, workspaceId),
+            candidate => ReadState(candidate, workspaceId, client),
             mintRequestId: null,
             fromArtifact: fromArtifact,
             phaseSink: phaseSink);
@@ -367,13 +367,22 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             rootReplacementObserved,
             git,
             commonDirCreatedAt,
-            millerHome);
+            millerHome,
+            JulieStoreClient.Locate(workspace.ToolsRoot));
     }
 
     public static StoreFamilyBinding ResolveBinding(
         WorkspaceRegistry registry,
         string workspaceId,
         string canonicalRoot,
+        bool rootReplacementObserved = false)
+        => ResolveBindingWithClient(registry, workspaceId, canonicalRoot, null, rootReplacementObserved);
+
+    internal static StoreFamilyBinding ResolveBindingWithClient(
+        WorkspaceRegistry registry,
+        string workspaceId,
+        string canonicalRoot,
+        IJulieStoreClient? readerClient,
         bool rootReplacementObserved = false)
     {
         ArgumentNullException.ThrowIfNull(registry);
@@ -389,7 +398,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             rootReplacementObserved,
             git,
             WorkspaceRootIdentity.CaptureDirectoryCreationTime(git?.CommonDir),
-            millerHome);
+            millerHome,
+            readerClient);
     }
 
     private static StoreFamilyBinding ResolveBinding(
@@ -399,9 +409,13 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool rootReplacementObserved,
         GitWorktreeLayout? git,
         DateTimeOffset? commonDirCreatedAt,
-        string millerHome)
+        string millerHome,
+        IJulieStoreClient? readerClient)
     {
-        var resolver = new StoreFamilyResolver(registry, Path.Combine(millerHome, "stores"));
+        var resolver = new StoreFamilyResolver(registry, Path.Combine(millerHome, "stores"))
+        {
+            ReaderScopeFactory = root => StoreReaderRegistrationRouting.Use(root, readerClient),
+        };
         StoreFamilyBinding binding = resolver.ResolveOrCreate(new WorkspaceRootFacts(
             workspaceId,
             canonicalRoot,
@@ -524,6 +538,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private StoreTreeDelta DiffCurrentTree()
     {
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(_binding.StoreRoot, _client);
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(_binding);
         Dictionary<string, string> stored = session.Read(ReadStoredFileHashes);
         return StoreTreeDelta.Diff(stored, _binding.WorkspaceRoot, _supportedExtensions, _refusals.Read());
@@ -1098,6 +1113,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         try
         {
+            using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(_binding.StoreRoot, _client);
             WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(_binding);
             StoreFreshnessStampDocument stamp = StoreFreshnessStamp.FromProbe(_binding, probe);
             if (string.IsNullOrWhiteSpace(stamp.ManifestHash) ||
@@ -1148,30 +1164,20 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             : "missing";
     }
 
-    private static StoreWorkspaceState? ReadState(StoreFamilyBinding binding, string workspaceId)
+    private static StoreWorkspaceState? ReadState(StoreFamilyBinding binding, string workspaceId, IJulieStoreClient client)
     {
         if (!File.Exists(Path.Combine(binding.StoreRoot, "CURRENT")))
             return null;
-        FamilyStoreReadSession session;
-        try
-        {
-            session = FamilyStoreReadSession.Open(
-                binding with { State = StoreBindingState.Ready },
-                workspaceId);
-        }
-        catch (FamilyStoreReadException ex) when (
-            binding.State == StoreBindingState.Planned &&
-            ex.Failure == FamilyStoreReadFailure.ViewNotFound)
-        {
+        if (binding.State == StoreBindingState.Planned && !FamilyStoreReadSession.HasViewForImportPreflight(binding))
             return null;
-        }
-        using (session)
-        {
-            long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The family-store snapshot has no store_log sequence.");
-            return new StoreWorkspaceState(sequence, session.Snapshot.IndexLevel);
-        }
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, client);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(
+            binding with { State = StoreBindingState.Ready },
+            workspaceId);
+        long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new FamilyStoreReadException(
+            FamilyStoreReadFailure.Corrupt,
+            "The family-store snapshot has no store_log sequence.");
+        return new StoreWorkspaceState(sequence, session.Snapshot.IndexLevel);
     }
 
 }

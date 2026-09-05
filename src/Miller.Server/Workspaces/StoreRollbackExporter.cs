@@ -91,7 +91,7 @@ public static class StoreRollbackExporter
                     return new StoreRollbackExportResult(false, null);
                 }
 
-                if (TryCompletePendingCleanup(workspaceRoot, legacyDatabasePath, pointer) is { } pendingResult)
+                if (TryCompletePendingCleanup(workspaceRoot, legacyDatabasePath, pointer, client) is { } pendingResult)
                     return pendingResult;
 
                 return Export(workspaceRoot, legacyDatabasePath, client, pointer);
@@ -167,6 +167,7 @@ public static class StoreRollbackExporter
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
         StoreRollbackViewIdentity initialView;
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, client);
         using (FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding))
         {
             initialView = new StoreRollbackViewIdentity(
@@ -328,7 +329,8 @@ public static class StoreRollbackExporter
     private static StoreRollbackExportResult? TryCompletePendingCleanup(
         string workspaceRoot,
         string legacyDatabasePath,
-        StoreWorkspacePointerDocument pointer)
+        StoreWorkspacePointerDocument pointer,
+        IJulieStoreClient client)
     {
         PendingRollbackMarker? pending = ReadPendingMarker(workspaceRoot);
         if (pending is null || !pending.Matches(workspaceRoot, legacyDatabasePath, pointer))
@@ -343,7 +345,7 @@ public static class StoreRollbackExporter
                 RequiresSourceRebuild: true);
         }
 
-        bool viewMatches = !pending.HasViewIdentity || CurrentStoreViewMatches(pointer, pending);
+        bool viewMatches = !pending.HasViewIdentity || CurrentStoreViewMatches(pointer, pending, client);
         if (!viewMatches)
         {
             return new StoreRollbackExportResult(
@@ -399,22 +401,26 @@ public static class StoreRollbackExporter
 
     private static bool CurrentStoreViewMatches(
         StoreWorkspacePointerDocument pointer,
-        PendingRollbackMarker pending)
+        PendingRollbackMarker pending,
+        IJulieStoreClient client)
     {
         return pending.HasViewIdentity && CurrentStoreViewMatches(
             pointer,
             new StoreRollbackViewIdentity(
                 pending.ManifestGeneration!.Value,
                 pending.ManifestHash!,
-                pending.StoreLogSequence!.Value));
+                pending.StoreLogSequence!.Value),
+            client);
     }
 
     private static bool CurrentStoreViewMatches(
         StoreWorkspacePointerDocument pointer,
-        StoreRollbackViewIdentity expected)
+        StoreRollbackViewIdentity expected,
+        IJulieStoreClient? client = null)
     {
         try
         {
+            using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(pointer.StoreRoot, client);
             WorkspaceFreshnessProbe current = FamilyStoreReadSession.Probe(new StoreFamilyBinding(
                 pointer.FamilyId,
                 pointer.StoreRoot,

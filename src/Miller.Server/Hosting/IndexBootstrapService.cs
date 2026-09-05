@@ -988,7 +988,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     winnerArtifactUsable = TryReadReadyStoreBinding(
                         canonicalRoot,
                         stableWorkspaceId,
-                        out binding);
+                        out binding,
+                        JulieStoreClient.Locate(workspace.ToolsRoot));
                     return winnerArtifactUsable;
                 },
                 wait: BootstrapScanLockWait(),
@@ -1130,6 +1131,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             }
 
             StoreFamilyBinding servingBinding = binding;
+            IJulieStoreClient readerClient = JulieStoreClient.Locate(workspace.ToolsRoot);
+            using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(servingBinding.StoreRoot, readerClient);
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(servingBinding, stableWorkspaceId);
             WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(session);
             string indexIdentity = session.Snapshot.IndexIdentity;
@@ -1157,7 +1160,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             }
 
             var holder = new IndexHolder(
-                () => LoadStoreGeneration(servingBinding, stableWorkspaceId, indexIdentity),
+                () => LoadStoreGeneration(servingBinding, stableWorkspaceId, indexIdentity, readerClient),
                 builtRevision,
                 checked((int)indexFacts.DocumentCount),
                 indexFacts.KnownExtensionsCount,
@@ -1188,11 +1191,13 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     // Mirrors FreshnessService.LoadPinnedStoreIndex: a generation promoted between bootstrap and
     // materialization re-resolves to the CURRENT identity instead of failing; only an identity that keeps
     // moving on every attempt still throws.
-    private static MillerRepositoryIndex LoadStoreGeneration(
+    internal static MillerRepositoryIndex LoadStoreGeneration(
         StoreFamilyBinding binding,
         string stableWorkspaceId,
-        string expectedIdentity)
+        string expectedIdentity,
+        IJulieStoreClient readerClient)
     {
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, readerClient);
         string expected = expectedIdentity;
         for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
         {
@@ -1205,10 +1210,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             $"The family-store generation changed during every one of {StoreSidecarCatalog.ReadableOpenAttempts} load attempts; retry after freshness converges.");
     }
 
-    private static bool TryReadReadyStoreBinding(
+    internal static bool TryReadReadyStoreBinding(
         string canonicalRoot,
         string stableWorkspaceId,
-        out StoreFamilyBinding? binding)
+        out StoreFamilyBinding? binding,
+        IJulieStoreClient? readerClient = null)
     {
         binding = null;
         try
@@ -1223,6 +1229,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 pointer.ViewId,
                 pointer.WorkspaceRoot,
                 StoreBindingState.Ready);
+            using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(candidate.StoreRoot, readerClient);
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, stableWorkspaceId);
             binding = candidate;
             return true;

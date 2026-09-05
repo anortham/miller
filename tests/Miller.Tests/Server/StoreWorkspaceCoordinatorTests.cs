@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
@@ -11,6 +12,224 @@ namespace Miller.Tests.Server;
 
 public sealed class StoreWorkspaceCoordinatorTests
 {
+    [Fact]
+    public void CoordinatorReadUsesItsProducerAndReleasesBeforeSubmittingMutation()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            fixture.Binding, "workspace-a", reader.Client, () => IndexLevelPolicy.Full);
+
+        // The absent mutation executable fails only after the real state read has closed.
+        Assert.Throws<JulieStoreProcessException>(() =>
+            coordinator.Update(Path.Combine(fixture.Binding.WorkspaceRoot, "same.cs")));
+
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Fact]
+    public void TreeDiffClosesTheAdmittedGenerationBeforeMutation()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
+        var client = new RecordingStoreClient(StoreOperation.Delete, onSubmit: () =>
+        {
+            Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+            Assert.Equal(0, reader.Owed);
+        });
+        var coordinator = new StoreWorkspaceCoordinator(fixture.Binding, client,
+            () => IndexLevelPolicy.Full, _ => new StoreWorkspaceState(2, "full"),
+            () => "tree-diff", fromArtifact: null, millerDirectory: fixture.Root);
+
+        // same.cs exists only in the stored manifest, so real tree inspection selects a delete.
+        ExtractReport report = coordinator.Scan();
+
+        Assert.Equal("completed", report.Status);
+        Assert.IsType<StoreDeleteRequest>(client.SingleRequest);
+        // A second admitted probe publishes the post-mutation freshness stamp.
+        Assert.Equal(new[] { "acquire", "open", "close", "release", "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Fact]
+    public void FirstImportDoesNotRequireReaderAdmissionOrAnExistingFamilyDirectory()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreFamilyBinding planned = fixture.Binding with
+        {
+            StoreRoot = Path.Combine(fixture.Root, "not-created-yet"),
+            State = StoreBindingState.Planned,
+        };
+        var client = new JulieStoreClient(Path.Combine(fixture.Root, "missing-producer"), (_, _) =>
+            throw new InvalidOperationException("An unpublished family cannot acquire a serving reader."));
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            planned, "workspace-a", client, () => IndexLevelPolicy.Full);
+
+        Assert.Throws<JulieStoreProcessException>(() => coordinator.Scan());
+
+        Assert.False(Directory.Exists(planned.StoreRoot));
+    }
+
+    [Fact]
+    public void UnchangedCoordinatorStampUsesItsProducerForFreshnessAdmission()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        var coordinator = new StoreWorkspaceCoordinator(fixture.Binding, reader.Client,
+            () => IndexLevelPolicy.Full, _ => new StoreWorkspaceState(2, "full"),
+            () => "no-change", fromArtifact: null, inspectTree: () => new StoreTreeDelta([], []),
+            millerDirectory: fixture.Root);
+
+        ExtractReport report = coordinator.Scan();
+
+        Assert.Equal(2, report.Revision);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PlannedViewAdmitsOnlyWhenMetadataProvesItExists(bool viewExists)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreFamilyBinding planned = fixture.Binding with
+        {
+            ViewId = viewExists ? "view-a" : "unpublished-view",
+            State = StoreBindingState.Planned,
+        };
+        int acquisitions = 0;
+        var client = new JulieStoreClient(Path.Combine(fixture.Root, "missing-producer"), (_, _) =>
+        {
+            acquisitions++;
+            return new ReaderProcessResult(1,
+                """{"report_schema_version":1,"operation":"reader_acquire","state":"refused","failure_class":"stale_snapshot","error":"requested view has no manifest"}""", "");
+        });
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            planned, "workspace-a", client, () => IndexLevelPolicy.Full);
+
+        if (viewExists)
+        {
+            FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() => coordinator.Scan());
+            Assert.Equal(FamilyStoreReadFailure.BindingNotReady, error.Failure);
+            Assert.Equal(ReaderFailure.StaleSnapshot, Assert.IsType<StoreReaderRegistrationException>(error.InnerException).Failure);
+        }
+        else
+        {
+            Assert.Throws<JulieStoreProcessException>(() => coordinator.Scan());
+        }
+        Assert.Equal(viewExists ? 1 : 0, acquisitions);
+    }
+
+    [Fact]
+    public void PlannedViewDisappearingAfterAdmissionFailsBeforeMutation()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply)
+        {
+            AfterAcquire = () =>
+            {
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    $"Data Source={Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db")};Pooling=False");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "DELETE FROM views WHERE view_id='view-a'";
+                command.ExecuteNonQuery();
+            },
+        };
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
+        bool mutationEntered = false;
+        var client = new RecordingStoreClient(StoreOperation.Import, onSubmit: () => mutationEntered = true);
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            fixture.Binding with { State = StoreBindingState.Planned },
+            "workspace-a", client, () => IndexLevelPolicy.Full);
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() => coordinator.Scan());
+
+        Assert.Equal(FamilyStoreReadFailure.ViewNotFound, error.Failure);
+        Assert.False(mutationEntered);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Theory]
+    [InlineData("family_id", "22222222-2222-4222-8222-222222222222", FamilyStoreReadFailure.FamilyMismatch)]
+    [InlineData("store_sqlite_schema_version", "999", FamilyStoreReadFailure.SchemaIncompatible)]
+    [InlineData("min_reader_version", "999.0.0", FamilyStoreReadFailure.ReaderFloorIncompatible)]
+    public void MissingViewDoesNotHideAnInvalidFamily(string key, string value, FamilyStoreReadFailure expected)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   $"Data Source={Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db")};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_meta SET value=$value WHERE key=$key";
+            command.Parameters.AddWithValue("$key", key);
+            command.Parameters.AddWithValue("$value", value);
+            command.ExecuteNonQuery();
+        }
+        StoreFamilyBinding planned = fixture.Binding with { ViewId = "unpublished-view", State = StoreBindingState.Planned };
+        var client = new JulieStoreClient("never-run", (_, _) =>
+            throw new InvalidOperationException("Invalid metadata must fail before admission."));
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            planned, "workspace-a", client, () => IndexLevelPolicy.Full);
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() => coordinator.Scan());
+
+        Assert.Equal(expected, error.Failure);
+    }
+
+    [Fact]
+    public void UnpublishedViewPreflightReadsNoServingFacts()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   $"Data Source={Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db")};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE manifests; DROP TABLE manifest_entries; DROP TABLE file_versions; DROP TABLE symbols; DROP TABLE store_log;";
+            command.ExecuteNonQuery();
+        }
+        StoreFamilyBinding planned = fixture.Binding with { ViewId = "unpublished-view", State = StoreBindingState.Planned };
+        var client = new JulieStoreClient(Path.Combine(fixture.Root, "missing-producer"), (_, _) =>
+            throw new InvalidOperationException("Metadata-only planning must not acquire a reader."));
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            planned, "workspace-a", client, () => IndexLevelPolicy.Full);
+
+        Assert.Throws<JulieStoreProcessException>(() => coordinator.Scan());
+    }
+
+    [Fact]
+    public void ExplicitNestedCallerUsesItsOwnProducerAndRestoresTheOuterProducer()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        int outerAcquires = 0;
+        var outerClient = new JulieStoreClient("never-run", (args, _) =>
+        {
+            if (args[2] == "acquire") outerAcquires++;
+            return fixture.ReaderReply(args);
+        });
+        using (StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, outerClient))
+        {
+            StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+                fixture.Binding, "workspace-a", reader.Client, () => IndexLevelPolicy.Full);
+            Assert.Throws<JulieStoreProcessException>(() => coordinator.Update(
+                Path.Combine(fixture.Binding.WorkspaceRoot, "same.cs")));
+            Assert.Equal(0, outerAcquires);
+            Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+            Assert.Equal(2, session.Snapshot.Freshness.StoreLogSequence);
+        }
+        Assert.Equal(1, outerAcquires);
+        Assert.Equal(0, reader.Owed);
+    }
+
     [Fact]
     public void NoChangeRefreshDiscoversMarkerlessWalAndReportsCleanup()
     {
@@ -1798,7 +2017,8 @@ public sealed class StoreWorkspaceCoordinatorTests
         StoreRequestState? stateOverride = null,
         Queue<StoreRequestState>? stateOverrides = null,
         StoreOperation[]? allowedOperations = null,
-        string? failureMessage = null) : IJulieStoreClient
+        string? failureMessage = null,
+        Action? onSubmit = null) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -1808,6 +2028,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            onSubmit?.Invoke();
             if (allowedOperations is { Length: > 0 })
             {
                 Assert.Contains(request.Operation, allowedOperations);

@@ -305,10 +305,12 @@ Task 2 adds a final-release connection guard and `CloseOwed` state on the existi
 
 **Acceptance:**
 
-- [ ] Bootstrap, rollback export, coordinator, refresh, and tree-diff reads all use the enforced session boundary.
-- [ ] Each session lifecycle has one acquire and one release attempt, with no per-symbol producer process.
-- [ ] Original process PID ownership survives producer subprocess lifetime.
-- [ ] Rollback/recovery primary errors and markers remain authoritative when release fails.
+- [x] Bootstrap, rollback export, coordinator, refresh, and tree-diff reads all use the enforced session boundary.
+- [x] Each session lifecycle has one acquire and one release attempt, with no per-symbol producer process.
+- [x] Original process PID ownership survives producer subprocess lifetime.
+- [x] Rollback/recovery primary errors and markers remain authoritative when release fails.
+
+Task 3 focused caller scope passed 194 tests. Caller-selected producers now flow through actual serving opens and probes, including lazy bootstrap loading and freshness publication. Planned views use metadata-only presence checks before admission; a view missing after admission is an error, never an empty-store fallback. Real process/fence qualification remains Task 6.
 
 ## Task 4: Migrate factory, CT, dashboard, CLI, and evaluator callers
 

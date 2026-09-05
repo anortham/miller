@@ -160,6 +160,8 @@ public sealed class StoreFamilyResolverTests : IDisposable
         const string viewId = "view-adopted";
         string storeRoot = Path.Combine(_directory, "copied-family");
         WriteReadyStore(storeRoot, familyId, viewId, facts.WorkspaceRoot);
+        using var readerRegistration = new Miller.Tests.Support.StoreReaderRegistrationFixture(
+            new(familyId, storeRoot, viewId, facts.WorkspaceRoot, StoreBindingState.Ready));
         StoreFamilyBinding pointerBinding = new(
             familyId,
             storeRoot,
@@ -168,9 +170,13 @@ public sealed class StoreFamilyResolverTests : IDisposable
             StoreBindingState.Ready);
         StoreWorkspacePointer.Write(facts.WorkspaceRoot, pointerBinding);
         using FamilyStoreReadSession direct = FamilyStoreReadSession.Open(pointerBinding, facts.WorkspaceId);
+        using var callerReader = new Miller.Tests.Support.StoreCallerReaderFixture(pointerBinding, readerRegistration.Reply);
+        resolver.ReaderScopeFactory = root => StoreReaderRegistrationRouting.Use(root, callerReader.Client);
 
         StoreFamilyBinding adopted = resolver.ResolveOrCreate(facts);
 
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, callerReader.Events);
+        Assert.Equal(0, callerReader.Owed);
         Assert.Equal(pointerBinding, adopted);
         Assert.Equal(pointerBinding.FamilyId.ToString("D"), direct.Snapshot.ArtifactOrStoreId);
         Assert.Equal(pointerBinding.ViewId, direct.Snapshot.ViewId);
@@ -238,14 +244,21 @@ public sealed class StoreFamilyResolverTests : IDisposable
             storesRoot,
             () => familyId);
         WriteReadyStore(family.StoreRoot, familyId, viewId, facts.WorkspaceRoot);
+        using var readerRegistration = new Miller.Tests.Support.StoreReaderRegistrationFixture(
+            new(familyId, family.StoreRoot, viewId, facts.WorkspaceRoot, StoreBindingState.Ready));
         Directory.CreateDirectory(Path.Combine(facts.WorkspaceRoot, ".miller"));
         File.WriteAllText(Path.Combine(facts.WorkspaceRoot, ".miller", "store.json"), "not-json");
         var resolver = Resolver(
             registry,
             new Queue<Guid>([Guid.Parse("11111111-1111-4111-8111-111111111111")]));
+        using var callerReader = new Miller.Tests.Support.StoreCallerReaderFixture(
+            new(familyId, family.StoreRoot, viewId, facts.WorkspaceRoot, StoreBindingState.Ready), readerRegistration.Reply);
+        resolver.ReaderScopeFactory = root => StoreReaderRegistrationRouting.Use(root, callerReader.Client);
 
         StoreFamilyBinding resolved = resolver.ResolveOrCreate(facts);
 
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, callerReader.Events);
+        Assert.Equal(0, callerReader.Owed);
         Assert.Equal(familyId, resolved.FamilyId);
         Assert.Equal(viewId, resolved.ViewId);
         Assert.Equal(StoreBindingState.Ready, resolved.State);
@@ -280,6 +293,8 @@ public sealed class StoreFamilyResolverTests : IDisposable
             ? Path.Combine(_directory, "other-root")
             : facts.WorkspaceRoot;
         WriteReadyStore(storeRoot, familyId, viewId, recordedRoot);
+        using var readerRegistration = new Miller.Tests.Support.StoreReaderRegistrationFixture(
+            new(familyId, storeRoot, viewId, recordedRoot, StoreBindingState.Ready));
         StoreFamilyBinding pointerBinding = new(
             failure == "family"
                 ? Guid.Parse("88888888-8888-4888-8888-888888888888")

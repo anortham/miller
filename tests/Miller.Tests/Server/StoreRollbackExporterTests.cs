@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
 using Miller.Tests.Support;
@@ -9,6 +10,100 @@ namespace Miller.Tests.Server;
 
 public sealed class StoreRollbackExporterTests : IDisposable
 {
+    [Fact]
+    public void RollbackClosesReaderBeforeProducerExportBegins()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
+        bool submitted = false;
+        var client = new FailingExportClient(() =>
+        {
+            submitted = true;
+            Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+            Assert.Equal(0, reader.Owed);
+        });
+
+        Assert.Throws<JulieStoreProcessException>(() => StoreRollbackExporter.ExportIfRequired(
+            fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), client));
+
+        Assert.True(submitted);
+        Assert.NotNull(StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RollbackUsesTheCallerProducerAndClosesBeforeExportFailure(bool releaseFails)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply) { FailRelease = releaseFails };
+
+        Assert.Throws<JulieStoreProcessException>(() => StoreRollbackExporter.ExportIfRequired(
+            fixture.Binding.WorkspaceRoot, Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), reader.Client));
+
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(releaseFails ? 1 : 0, reader.Owed);
+        Assert.Equal(fixture.Binding.FamilyId, StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot)?.FamilyId);
+        reader.FailRelease = false;
+        reader.RetryRelease();
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedAdmissionCleanupPreservesReadyAndRecoveryMarkers(bool recovery)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string workspace = fixture.Binding.WorkspaceRoot;
+        StoreWorkspacePointer.Write(workspace, fixture.Binding);
+        string miller = Path.Combine(workspace, ".miller");
+        string pending = Path.Combine(miller, "store-rollback.pending");
+        if (recovery) Directory.CreateDirectory(pending);
+        string marker = recovery ? Path.Combine(miller, "store-rollback.recovery") : pending;
+        string legacy = Path.Combine(miller, "symbols.db");
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(fixture.Root, "exported"));
+        StoreRollbackExporter.CommitValidatedExport(workspace, legacy,
+            target => File.Copy(exported, target),
+            deletePointer: _ => throw new IOException("keep cleanup pending"),
+            stagedExportPath: exported,
+            viewIdentity: new StoreRollbackViewIdentity(2, "manifest-current", 2));
+        byte[] expectedMarker = File.ReadAllBytes(marker);
+        byte[] expectedPointer = File.ReadAllBytes(Path.Combine(miller, "store.json"));
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply)
+        {
+            FailRelease = true,
+            AfterAcquire = () =>
+            {
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    $"Data Source={Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db")};Pooling=False");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE manifests SET manifest_hash='changed-after-acquire' WHERE generation=2";
+                command.ExecuteNonQuery();
+            },
+        };
+
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(workspace, legacy, reader.Client);
+
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.False(result.Exported);
+        Assert.Equal(expectedMarker, File.ReadAllBytes(marker));
+        Assert.Equal(expectedPointer, File.ReadAllBytes(Path.Combine(miller, "store.json")));
+        Assert.True(File.Exists(legacy));
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(1, reader.Owed);
+        reader.FailRelease = false;
+        reader.RetryRelease();
+        Assert.Equal(0, reader.Owed);
+        Assert.Equal(expectedMarker, File.ReadAllBytes(marker));
+        Assert.Equal(expectedPointer, File.ReadAllBytes(Path.Combine(miller, "store.json")));
+    }
+
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "miller-store-rollback-" + Guid.NewGuid().ToString("N"));
 
@@ -425,7 +520,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
         StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
             workspace,
             legacy,
-            new UnexpectedStoreClient());
+            new JulieStoreClient(Path.Combine(_root, "missing-producer"), (_, _) =>
+                throw new InvalidOperationException("A previous marker must not acquire a reader.")));
 
         Assert.False(result.Exported);
         Assert.True(result.RequiresSourceRebuild);
@@ -443,6 +539,16 @@ public sealed class StoreRollbackExporterTests : IDisposable
     {
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("The malformed pointer must be rejected before invoking julie-extract.");
+    }
+
+    private sealed class FailingExportClient(Action onSubmit) : IJulieStoreClient
+    {
+        public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
+        {
+            Assert.IsType<StoreExportRequest>(request);
+            onSubmit();
+            throw new JulieStoreProcessException("export failed", "", 1);
+        }
     }
 
     private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));

@@ -55,6 +55,8 @@ public sealed class StoreFamilyResolver
     // Internal phase observation allows deterministic catalog replacement race tests.
     internal Action? CatalogMetadataRead { get; set; }
 
+    internal Func<string, IDisposable?>? ReaderScopeFactory { get; set; }
+
     public StoreFamilyResolver(
         WorkspaceRegistry registry,
         string storesRoot,
@@ -253,6 +255,7 @@ public sealed class StoreFamilyResolver
                 view.ViewId,
                 facts.WorkspaceRoot,
                 StoreBindingState.Ready);
+            using IDisposable? readerScope = ReaderScopeFactory?.Invoke(candidate.StoreRoot);
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, facts.WorkspaceId);
             return true;
         }
@@ -395,6 +398,7 @@ public sealed class StoreFamilyResolver
                 throw new StoreBindingMismatchException(
                     "The store pointer view does not match the current workspace root.");
 
+            using IDisposable? readerScope = ReaderScopeFactory?.Invoke(candidate.StoreRoot);
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, facts.WorkspaceId);
             (string lineageKey, string? commonDir, DateTimeOffset? commonDirCreatedAt) = Lineage(facts);
             ValidatePointerLineage(

@@ -693,10 +693,11 @@ public sealed class CrossWorkspaceRefreshService
     {
         IJulieStoreClient client = _storeClient ?? throw new InvalidOperationException(
             "Store refresh is enabled but no julie-extract store client is configured.");
-        StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
+        StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBindingWithClient(
             _registry,
             row.WorkspaceId,
-            row.CanonicalRoot);
+            row.CanonicalRoot,
+            client);
         // This is the dominant recovery path: miller refresh, the MCP workspace tool, the dashboard, and every
         // cross-workspace read. It has no logger, so the recovery is recorded as a phase instead.
         if (binding.Replan != StoreViewReplan.None)
