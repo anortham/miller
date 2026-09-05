@@ -1,0 +1,967 @@
+{
+  "workload": {
+    "metric": "client-observed MCP completion milliseconds; nearest-rank p95 plus min/max; first observed separately",
+    "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7",
+    "workspace_root": "/home/murphy/source/julie-extractors/.worktrees/reader-retention-contract",
+    "source_commit": "ecd021c05d774068423911877ebf254eac6ec0cf",
+    "index_revision_at_discovery": 105091,
+    "server_version": "1.27.2+8c8054cd29db",
+    "concurrency": 1,
+    "workloads": [
+      {
+        "tool": "inspect",
+        "args": {
+          "target": "crates/julie-extract-artifact/src/store/reader.rs",
+          "depth": "summary",
+          "ensure_fresh": false
+        }
+      },
+      {
+        "tool": "inspect",
+        "args": {
+          "target": "xtask/src/test_tiers.rs",
+          "depth": "summary",
+          "ensure_fresh": false
+        }
+      },
+      {
+        "tool": "impact",
+        "args": {
+          "changed_paths": [
+            "crates/julie-extract-artifact/src/store/reader.rs",
+            "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+          ],
+          "limit": 8,
+          "ensure_fresh": false
+        }
+      },
+      {
+        "tool": "search",
+        "args": {
+          "query": "store/reader.rs",
+          "mode": "file",
+          "retrieval": "lexical",
+          "limit": 6,
+          "ensure_fresh": false
+        }
+      }
+    ],
+    "warmups": 1,
+    "repeats": 5
+  },
+  "sequential": [
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 0,
+      "kind": "first-observed/warmup",
+      "started": "2026-09-05T09:42:38.449Z",
+      "ended": "2026-09-05T09:42:40.480Z",
+      "elapsed_ms": 2028,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 1,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:40.480Z",
+      "ended": "2026-09-05T09:42:42.433Z",
+      "elapsed_ms": 1953,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 2,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:42.433Z",
+      "ended": "2026-09-05T09:42:44.401Z",
+      "elapsed_ms": 1968,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 3,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:44.401Z",
+      "ended": "2026-09-05T09:42:46.398Z",
+      "elapsed_ms": 1997,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 4,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:46.398Z",
+      "ended": "2026-09-05T09:42:48.398Z",
+      "elapsed_ms": 1999,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 5,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:48.398Z",
+      "ended": "2026-09-05T09:42:50.343Z",
+      "elapsed_ms": 1945,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 0,
+      "kind": "first-observed/warmup",
+      "started": "2026-09-05T09:42:50.343Z",
+      "ended": "2026-09-05T09:42:52.260Z",
+      "elapsed_ms": 1917,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 1,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:52.260Z",
+      "ended": "2026-09-05T09:42:54.201Z",
+      "elapsed_ms": 1941,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 2,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:54.201Z",
+      "ended": "2026-09-05T09:42:56.124Z",
+      "elapsed_ms": 1923,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 3,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:56.124Z",
+      "ended": "2026-09-05T09:42:58.064Z",
+      "elapsed_ms": 1940,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 4,
+      "kind": "warm",
+      "started": "2026-09-05T09:42:58.065Z",
+      "ended": "2026-09-05T09:43:00.062Z",
+      "elapsed_ms": 1997,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 5,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:00.063Z",
+      "ended": "2026-09-05T09:43:02.021Z",
+      "elapsed_ms": 1958,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 0,
+      "kind": "first-observed/warmup",
+      "started": "2026-09-05T09:43:02.021Z",
+      "ended": "2026-09-05T09:43:19.030Z",
+      "elapsed_ms": 17009,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 1,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:19.030Z",
+      "ended": "2026-09-05T09:43:25.460Z",
+      "elapsed_ms": 6430,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 2,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:25.460Z",
+      "ended": "2026-09-05T09:43:31.797Z",
+      "elapsed_ms": 6337,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 3,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:31.798Z",
+      "ended": "2026-09-05T09:43:38.183Z",
+      "elapsed_ms": 6385,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 4,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:38.184Z",
+      "ended": "2026-09-05T09:43:44.587Z",
+      "elapsed_ms": 6403,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 5,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:44.587Z",
+      "ended": "2026-09-05T09:43:50.786Z",
+      "elapsed_ms": 6199,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 0,
+      "kind": "first-observed/warmup",
+      "started": "2026-09-05T09:43:50.786Z",
+      "ended": "2026-09-05T09:43:52.744Z",
+      "elapsed_ms": 1958,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 1,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:52.744Z",
+      "ended": "2026-09-05T09:43:54.731Z",
+      "elapsed_ms": 1987,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 2,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:54.732Z",
+      "ended": "2026-09-05T09:43:56.725Z",
+      "elapsed_ms": 1993,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 3,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:56.725Z",
+      "ended": "2026-09-05T09:43:58.675Z",
+      "elapsed_ms": 1950,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 4,
+      "kind": "warm",
+      "started": "2026-09-05T09:43:58.675Z",
+      "ended": "2026-09-05T09:44:00.630Z",
+      "elapsed_ms": 1955,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "iteration": 5,
+      "kind": "warm",
+      "started": "2026-09-05T09:44:00.630Z",
+      "ended": "2026-09-05T09:44:02.584Z",
+      "elapsed_ms": 1954,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    }
+  ],
+  "concurrent": [
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 0,
+      "kind": "concurrent-warmup",
+      "started": "2026-09-05T09:47:41.508Z",
+      "ended": "2026-09-05T09:47:43.698Z",
+      "elapsed_ms": 2190,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 0,
+      "kind": "concurrent-warmup",
+      "started": "2026-09-05T09:47:41.508Z",
+      "ended": "2026-09-05T09:47:54.772Z",
+      "elapsed_ms": 13264,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 0,
+      "kind": "concurrent-warmup",
+      "started": "2026-09-05T09:47:41.508Z",
+      "ended": "2026-09-05T09:47:52.614Z",
+      "elapsed_ms": 11106,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 0,
+      "kind": "concurrent-warmup",
+      "started": "2026-09-05T09:47:41.508Z",
+      "ended": "2026-09-05T09:47:45.893Z",
+      "elapsed_ms": 4385,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 1,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:47:54.773Z",
+      "ended": "2026-09-05T09:47:56.949Z",
+      "elapsed_ms": 2176,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 1,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:47:54.773Z",
+      "ended": "2026-09-05T09:47:59.162Z",
+      "elapsed_ms": 4389,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 1,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:47:54.773Z",
+      "ended": "2026-09-05T09:48:05.953Z",
+      "elapsed_ms": 11180,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 1,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:47:54.773Z",
+      "ended": "2026-09-05T09:48:08.105Z",
+      "elapsed_ms": 13332,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 2,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:08.105Z",
+      "ended": "2026-09-05T09:48:10.262Z",
+      "elapsed_ms": 2157,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 2,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:08.105Z",
+      "ended": "2026-09-05T09:48:12.430Z",
+      "elapsed_ms": 4325,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 2,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:08.105Z",
+      "ended": "2026-09-05T09:48:19.298Z",
+      "elapsed_ms": 11193,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 2,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:08.105Z",
+      "ended": "2026-09-05T09:48:21.409Z",
+      "elapsed_ms": 13304,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 3,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:21.410Z",
+      "ended": "2026-09-05T09:48:23.553Z",
+      "elapsed_ms": 2143,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 3,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:21.410Z",
+      "ended": "2026-09-05T09:48:25.729Z",
+      "elapsed_ms": 4319,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 3,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:21.410Z",
+      "ended": "2026-09-05T09:48:32.604Z",
+      "elapsed_ms": 11194,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 3,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:21.410Z",
+      "ended": "2026-09-05T09:48:34.857Z",
+      "elapsed_ms": 13447,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 4,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:34.857Z",
+      "ended": "2026-09-05T09:48:37.068Z",
+      "elapsed_ms": 2211,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 4,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:34.857Z",
+      "ended": "2026-09-05T09:48:39.252Z",
+      "elapsed_ms": 4395,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 4,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:34.857Z",
+      "ended": "2026-09-05T09:48:48.114Z",
+      "elapsed_ms": 13257,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 4,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:34.857Z",
+      "ended": "2026-09-05T09:48:41.431Z",
+      "elapsed_ms": 6574,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 5,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:48.115Z",
+      "ended": "2026-09-05T09:48:50.346Z",
+      "elapsed_ms": 2231,
+      "is_error": false,
+      "response_chars": 1402,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "inspect",
+      "args": {
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 5,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:48.115Z",
+      "ended": "2026-09-05T09:48:52.571Z",
+      "elapsed_ms": 4456,
+      "is_error": false,
+      "response_chars": 1466,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+    },
+    {
+      "tool": "impact",
+      "args": {
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 5,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:48.115Z",
+      "ended": "2026-09-05T09:48:59.293Z",
+      "elapsed_ms": 11178,
+      "is_error": false,
+      "response_chars": 1484,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+    },
+    {
+      "tool": "search",
+      "args": {
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false,
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7"
+      },
+      "round": 5,
+      "kind": "concurrent-warm",
+      "started": "2026-09-05T09:48:48.115Z",
+      "ended": "2026-09-05T09:49:01.439Z",
+      "elapsed_ms": 13324,
+      "is_error": false,
+      "response_chars": 366,
+      "response": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+    }
+  ],
+  "keeper_probe": [
+    {
+      "elapsed_ms": 42,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "elapsed_ms": 53,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "elapsed_ms": 47,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    }
+  ]
+}
