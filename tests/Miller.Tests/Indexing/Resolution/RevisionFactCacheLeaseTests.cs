@@ -271,4 +271,108 @@ public sealed class RevisionFactCacheLeaseTests
 
         Assert.Single(lease.Cache.SymbolsNamed("Alpha"));
     }
+
+    [Fact]
+    public async Task Acquire_AdvancingScopeWithDisposedPriorLease_TracksPreviousCacheAsEvictedHeldUntilAdvanceCompletes()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "keep.cs");
+        fixture.AddFile(2, "change.cs");
+        fixture.AddSymbol(1, "kept", "Kept", "class", "keep.cs");
+        fixture.AddSymbol(2, "old", "Old", "class", "change.cs");
+
+        var store = new RevisionFactCacheStore();
+
+        // 1. Initial acquire and dispose
+        using (RevisionFactCacheLease initialLease = store.Acquire("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility()))
+        {
+            Assert.Equal(1, store.GetResourceSnapshot().ActiveLeaseCount);
+        }
+
+        CacheResourceSnapshot s1 = store.GetResourceSnapshot();
+        Assert.Equal(1, s1.RetainedEntryCount);
+        Assert.Equal(0, s1.ActiveLeaseCount);
+        Assert.Equal(0, s1.EvictedHeldEntryCount);
+        Assert.Equal(1, s1.UniqueLiveEntryCount);
+        long rev1Bytes = s1.RetainedBytes;
+        Assert.True(rev1Bytes > 0);
+
+        // 2. Prepare revision delta
+        fixture.AddSymbol(3, "neu", "New", "class", "change.cs");
+        fixture.FlipManifest(2, [("keep.cs", 1, "csharp", "indexed"), ("change.cs", 3, "csharp", "indexed")]);
+
+        using var advanceStarted = new ManualResetEventSlim(initialState: false);
+        using var advanceBlocker = new ManualResetEventSlim(initialState: false);
+
+        Task<RevisionFactCacheLease> advanceTask = Task.Run(() =>
+        {
+            return store.Acquire(
+                "ws-a",
+                "rev-2",
+                () =>
+                {
+                    advanceStarted.Set();
+                    advanceBlocker.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                    return fixture.OpenRead();
+                },
+                fixture.Visibility());
+        });
+
+        advanceStarted.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // 3. While advance is blocked in openRead, the previous cache must be tracked as evicted-held
+        CacheResourceSnapshot inFlight = store.GetResourceSnapshot();
+        Assert.Equal(0, inFlight.RetainedEntryCount);
+        Assert.Equal(1, inFlight.ActiveLeaseCount); // loader holds previousHold
+        Assert.Equal(rev1Bytes, inFlight.ActiveBytes);
+        Assert.Equal(1, inFlight.EvictedHeldEntryCount);
+        Assert.Equal(rev1Bytes, inFlight.EvictedHeldBytes);
+        Assert.Equal(1, inFlight.UniqueLiveEntryCount);
+        Assert.Equal(rev1Bytes, inFlight.UniqueLiveBytes);
+
+        // 4. Unblock advance and verify completion
+        advanceBlocker.Set();
+        using RevisionFactCacheLease advancedLease = await advanceTask;
+
+        CacheResourceSnapshot completed = store.GetResourceSnapshot();
+        Assert.Equal(1, completed.RetainedEntryCount);
+        Assert.Equal(1, completed.ActiveLeaseCount); // advancedLease
+        Assert.Equal(0, completed.EvictedHeldEntryCount);
+        Assert.Equal(0L, completed.EvictedHeldBytes);
+        Assert.Equal(1, completed.UniqueLiveEntryCount);
+        Assert.Equal(advancedLease.Cache.ResidentBytes, completed.UniqueLiveBytes);
+        Assert.Single(advancedLease.Cache.SymbolsNamed("New"));
+    }
+
+    [Fact]
+    public void Acquire_AdvancingScopeFailure_ReleasesTrackedPreviousCache()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "keep.cs");
+        fixture.AddSymbol(1, "kept", "Kept", "class", "keep.cs");
+
+        var store = new RevisionFactCacheStore();
+
+        using (RevisionFactCacheLease initialLease = store.Acquire("ws-fail", "rev-1", fixture.OpenRead, fixture.Visibility()))
+        {
+        }
+
+        Assert.Equal(1, store.GetResourceSnapshot().RetainedEntryCount);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            store.Acquire(
+                "ws-fail",
+                "rev-2",
+                () => throw new InvalidOperationException("openRead failed"),
+                fixture.Visibility()));
+
+        CacheResourceSnapshot snapshot = store.GetResourceSnapshot();
+        Assert.Equal(0, snapshot.RetainedEntryCount);
+        Assert.Equal(0, snapshot.ActiveLeaseCount);
+        Assert.Equal(0, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(0L, snapshot.EvictedHeldBytes);
+        Assert.Equal(0, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(0L, snapshot.UniqueLiveBytes);
+        Assert.Equal(0, store.ScopeCount);
+    }
 }

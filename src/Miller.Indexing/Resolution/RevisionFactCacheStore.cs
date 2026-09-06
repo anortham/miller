@@ -181,30 +181,60 @@ public sealed class RevisionFactCacheStore
             }
             else
             {
-                RevisionFactCache? previous = existing is { Lazy.IsValueCreated: true } ? existing.Lazy.Value : null;
+                RevisionFactCacheLease? previousHold = null;
+                RevisionFactCache? previous = null;
+                if (existing is { Lazy.IsValueCreated: true } && existing.Lazy.Value.CanAdvance)
+                {
+                    RevisionFactCache prev = existing.Lazy.Value;
+                    _activeLeaseCount++;
+                    if (_activeCacheRefCounts.TryGetValue(prev, out int count))
+                        _activeCacheRefCounts[prev] = count + 1;
+                    else
+                        _activeCacheRefCounts[prev] = 1;
+
+                    previousHold = new RevisionFactCacheLease(prev, workspaceScope, existing.Identity, ReleaseLease);
+                    previous = prev;
+                }
+
+                RevisionFactCacheLease? capturedHold = previousHold;
                 entryToken = ++_entryTokenCounter;
-                lazy = new Lazy<RevisionFactCache>(
-                    () =>
-                    {
-                        Interlocked.Increment(ref _loadCount);
-                        SqliteConnection connection = openRead();
-                        RevisionFactCache loaded;
-                        try
+                try
+                {
+                    lazy = new Lazy<RevisionFactCache>(
+                        () =>
                         {
-                            loaded = previous is { CanAdvance: true }
-                                ? previous.Advance(connection, visibility)
-                                : RevisionFactCache.Load(connection, visibility);
-                        }
-                        catch
-                        {
-                            try { connection.Dispose(); } catch { /* Preserve the primary query failure. */ }
-                            throw;
-                        }
-                        connection.Dispose();
-                        return loaded;
-                    },
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-                _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock, entryToken);
+                            try
+                            {
+                                Interlocked.Increment(ref _loadCount);
+                                SqliteConnection connection = openRead();
+                                RevisionFactCache loaded;
+                                try
+                                {
+                                    loaded = previous is { CanAdvance: true }
+                                        ? previous.Advance(connection, visibility)
+                                        : RevisionFactCache.Load(connection, visibility);
+                                }
+                                catch
+                                {
+                                    try { connection.Dispose(); } catch { /* Preserve the primary query failure. */ }
+                                    throw;
+                                }
+                                connection.Dispose();
+                                return loaded;
+                            }
+                            finally
+                            {
+                                capturedHold?.Dispose();
+                            }
+                        },
+                        LazyThreadSafetyMode.ExecutionAndPublication);
+                    _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock, entryToken);
+                    previousHold = null;
+                }
+                finally
+                {
+                    previousHold?.Dispose();
+                }
             }
         }
 
