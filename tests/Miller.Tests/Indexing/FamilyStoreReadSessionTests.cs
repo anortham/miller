@@ -5,6 +5,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
+using Miller.Tests.Indexing.Resolution;
 using Miller.Tests.Support;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -2461,5 +2462,113 @@ public sealed class FamilyStoreReadSessionTests
         _ = session.Resolution;
 
         Assert.True(session.ResolutionFactsWarm);
+    }
+
+    [Fact]
+    public void Resolution_LazyReaderSuccess_HoldsLeaseUntilSessionDisposed()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        using FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+
+        _ = session.Resolution;
+
+        Assert.Equal(1, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().EvictedHeldEntryCount);
+
+        session.Dispose();
+
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+    }
+
+    [Fact]
+    public void Resolution_SessionDisposalBeforeAccess_DoesNotAcquireLeaseAndThrowsObjectDisposed()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        session.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => session.Resolution);
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+    }
+
+    [Fact]
+    public void Resolution_DuplicateHandleDisposal_ReleasesLeaseExactlyOnce()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+        var handle = new WorkspaceReadHandle(session);
+
+        _ = handle.ResolutionReader;
+        Assert.Equal(1, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+
+        handle.Dispose();
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+
+        handle.Dispose();
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+
+        session.Dispose();
+        Assert.Equal(0, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+    }
+
+    [Fact]
+    public async Task Resolution_ConcurrentReads_ShareSessionResolutionReaderSafely()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        using FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        Task<QueryTimeResolutionReader>[] tasks = Enumerable.Range(0, 5)
+            .Select(_ => Task.Run(() => session.Resolution))
+            .ToArray();
+
+        QueryTimeResolutionReader[] readers = await Task.WhenAll(tasks);
+
+        QueryTimeResolutionReader first = readers[0];
+        foreach (QueryTimeResolutionReader reader in readers)
+            Assert.Same(first, reader);
+
+        Assert.Equal(1, factCacheStore.GetResourceSnapshot().ActiveLeaseCount);
+    }
+
+    [Fact]
+    public void Resolution_EvictedUnderSession_KeepsSessionReaderWorking()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore(byteBudget: 1);
+        using FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        QueryTimeResolutionReader reader = session.Resolution;
+        Assert.NotNull(reader);
+
+        using ResolutionStoreFixture secondFixture = ResolutionStoreFixture.Create();
+        secondFixture.AddFile(1, "b.cs");
+        secondFixture.AddSymbol(1, "b", "Beta", "class", "b.cs");
+        using RevisionFactCacheLease otherLease = factCacheStore.Acquire(
+            "workspace-b",
+            "rev-1",
+            secondFixture.OpenRead,
+            secondFixture.Visibility());
+
+        CacheResourceSnapshot snapshot = factCacheStore.GetResourceSnapshot();
+        Assert.Equal(1, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(2, snapshot.ActiveLeaseCount);
+
+        session.Dispose();
+
+        CacheResourceSnapshot after = factCacheStore.GetResourceSnapshot();
+        Assert.Equal(0, after.EvictedHeldEntryCount);
+        Assert.Equal(1, after.ActiveLeaseCount);
     }
 }

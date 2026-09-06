@@ -10,8 +10,13 @@ public sealed class RevisionFactCacheStore
     private readonly object _gate = new();
     private readonly Dictionary<string, ScopeEntry> _scopes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Task> _warms = new(StringComparer.Ordinal);
+    private readonly Dictionary<RevisionFactCache, int> _activeCacheRefCounts = new(ReferenceEqualityComparer.Instance);
     private readonly long _byteBudget;
     private long _clock;
+    private long _entryTokenCounter;
+    private int _loadCount;
+    private int _coalescedLoadCount;
+    private int _activeLeaseCount;
 
     public RevisionFactCacheStore()
         : this(DefaultByteBudget)
@@ -47,6 +52,39 @@ public sealed class RevisionFactCacheStore
 
                 return total;
             }
+        }
+    }
+
+    internal CacheResourceSnapshot GetResourceSnapshot()
+    {
+        lock (_gate)
+        {
+            var retained = new HashSet<object>(ReferenceEqualityComparer.Instance);
+            var active = new HashSet<object>(ReferenceEqualityComparer.Instance);
+            var objectBytes = new Dictionary<object, long>(ReferenceEqualityComparer.Instance);
+
+            foreach (ScopeEntry entry in _scopes.Values)
+            {
+                if (entry.Lazy.IsValueCreated)
+                {
+                    RevisionFactCache cache = entry.Lazy.Value;
+                    retained.Add(cache);
+                    objectBytes[cache] = cache.ResidentBytes;
+                }
+            }
+
+            foreach (RevisionFactCache activeCache in _activeCacheRefCounts.Keys)
+            {
+                active.Add(activeCache);
+                objectBytes[activeCache] = activeCache.ResidentBytes;
+            }
+
+            var state = new CacheResourceState(retained, active, objectBytes);
+            return state.ToSnapshot(
+                activeLeaseCount: _activeLeaseCount,
+                loadCount: _loadCount,
+                coalescedLoadCount: _coalescedLoadCount,
+                byteBudget: _byteBudget);
         }
     }
 
@@ -93,7 +131,10 @@ public sealed class RevisionFactCacheStore
             if (IsWarm(workspaceScope, revisionIdentity))
                 return Task.CompletedTask;
             if (_warms.TryGetValue(workspaceScope, out Task? inflight))
+            {
+                _coalescedLoadCount++;
                 return inflight;
+            }
 
             // Removal in the finally needs no identity check: entries are inserted only here, and the
             // single-flight guard above blocks a second insert for the scope until this one removes itself.
@@ -101,7 +142,7 @@ public sealed class RevisionFactCacheStore
             {
                 try
                 {
-                    GetOrAdvance(workspaceScope, revisionIdentity, openRead, visibility);
+                    using RevisionFactCacheLease lease = Acquire(workspaceScope, revisionIdentity, openRead, visibility);
                 }
                 finally
                 {
@@ -114,7 +155,7 @@ public sealed class RevisionFactCacheStore
         }
     }
 
-    internal RevisionFactCache GetOrAdvance(
+    internal RevisionFactCacheLease Acquire(
         string workspaceScope,
         string revisionIdentity,
         Func<SqliteConnection> openRead,
@@ -126,6 +167,7 @@ public sealed class RevisionFactCacheStore
         ArgumentNullException.ThrowIfNull(visibility);
 
         Lazy<RevisionFactCache> lazy;
+        long entryToken;
         lock (_gate)
         {
             if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? existing)
@@ -133,13 +175,18 @@ public sealed class RevisionFactCacheStore
             {
                 existing.LastUsed = ++_clock;
                 lazy = existing.Lazy;
+                entryToken = existing.Token;
+                if (!lazy.IsValueCreated)
+                    _coalescedLoadCount++;
             }
             else
             {
                 RevisionFactCache? previous = existing is { Lazy.IsValueCreated: true } ? existing.Lazy.Value : null;
+                entryToken = ++_entryTokenCounter;
                 lazy = new Lazy<RevisionFactCache>(
                     () =>
                     {
+                        Interlocked.Increment(ref _loadCount);
                         SqliteConnection connection = openRead();
                         RevisionFactCache loaded;
                         try
@@ -157,37 +204,60 @@ public sealed class RevisionFactCacheStore
                         return loaded;
                     },
                     LazyThreadSafetyMode.ExecutionAndPublication);
-                _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock);
+                _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock, entryToken);
             }
         }
 
+        RevisionFactCache cache;
         try
         {
-            RevisionFactCache cache = lazy.Value;
-            lock (_gate)
-            {
-                if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? current)
-                    && ReferenceEquals(current.Lazy, lazy))
-                {
-                    current.LastUsed = ++_clock;
-                    EvictToBudget(workspaceScope);
-                }
-            }
-
-            return cache;
+            cache = lazy.Value;
         }
         catch
         {
             lock (_gate)
             {
                 if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? current)
-                    && ReferenceEquals(current.Lazy, lazy))
+                    && current.Token == entryToken)
                 {
                     _scopes.Remove(workspaceScope);
                 }
             }
 
             throw;
+        }
+
+        lock (_gate)
+        {
+            if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? current)
+                && current.Token == entryToken)
+            {
+                current.LastUsed = ++_clock;
+                EvictToBudget(workspaceScope);
+            }
+
+            _activeLeaseCount++;
+            if (_activeCacheRefCounts.TryGetValue(cache, out int count))
+                _activeCacheRefCounts[cache] = count + 1;
+            else
+                _activeCacheRefCounts[cache] = 1;
+        }
+
+        return new RevisionFactCacheLease(cache, workspaceScope, revisionIdentity, ReleaseLease);
+    }
+
+    private void ReleaseLease(RevisionFactCacheLease lease)
+    {
+        lock (_gate)
+        {
+            _activeLeaseCount--;
+            if (_activeCacheRefCounts.TryGetValue(lease.Cache, out int count))
+            {
+                if (count <= 1)
+                    _activeCacheRefCounts.Remove(lease.Cache);
+                else
+                    _activeCacheRefCounts[lease.Cache] = count - 1;
+            }
         }
     }
 
@@ -219,11 +289,12 @@ public sealed class RevisionFactCacheStore
 
     private sealed class ScopeEntry
     {
-        internal ScopeEntry(string identity, Lazy<RevisionFactCache> lazy, long lastUsed)
+        internal ScopeEntry(string identity, Lazy<RevisionFactCache> lazy, long lastUsed, long token)
         {
             Identity = identity;
             Lazy = lazy;
             LastUsed = lastUsed;
+            Token = token;
         }
 
         internal string Identity { get; }
@@ -231,5 +302,7 @@ public sealed class RevisionFactCacheStore
         internal Lazy<RevisionFactCache> Lazy { get; }
 
         internal long LastUsed { get; set; }
+
+        internal long Token { get; }
     }
 }

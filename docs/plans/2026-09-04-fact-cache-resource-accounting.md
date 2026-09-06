@@ -105,11 +105,11 @@ internal readonly record struct CacheResourceState(
 5. Read snapshots without forcing a lazy load under `_gate`; loading belongs outside store bookkeeping locks.
 6. Run focused tests green and Miller impact.
 
-- [ ] Unique-object union semantics are explicit.
-- [ ] The retained SQLite baseline is named as an I/O test.
-- [ ] Pure accounting-state tests do not pretend to exercise cache lifetime.
-- [ ] Snapshot reads do not trigger hidden loads.
-- [ ] Focused tests pass.
+- [x] Unique-object union semantics are explicit.
+- [x] The retained SQLite baseline is named as an I/O test.
+- [x] Pure accounting-state tests do not pretend to exercise cache lifetime.
+- [x] Snapshot reads do not trigger hidden loads.
+- [x] Focused tests pass.
 
 ### Task 2 — Implement owned lease and stale-loader fencing
 
@@ -146,11 +146,11 @@ internal RevisionFactCacheLease Acquire(
 7. Permit one oversized current/active object and report it; no cancellation or forced GC.
 8. Run focused tests green.
 
-- [ ] No API returns an unleased cache.
-- [ ] Unique active bytes and union bytes are correct.
-- [ ] Evicted live cache remains usable/countable.
-- [ ] Stale loader cannot overwrite newer scope.
-- [ ] Double dispose and exceptions leak no lease.
+- [x] No API returns an unleased cache.
+- [x] Unique active bytes and union bytes are correct.
+- [x] Evicted live cache remains usable/countable.
+- [x] Stale loader cannot overwrite newer scope.
+- [x] Double dispose and exceptions leak no lease.
 
 ### Task 3 — Migrate all real resolution holders
 
@@ -171,11 +171,11 @@ internal RevisionFactCacheLease Acquire(
 7. After trace proves no production holder uses `GetOrAdvance`, remove the old bare-cache API and migrate its tests to `Acquire`.
 8. Run focused session and resolution tests green.
 
-- [ ] Every real holder is enumerated and migrated.
-- [ ] No bare cache escapes.
-- [ ] Exceptional construction and disposal release exactly once.
-- [ ] Legacy/bounded behavior remains unchanged.
-- [ ] `GetOrAdvance` is removed only after trace proves zero production callers.
+- [x] Every real holder is enumerated and migrated.
+- [x] No bare cache escapes.
+- [x] Exceptional construction and disposal release exactly once.
+- [x] Legacy/bounded behavior remains unchanged.
+- [x] `GetOrAdvance` is removed only after trace proves zero production callers.
 
 ### Task 4 — Validate parity and resource benchmark
 
@@ -194,10 +194,10 @@ internal RevisionFactCacheLease Acquire(
 5. Repeat benchmark runs through `--runs 5`; assert deterministic counters, and keep time/RSS report-only.
 6. Run focused tests green; preserve evidence in the ledger.
 
-- [ ] Tests explicitly use real SQLite I/O.
-- [ ] Full/bounded answers remain byte-identical.
-- [ ] Benchmark options and output fields are explicit.
-- [ ] RSS is not inferred from cache estimates.
+- [x] Tests explicitly use real SQLite I/O.
+- [x] Full/bounded answers remain byte-identical.
+- [x] Benchmark options and output fields are explicit.
+- [x] RSS is not inferred from cache estimates.
 
 ### Task 5 — Update limits honestly
 
@@ -212,10 +212,10 @@ internal RevisionFactCacheLease Acquire(
 3. State that 256 MiB is soft, active readers may retain evicted objects, and RSS is separately measured.
 4. Do not claim a hard cap or close the gap solely because accounting exists.
 
-- [ ] Known limits match evidence.
-- [ ] No hard RSS promise appears.
-- [ ] Links resolve.
-- [ ] No public/MCP contract changed.
+- [x] Known limits match evidence.
+- [x] No hard RSS promise appears.
+- [x] Links resolve.
+- [x] No public/MCP contract changed.
 
 ## Safety matrix
 

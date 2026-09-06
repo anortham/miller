@@ -57,6 +57,7 @@ public sealed class FamilyStoreReadSession :
     private readonly StoreReaderConnectionOwner _connections;
     private readonly object _gate = new();
     private QueryTimeResolutionReader? _resolution;
+    private RevisionFactCacheLease? _factCacheLease;
     private Task? _warmTask;
     private SqliteConnection? _boundedConnection;
     private SqliteTransaction? _boundedSnapshot;
@@ -161,19 +162,24 @@ public sealed class FamilyStoreReadSession :
     private QueryTimeResolutionReader CreateResolutionReader()
     {
         RevisionFactCache cache;
+        RevisionFactCacheLease? lease = null;
         if (_factCacheStore is { } store)
         {
             SqliteConnection? readConnection = null;
             try
             {
-                cache = store.GetOrAdvance(
+                lease = store.Acquire(
                     FactCacheScope,
                     FactCacheIdentity,
                     () => readConnection = _connections.OpenRead(Visibility.StoreDatabasePath),
                     Visibility);
+                _factCacheLease = lease;
+                cache = lease.Cache;
             }
             catch
             {
+                lease?.Dispose();
+                _factCacheLease = null;
                 _connections.RecordFailedRead(readConnection);
                 throw;
             }
@@ -214,7 +220,16 @@ public sealed class FamilyStoreReadSession :
             cache = RevisionFactCache.Load(_connection, Visibility);
         }
 
-        return new QueryTimeResolutionReader(cache, Visibility);
+        try
+        {
+            return new QueryTimeResolutionReader(cache, Visibility);
+        }
+        catch
+        {
+            lease?.Dispose();
+            _factCacheLease = null;
+            throw;
+        }
     }
 
     internal const string BoundedFactsEnvironmentVariable = "MILLER_BOUNDED_FACTS";
@@ -728,6 +743,8 @@ public sealed class FamilyStoreReadSession :
             Close(_boundedConnection);
             _boundedConnection = null;
             Close(_connection);
+            Close(_factCacheLease);
+            _factCacheLease = null;
             _registration.Dispose();
             if (failure is not null)
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
