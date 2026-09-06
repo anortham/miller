@@ -3,7 +3,7 @@ id: dogfood-and-release-miller-1-28-0
 title: Dogfood and release Miller 1.28.0
 status: active
 created: 2026-09-06T15:14:00.897Z
-updated: 2026-09-06T15:14:00.897Z
+updated: 2026-09-06T17:16:43.828Z
 tags:
   - release
   - dogfood
@@ -13,27 +13,24 @@ tags:
 
 ## Goal
 
-Dogfood the merged architecture changes, repair release-gating defects, and publish Miller1.28.0 only after required verification.
+Publish Miller 1.28.0 after verified dogfood repairs, dependency adoption, and package promotion.
 
-## Why now
+## Approval
 
-User rebuilt/restarted main68f3fd66 after M2/M4/M5 integration and explicitly approved a Miller release once verified.
+User explicitly approved Miller release and subsequently approved julie-extract 2.40.5 publication plus Miller pin update. No paid agent campaign, semantic runtime change, tag rewrite, or unrelated work is authorized.
 
-## Constraints
+## Verified state
 
-Preserve store retention and removed-root safety; never bypass protections or weaken tests. Keep running main Release output untouched; test isolated builds. No paid agent-efficacy campaign. Supporting julie-extract publication needs the pending explicit approval; its2.40.5 candidate remains local. Windows guest restart is no longer needed. Preserve unrelated worktrees/user changes. Reuse green unchanged scopes.
+Miller source-final d96a6303 passed Linux fast 10024/9 skipped, Scale 220/24 skipped, isolated Release zero warnings/errors, plugin 82/82, and root/non-repo launcher smokes. Windows full fast passed 9975/58 skipped, zero failures; focused CT 33/33. Later 927c4fa5 is docs/checkpoints only. Julie corrected cursor source and version candidate passed Linux and focused Windows gates.
 
-## Success criteria
+## Current work
 
-Live dogfood and Linux/Windows gates pass on source-final changes; published extractor patch is pinned by verified asset hashes; release metadata aligns; package-only validation succeeds, exact artifacts are promoted, release notes and downloaded-asset verification complete. No publication from incomplete or failed gates.
+Julie 2.40.5 tagged at9b8503f7, four-platform publication underway. Miller 1.28.0 metadata prepared locally, published pin hashes still needed. Preserve running main Release output, use isolated builds. Live vector lag is downstream of old cursor cost, not a separate embedding fault; verify stable-revision convergence after adoption.
 
-## References
+## Completion
 
-- docs/findings/2026-09-06-v1.28.0-release-verification.md
-- docs/release-process.md
-- docs/release-notes/v1.28.0.md (candidate, not publishable yet)
-- julie-extractors docs/findings/2026-09-06-cursor-command-cost.md
+Published dependency archives verified and pinned; final adoption checks and Linux/Windows release gates; package-only validation and exact-run promotion; release notes/body and downloaded archives verified. Keep source trees clean and preserve unrelated worktrees. M1–M4 implemented; M5 harness qualified, paid campaign not run; S1 prepared-runtime qualification remains separate.
 
-## Status
+## Evidence
 
-In progress. Reader-admission diagnostics and batched test fixtures are committed locally. Julie cursor performance/compatibility patch and local release candidate are verified on Linux and focused Windows scopes. Miller Windows full suite found a removed-worktree resurrection race; deterministic repair and broader CT verification are in progress. No pushes or releases.
+See docs/findings/2026-09-06-v1.28.0-release-verification.md and docs/release-process.md.

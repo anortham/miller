@@ -174,8 +174,8 @@ A typical flow: `search` to find candidates, `inspect --depth overview` for a bo
 symbol, `trace` or `impact` before changing anything, `edit` with its diff preview for the change
 itself, and `inspect --depth full` only when you need a complete body.
 
-Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID, registered root path,
-`current`, or `primary`) for reading other registered workspaces. The CLI adds `miller metrics`
+MCP read tools require a registered `workspace_id` selector: display ID, unique prefix, full ID,
+or registered root path. The CLI also accepts `current` and `primary` and adds `miller metrics`
 (churn, clones, complexity, history trends) and a local ops dashboard. Full detail:
 [docs/cli.md](docs/cli.md) for the CLI and dashboard,
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md) for the tool catalog, and
@@ -183,7 +183,7 @@ Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID,
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.40.4 ships hand-written extractors
+Miller indexes what the pinned extractor parses. `julie-extract` 2.40.5 ships hand-written extractors
 for **40 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,

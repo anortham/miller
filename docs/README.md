@@ -5,6 +5,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [v1.28.0 release notes](release-notes/v1.28.0.md) - shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
+- [v1.28.0 release verification](findings/2026-09-06-v1.28.0-release-verification.md) - dogfood repairs, Linux and Windows gates, cursor-cost measurements, and package verification status.
+
 - [Agent-outcomes harness qualification](findings/2026-09-04-agent-outcomes-harness-qualification.md) - qualified 36-task dry replay and separate frozen 24-task development-pilot proposal with zero paid execution; the prepared image passed 24 probes, all 36 offline verifier states, paired Chi same-CID CT, and the final branch gate, while the empirical campaign remains unapproved and unrun, with no efficacy or S1 claim.
 - [M2/M4 integration verification](findings/2026-09-06-m2-m4-integration-verification.md) - published 2.40.4 cursor ordering and recovery, SQLite sidecar parity/cost evidence, 40-language Content/Search/Context projection, byte-stable Context boundaries, and combined build/fast/Scale gates.
 - [Reader-retention restart recovery](findings/2026-09-05-reader-retention-restart-recovery.md) - the live legacy-store upgrade case missed by M1's initial fixtures, normal-workflow recovery, and the paired producer/bootstrap fixes that preceded the current 2.40.4 pin.
@@ -12,7 +15,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [M1 reader-retention qualification](findings/2026-09-04-reader-retention-integration.md) - implementation, native retention and 40-language evidence, Linux/Windows verification, published 2.40.0 pin adoption, and remaining native process-identity limits.
 - [`findings/2026-09-04-v1.27.2-release-verification.md`](findings/2026-09-04-v1.27.2-release-verification.md) - live v1.27.2 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, and published-package smoke with the local schema digest.
 - [`findings/2026-09-03-v1.27.1-release-verification.md`](findings/2026-09-03-v1.27.1-release-verification.md) - live v1.27.1 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, release-body equality, and published-package smoke.
-- [`release-notes/v1.27.2.md`](release-notes/v1.27.2.md) - current v1.27.2 patch notes: every agent guidance channel (routing block, server core, `tests` description, skills, docs) teaches the same `workspace_id` and continuous-testing rules.
+- [`release-notes/v1.27.2.md`](release-notes/v1.27.2.md) - historical v1.27.2 patch notes: every agent guidance channel (routing block, server core, `tests` description, skills, docs) teaches the same `workspace_id` and continuous-testing rules.
 - [`findings/2026-09-03-v1.27.0-release-verification.md`](findings/2026-09-03-v1.27.0-release-verification.md) - live v1.27.0 verification: exact-run validation and promotion, eight assets, four archive checksums, release-body match, and published Linux package smoke.
 - [`plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md`](plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md) - implementation plan and final branch-gate ledger for JVM, Ruby, PHP, and GDScript CT providers.
 - [`findings/2026-08-31-v1.26.0-mcp-dogfood.md`](findings/2026-08-31-v1.26.0-mcp-dogfood.md) - live MCP dogfood of every tool on miller 1.26.0: numeric junk search, inspect continuation splice, insert newline glue, Description-example self-hits, class-level unresolved refs, and the broken registry rows.

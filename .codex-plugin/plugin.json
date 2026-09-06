@@ -1,6 +1,6 @@
 {
   "name": "miller",
-  "version": "1.27.2",
+  "version": "1.28.0",
   "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents. Requires Node.js on PATH (the plugin launcher is a Node script).",
   "author": {
     "name": "Alan Northam"
