@@ -241,6 +241,12 @@ public sealed class FamilyStoreReadSessionRetentionTests
             """);
         Assert.Equal("2.31.0", FamilyStoreReadSession.ReadFamilyBinaryVersion(fixture.Binding));
         Assert.True(FamilyStoreReadSession.HasViewForImportPreflight(fixture.Binding));
+        Execute(fixture, "UPDATE views SET current_generation=NULL");
+        Assert.False(FamilyStoreReadSession.HasViewForImportPreflight(fixture.Binding));
+        Execute(fixture, "UPDATE views SET root='wrong-root'");
+        Assert.Equal(FamilyStoreReadFailure.ViewRootMismatch,
+            Assert.Throws<FamilyStoreReadException>(() =>
+                FamilyStoreReadSession.HasViewForImportPreflight(fixture.Binding)).Failure);
         Execute(fixture, "DELETE FROM views");
         Assert.False(FamilyStoreReadSession.HasViewForImportPreflight(fixture.Binding));
         Assert.Equal("2.31.0", FamilyStoreReadSession.ReadFamilyBinaryVersion(fixture.Binding));
@@ -807,7 +813,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
     {
         using StoreFixture fixture = StoreFixture.Create();
         var events = new List<string>();
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var finish = new ManualResetEventSlim();
         using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
         int opens = 0;
@@ -821,7 +827,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
                 int ordinal = Interlocked.Increment(ref opens);
                 if (ordinal == 2)
                 {
-                    entered.Set();
+                    entered.SetResult();
                     if (!finish.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
                 }
                 return RecordingOpen(path, events, ordinal);
@@ -830,7 +836,9 @@ public sealed class FamilyStoreReadSessionRetentionTests
         Task warm = session.WarmResolutionFactsInBackground();
         try
         {
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken), "Background load must use the session's retained connection factory.");
+            // Yield the test worker while the background warm is queued. Blocking it here can
+            // starve the same thread pool under the full suite, before the load even starts.
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
             Task shared = session.WarmResolutionFactsInBackground();
             Assert.Same(warm, shared);
             session.Dispose();

@@ -880,6 +880,34 @@ public sealed class StoreFamilyResolverTests : IDisposable
     private static DateTimeOffset Utc(int minute) =>
         new(2026, 8, 9, 10, minute, 0, TimeSpan.Zero);
 
+    [Fact]
+    public void ExistingUnpublishedViewReplansWithItsOriginalIdentity()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var resolver = Resolver(registry, new Queue<Guid>([
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]));
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        WriteStoreCatalog(planned.StoreRoot, planned.FamilyId, planned.ViewId, facts.WorkspaceRoot);
+        using (var connection = new SqliteConnection($"Data Source={Path.Combine(planned.StoreRoot, "gen-001", "store.db")};Pooling=False"))
+        {
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "UPDATE views SET current_generation=NULL";
+            command.ExecuteNonQuery();
+        }
+
+        StoreFamilyBinding recovered = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(StoreBindingState.Planned, recovered.State);
+        Assert.Equal(StoreViewReplan.NeverPublished, recovered.Replan);
+        Assert.Equal(planned.ViewId, recovered.ViewId);
+        Assert.Equal(planned.FamilyId, recovered.FamilyId);
+    }
+
     private static void WriteStoreCatalog(
         string storeRoot,
         Guid familyId,
@@ -898,7 +926,7 @@ public sealed class StoreFamilyResolverTests : IDisposable
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE store_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-            CREATE TABLE views(view_id TEXT PRIMARY KEY, root TEXT NOT NULL) STRICT;
+            CREATE TABLE views(view_id TEXT PRIMARY KEY, root TEXT NOT NULL, current_generation INTEGER DEFAULT 1) STRICT;
             INSERT INTO store_meta(key, value) VALUES
                 ('store_sqlite_schema_version', '2'),
                 ('store_format_epoch', '1'),

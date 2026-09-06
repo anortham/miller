@@ -125,8 +125,10 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     /// so "workspace remove plus workspace open" is no longer the only escape. This is the only test that
     /// covers the ResolveBinding call inside RunStoreBootstrap.
     /// </summary>
-    [Fact]
-    public async Task BootstrapImportsAViewThatTheStoreNeverPublished()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BootstrapImportsAViewThatTheStoreNeverPublished(bool interruptedAfterViewCreation)
     {
         string binary = ScaleTestSupport.RequireJulieServer();
         string directory = Path.Combine(
@@ -145,6 +147,26 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
         {
             StoreFamilyBinding planned = PlanAnUnpublishedView(binary, directory, root, home, "bootstrap-unpublished");
             Assert.DoesNotContain(planned.ViewId, ReadCatalogViewIds(planned.StoreRoot));
+
+            if (interruptedAfterViewCreation)
+            {
+                string generation = File.ReadAllText(Path.Combine(planned.StoreRoot, "CURRENT")).Trim();
+                using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                {
+                    DataSource = Path.Combine(planned.StoreRoot, generation, "store.db"),
+                    Pooling = false,
+                }.ToString());
+                connection.Open();
+                using SqliteCommand command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO views(view_id, root, current_generation, resolution_state, created_at, updated_at)
+                    VALUES($view, $root, NULL, 'unbound',
+                        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+                    """;
+                command.Parameters.AddWithValue("$view", planned.ViewId);
+                command.Parameters.AddWithValue("$root", PathCanonicalizer.CanonicalizeRoot(root));
+                command.ExecuteNonQuery();
+            }
 
             // Scoped, not a `using` declaration: the service holds workspaces.db open for the whole method
             // otherwise, and the teardown delete then throws IOException on Windows.
