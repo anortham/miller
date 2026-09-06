@@ -67,6 +67,26 @@ public sealed class StoreSidecarReclaimTests : IDisposable
         return paths;
     }
 
+    private static StoreSidecarCursorKey CursorKey(StoreSidecarReclaimTarget target)
+    {
+        string familyId = target.FamilyId.ToString();
+        const string storeInstanceId = "store-instance-a";
+        const string generationName = "gen-001";
+        string consumerId = StoreSidecarCursorIdentity.CursorId(
+            familyId,
+            storeInstanceId,
+            target.ViewId,
+            StoreSidecarKind.Content,
+            generationName);
+        return new(
+            familyId,
+            storeInstanceId,
+            target.ViewId,
+            StoreSidecarKind.Content,
+            generationName,
+            consumerId);
+    }
+
     [Fact]
     public void Capture_ReadsViewFromTheMemberRow()
     {
@@ -113,6 +133,85 @@ public sealed class StoreSidecarReclaimTests : IDisposable
 
         Assert.Equal(6, result.FilesDeleted);
         Assert.All(keep, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
+    public void Reclaim_Releases_exact_journal_id_before_deleting_sidecars()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-cursor-release");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-cursor-0001", "view-cursor");
+        IReadOnlyList<string> sidecars = WriteSidecars(family.StoreRoot, target.ViewId, bytesEach: 8);
+        StoreSidecarCursorKey key = CursorKey(target);
+        var journal = new StoreSidecarCursorJournal(family.StoreRoot, key.FamilyId, key.ViewId);
+        journal.UpsertDesired(key, 9);
+        _registry.Remove("ws-cursor-0001");
+        var released = new List<string>();
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(
+            _registry,
+            target,
+            static _ => new FakeLease(),
+            listFiles: null,
+            (_, familyId, cursor) =>
+            {
+                Assert.Equal(key.FamilyId, familyId);
+                released.Add(cursor.ConsumerId);
+                return new(true, true, cursor.GenerationName, cursor.ConsumerId, null, null);
+            });
+
+        Assert.Null(result.SkipReason);
+        Assert.Equal([key.ConsumerId], released);
+        Assert.False(journal.Exists);
+        Assert.All(sidecars, path => Assert.False(File.Exists(path)));
+    }
+
+    [Fact]
+    public void Reclaim_Release_failure_retains_journal_and_sidecars_for_retry()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-cursor-owed");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-cursor-0002", "view-cursor-owed");
+        IReadOnlyList<string> sidecars = WriteSidecars(family.StoreRoot, target.ViewId, bytesEach: 8);
+        StoreSidecarCursorKey key = CursorKey(target);
+        var journal = new StoreSidecarCursorJournal(family.StoreRoot, key.FamilyId, key.ViewId);
+        journal.UpsertDesired(key, 9);
+        _registry.Remove("ws-cursor-0002");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(
+            _registry,
+            target,
+            static _ => new FakeLease(),
+            listFiles: null,
+            (_, _, cursor) => new(false, false, cursor.GenerationName, cursor.ConsumerId, null, "busy"));
+
+        Assert.Equal(StoreSidecarReclaim.CursorReleaseFailedReason, result.SkipReason);
+        Assert.True(journal.Exists);
+        Assert.All(sidecars, path => Assert.True(File.Exists(path)));
+        Assert.Single(OwedRecords(family.StoreRoot));
+    }
+
+    [Fact]
+    public void Reclaim_Survivor_guard_prevents_cursor_release()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-cursor-survivor");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-cursor-0003", "view-cursor-live");
+        StoreSidecarCursorKey key = CursorKey(target);
+        new StoreSidecarCursorJournal(family.StoreRoot, key.FamilyId, key.ViewId).UpsertDesired(key, 9);
+        int calls = 0;
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(
+            _registry,
+            target,
+            static _ => new FakeLease(),
+            listFiles: null,
+            (_, _, cursor) =>
+            {
+                calls++;
+                return new(true, true, cursor.GenerationName, cursor.ConsumerId, null, null);
+            });
+
+        Assert.Equal(StoreSidecarReclaim.StillAMemberReason, result.SkipReason);
+        Assert.Equal(0, calls);
+        Assert.True(File.Exists(StoreSidecarCursorJournal.PathFor(family.StoreRoot, target.ViewId)));
     }
 
     [Fact]
@@ -322,7 +421,7 @@ public sealed class StoreSidecarReclaimTests : IDisposable
     }
 
     [Fact]
-    public void DischargeOwed_ViewClaimedAgain_KeepsTheFilesAndDropsTheRecord()
+    public void DischargeOwed_ViewClaimedAgain_KeepsTheFilesAndTheDurableIntent()
     {
         StoreFamilyRegistryRow family = SeedFamily("lineage-owed-reclaimed");
         StoreSidecarReclaimTarget target = SeedMember(family, "ws-owedre-0001", "view-owed-back");
@@ -337,7 +436,7 @@ public sealed class StoreSidecarReclaimTests : IDisposable
 
         Assert.Equal(0, result.FilesDeleted);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
-        Assert.Empty(Directory.GetFiles(
+        Assert.Single(Directory.GetFiles(
             StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
     }
 
@@ -476,7 +575,7 @@ public sealed class StoreSidecarReclaimTests : IDisposable
         Assert.Equal(StoreSidecarReclaim.StillAMemberReason, result.SkipReason);
         Assert.Equal(0, result.FilesDeleted);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
-        Assert.Empty(OwedRecords(family.StoreRoot));
+        Assert.Single(OwedRecords(family.StoreRoot));
     }
 
     // ---------- the owed record is scoped to its own store (F3) ----------

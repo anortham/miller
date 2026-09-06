@@ -108,6 +108,12 @@ public static class StoreSidecarReclaim
     /// </summary>
     public const string ListingFailedReason = "sidecar listing failed";
 
+    public const string CursorReleaseFailedReason = "sidecar cursor release failed";
+
+    public const string CursorJournalInvalidReason = "sidecar cursor journal invalid";
+
+    public const string IntentNotRecordedReason = "sidecar reclaim intent could not be persisted";
+
     /// <summary>
     /// Appended to a skip reason when the owed-reclaim record itself could not be written. The files stay AND
     /// nothing on disk names them any more, which is a worse fact than the skip reason alone.
@@ -124,25 +130,20 @@ public static class StoreSidecarReclaim
     /// hand-off — <see cref="Reclaim"/> clears it only after the delete pass actually completes, and
     /// <see cref="DischargeOwed"/> finishes the job after any crash.</para>
     ///
-    /// <para>Call this immediately before the registry delete, never earlier: a removal that is REFUSED must not
-    /// leave an intent record behind. A record that survives a refusal is still self-healing (the next discharge
-    /// sees the view claimed by a live member, keeps the files, and drops the record), but the narrow placement
-    /// keeps that from happening at all.</para>
+    /// <para>Call this before producer retirement or registry deletion. Either operation can make an unrecorded
+    /// cursor identity impossible to recover after a crash. A claimed view keeps the record; known callers may
+    /// retry removal, while an ambiguous producer reply cannot erase the only durable cleanup intent.</para>
     ///
     /// <para>Nothing is created here. An absent store root or an absent sidecar directory means there is nothing
     /// to reclaim, so there is nothing to record — a caller that is LEAVING a store must never manufacture the
     /// directory it is cleaning out.</para>
     ///
-    /// <para>Residual window: a concurrent <see cref="DischargeOwed"/> that reads this record in the microseconds
-    /// before the registry delete lands sees the view still claimed and drops the record. The removal then
-    /// proceeds unrecorded, exactly as it did before this call existed. Closing that window needs the registry
-    /// delete and the intent write to share one transaction, which the registry and the store sidecars do not.</para>
+    /// <para>A concurrent <see cref="DischargeOwed"/> that sees the view still claimed retains both the record and
+    /// files, so it cannot reopen the crash window before registry deletion.</para>
     /// </summary>
     /// <returns>
-    /// False only when a record was needed and the write failed. The removal must proceed either way — a reclaim
-    /// never fails the removal that asked for it — and the failure reaches the caller's result through the skip
-    /// reason: an incomplete reclaim retries the same write and reports <see cref="NotRecordedSuffix"/>, while a
-    /// reclaim that completes stranded nothing and has nothing to report.
+    /// False only when a record was needed and the durable write failed. Callers must not retire the producer
+    /// view or delete the registry mapping until the intent is durable.
     /// </returns>
     public static bool RecordIntent(StoreSidecarReclaimTarget? target)
     {
@@ -184,7 +185,8 @@ public static class StoreSidecarReclaim
         WorkspaceRegistry registry,
         StoreSidecarReclaimTarget? target,
         Func<string, IDisposable?>? acquireLease,
-        FileLister? listFiles)
+        FileLister? listFiles,
+        CursorReleaser? releaseCursor = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         if (target is null)
@@ -219,8 +221,9 @@ public static class StoreSidecarReclaim
             // The target's own record is skipped here and settled below, so one view is never reclaimed twice in
             // one pass — a file a reader holds would otherwise be counted as retained by both.
             StoreSidecarReclaimResult owed = DischargeOwedUnderLease(
-                registry, storeRoot, sidecarDirectory, skipViewId: target.ViewId, listFiles);
-            StoreSidecarReclaimResult mine = DeleteView(storeRoot, sidecarDirectory, target.ViewId, listFiles);
+                registry, storeRoot, sidecarDirectory, skipViewId: target.ViewId, listFiles, releaseCursor);
+            StoreSidecarReclaimResult mine = DeleteView(
+                storeRoot, sidecarDirectory, target, listFiles, releaseCursor);
             if (mine.SkipReason is { } reason)
                 mine = mine with { SkipReason = Owe(sidecarDirectory, target.ViewId, reason) };
             else
@@ -230,13 +233,11 @@ public static class StoreSidecarReclaim
     }
 
     /// <summary>
-    /// The view is claimed again, so its files are live data. Any owed record for it is dropped, exactly as
-    /// <see cref="DischargeOwedUnderLease"/> drops a claimed one — a reclaim that must not happen must not stay
-    /// owed either.
+    /// The view is claimed, so its files and durable removal intent are retained. A crash after producer
+    /// retirement must not erase the intent before registry deletion.
     /// </summary>
     private static StoreSidecarReclaimResult StillAMember(string sidecarDirectory, string viewId)
     {
-        ClearOwed(sidecarDirectory, viewId);
         return new StoreSidecarReclaimResult(0, 0, 0, StillAMemberReason);
     }
 
@@ -248,9 +249,9 @@ public static class StoreSidecarReclaim
     /// Finish every reclaim this store still owes, from records earlier passes left behind. This is the retry
     /// path a busy lease depends on, so <c>workspace prune</c> runs it for every registered family.
     ///
-    /// <para>A record whose view a registered workspace claims again (a removed root re-registered at the same
-    /// path) is live data: its files are kept and only the record is dropped. The claim check is scoped to THIS
-    /// store — see <see cref="ClaimedViewIds"/>.</para>
+    /// <para>A record whose view a registered workspace claims is retained with its live files because the
+    /// process may have crashed after producer retirement but before registry deletion. The claim check is
+    /// scoped to THIS store — see <see cref="ClaimedViewIds"/>.</para>
     /// </summary>
     public static StoreSidecarReclaimResult DischargeOwed(
         WorkspaceRegistry registry,
@@ -276,7 +277,8 @@ public static class StoreSidecarReclaim
             return new StoreSidecarReclaimResult(0, 0, 0, LeaseBusyReason);
 
         using (lease)
-            return DischargeOwedUnderLease(registry, fullRoot, sidecarDirectory, skipViewId: null, listFiles);
+            return DischargeOwedUnderLease(
+                registry, fullRoot, sidecarDirectory, skipViewId: null, listFiles, releaseCursor: null);
     }
 
     private static StoreSidecarReclaimResult DischargeOwedUnderLease(
@@ -284,7 +286,8 @@ public static class StoreSidecarReclaim
         string storeRoot,
         string sidecarDirectory,
         string? skipViewId,
-        FileLister? listFiles)
+        FileLister? listFiles,
+        CursorReleaser? releaseCursor)
     {
         IReadOnlyList<string> records = EnumerateOwedRecords(sidecarDirectory, listFiles);
         if (records.Count == 0)
@@ -297,13 +300,20 @@ public static class StoreSidecarReclaim
             string? viewId = ReadOwedRecord(record);
             if (viewId is not null && string.Equals(viewId, skipViewId, StringComparison.Ordinal))
                 continue;
-            if (viewId is null || claimed.Contains(viewId))
+            if (viewId is null)
             {
                 DeleteQuietly(record);
                 continue;
             }
+            if (claimed.Contains(viewId))
+                continue;
 
-            StoreSidecarReclaimResult one = DeleteView(storeRoot, sidecarDirectory, viewId, listFiles);
+            StoreSidecarReclaimResult one = DeleteView(
+                storeRoot,
+                sidecarDirectory,
+                new StoreSidecarReclaimTarget(Guid.Empty, viewId, storeRoot),
+                listFiles,
+                releaseCursor);
             total = StoreSidecarReclaimResult.Combine(total, one);
             // The record survives ANY incomplete pass, held files and a failed listing alike. Dropping it on an
             // unreadable directory clears the last name those files have while the files are still there.
@@ -381,9 +391,15 @@ public static class StoreSidecarReclaim
     private static StoreSidecarReclaimResult DeleteView(
         string storeRoot,
         string sidecarDirectory,
-        string viewId,
-        FileLister? listFiles)
+        StoreSidecarReclaimTarget target,
+        FileLister? listFiles,
+        CursorReleaser? releaseCursor)
     {
+        string viewId = target.ViewId;
+        StoreSidecarReclaimResult cursorRelease = ReleaseCursors(storeRoot, target, releaseCursor);
+        if (cursorRelease.SkipReason is not null)
+            return cursorRelease;
+
         int deleted = 0;
         int retained = 0;
         long bytes = 0;
@@ -433,10 +449,85 @@ public static class StoreSidecarReclaim
         {
         }
 
+        Delete(StoreSidecarCursorJournal.PathFor(storeRoot, viewId), ref deleted, ref bytes, ref retained);
+
         // A failed listing outranks a held file: it is the reason the caller cannot know what is left.
         // FilesRetained stays a count of files PROVED undeletable, so the unknown never inflates it.
         string? reason = listingFailed ? ListingFailedReason : retained > 0 ? FilesInUseReason : null;
         return new StoreSidecarReclaimResult(deleted, bytes, retained, reason);
+    }
+
+    private static StoreSidecarReclaimResult ReleaseCursors(
+        string storeRoot,
+        StoreSidecarReclaimTarget target,
+        CursorReleaser? releaseCursor)
+    {
+        string journalPath = StoreSidecarCursorJournal.PathFor(storeRoot, target.ViewId);
+        if (!File.Exists(journalPath))
+            return StoreSidecarReclaimResult.None;
+
+        StoreSidecarCursorState state;
+        try
+        {
+            state = StoreSidecarCursorJournal.ReadForReclaim(storeRoot, target.ViewId);
+            if (target.FamilyId != Guid.Empty &&
+                (!Guid.TryParse(state.FamilyId, out Guid journalFamily) || journalFamily != target.FamilyId))
+            {
+                return new(0, 0, 1, CursorJournalInvalidReason);
+            }
+        }
+        catch (StoreSidecarCursorStateException)
+        {
+            return new(0, 0, 1, CursorJournalInvalidReason);
+        }
+
+        CursorReleaser operation = releaseCursor ?? ReleaseCursor;
+        foreach (StoreSidecarCursorEntry entry in state.Entries)
+        {
+            StoreConsumerCursorOutcome outcome;
+            try
+            {
+                outcome = operation(
+                    storeRoot,
+                    state.FamilyId,
+                    new StoreSidecarCursorKey(
+                        state.FamilyId,
+                        entry.StoreInstanceId,
+                        state.ViewId,
+                        entry.Kind,
+                        entry.GenerationName,
+                        entry.ConsumerId));
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+            {
+                return new(0, 0, 1, CursorReleaseFailedReason);
+            }
+            if (!outcome.Succeeded || outcome.ConsumerId != entry.ConsumerId)
+                return new(0, 0, 1, CursorReleaseFailedReason);
+        }
+        return StoreSidecarReclaimResult.None;
+    }
+
+    internal delegate StoreConsumerCursorOutcome CursorReleaser(
+        string storeRoot,
+        string familyId,
+        StoreSidecarCursorKey cursor);
+
+    private static StoreConsumerCursorOutcome ReleaseCursor(
+        string storeRoot,
+        string familyId,
+        StoreSidecarCursorKey cursor)
+    {
+        string binaryPath = Path.Combine(
+            AppContext.BaseDirectory,
+            ".tools",
+            OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
+        return StoreConsumerCursorRunner.Release(
+            binaryPath,
+            storeRoot,
+            familyId,
+            cursor.ConsumerId);
     }
 
     private static void DeleteTrio(string path, ref int deleted, ref long bytes, ref int retained)
@@ -541,7 +632,10 @@ public static class StoreSidecarReclaim
     {
         try
         {
-            File.WriteAllText(OwedRecordPath(sidecarDirectory, viewId), viewId, Encoding.UTF8);
+            string path = OwedRecordPath(sidecarDirectory, viewId);
+            if (string.Equals(ReadOwedRecord(path), viewId, StringComparison.Ordinal))
+                return true;
+            File.WriteAllText(path, viewId, Encoding.UTF8);
             return true;
         }
         catch (Exception ex) when (

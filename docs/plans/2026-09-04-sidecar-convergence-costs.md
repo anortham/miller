@@ -183,16 +183,16 @@ Cursor operations are monotonic watermark operations. A lost advance reply is re
 
 Sidecar and cursor writes are separate database/process operations and cannot be one transaction. The safety invariant is ordered durability: baseline cursor advance, delta read, sidecar commit, final cursor advance. Each boundary receives failure injection; tests must not assume cross-database atomicity.
 
-- [ ] The cursor stores only a watermark; M1 reader protection remains separate.
-- [ ] Cursor ID uses length-prefixed SHA-256 over family/store instance/view/kind/generation.
-- [ ] Lost cursor replies retry idempotently and validate source generation and sequence.
-- [ ] Cross-database boundaries have explicit failure tests.
+- [x] The cursor stores only a watermark; M1 reader protection remains separate.
+- [x] Cursor ID uses length-prefixed SHA-256 over family/store instance/view/kind/generation.
+- [x] Lost cursor replies retry idempotently and validate source generation and sequence.
+- [x] Cross-database boundaries have explicit failure tests.
 
-- [ ] Baseline precedes protected read.
-- [ ] Producer response generation is validated.
-- [ ] Commit precedes final cursor advance.
-- [ ] Current-sidecar owed work retries without rescan.
-- [ ] Cleanup cannot affect survivors.
+- [x] Baseline precedes protected read.
+- [x] Producer response generation is validated.
+- [x] Commit precedes final cursor advance.
+- [x] Current-sidecar owed work retries without rescan.
+- [x] Cleanup cannot affect survivors.
 
 ### Task 4 — Add deterministic cost evidence
 

@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 namespace Miller.Server.Hosting;
 
@@ -78,6 +79,16 @@ internal sealed class IndexerSidecarConverger
         string workspaceRoot,
         out string? corruptionReason);
 
+    internal delegate SidecarConvergenceDetail StoreCursorConvergence(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        IStoreSidecarCursorSession cursor);
+
+    internal delegate IStoreSidecarCursorSession StoreCursorSessionFactory(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        StoreSidecarKind kind);
+
     private readonly bool _searchEnabled;
     private readonly Func<string, string, string?, long, bool> _ensureContentBuilt;
     private readonly SearchConvergence _ensureSearchBuilt;
@@ -89,6 +100,9 @@ internal sealed class IndexerSidecarConverger
     private readonly VectorConvergeSignal _vectorSignal;
     private readonly Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? _ensureStoreContent;
     private readonly Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? _ensureStoreSearch;
+    private readonly StoreCursorConvergence? _ensureStoreContentWithCursor;
+    private readonly StoreCursorConvergence? _ensureStoreSearchWithCursor;
+    private readonly StoreCursorSessionFactory? _cursorSessionFactory;
     private readonly Func<bool> _vectorDrainAvailable;
     private readonly IIndexerPhaseSink _phaseSink;
 
@@ -115,7 +129,10 @@ internal sealed class IndexerSidecarConverger
             contentSidecar.EnsureStoreCurrentDetailed,
             searchSidecar.EnsureStoreCurrentDetailed,
             phaseSink,
-            vectorDrainAvailable)
+            vectorDrainAvailable,
+            contentSidecar.EnsureStoreCurrentWithCursor,
+            searchSidecar.EnsureStoreCurrentWithCursor,
+            CreateCursorSession)
     {
     }
 
@@ -132,7 +149,10 @@ internal sealed class IndexerSidecarConverger
         Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? ensureStoreContent = null,
         Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? ensureStoreSearch = null,
         IIndexerPhaseSink? phaseSink = null,
-        Func<bool>? vectorDrainAvailable = null)
+        Func<bool>? vectorDrainAvailable = null,
+        StoreCursorConvergence? ensureStoreContentWithCursor = null,
+        StoreCursorConvergence? ensureStoreSearchWithCursor = null,
+        StoreCursorSessionFactory? cursorSessionFactory = null)
     {
         ArgumentNullException.ThrowIfNull(ensureContentBuilt);
         ArgumentNullException.ThrowIfNull(ensureSearchBuilt);
@@ -153,6 +173,9 @@ internal sealed class IndexerSidecarConverger
         _vectorSignal = vectorSignal ?? VectorConvergeSignal.Shared;
         _ensureStoreContent = ensureStoreContent;
         _ensureStoreSearch = ensureStoreSearch;
+        _ensureStoreContentWithCursor = ensureStoreContentWithCursor;
+        _ensureStoreSearchWithCursor = ensureStoreSearchWithCursor;
+        _cursorSessionFactory = cursorSessionFactory;
         _vectorDrainAvailable = vectorDrainAvailable ?? (static () => false);
         _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(logger);
     }
@@ -230,7 +253,19 @@ internal sealed class IndexerSidecarConverger
         {
             using (FamilyStoreSidecarWriteLease.AcquireFor(storeRoot))
             {
-                if (_ensureStoreContent is not null)
+                if (_ensureStoreContentWithCursor is not null && _cursorSessionFactory is not null)
+                {
+                    content = ConvergeStoreSidecar(
+                        IndexerPhaseNames.Content,
+                        () => ConvergeWithCursor(
+                            storeRoot,
+                            session,
+                            StoreSidecarKind.Content,
+                            _ensureStoreContentWithCursor),
+                        storeSequence);
+                    contentRecorded = true;
+                }
+                else if (_ensureStoreContent is not null)
                 {
                     content = ConvergeStoreSidecar(
                         IndexerPhaseNames.Content,
@@ -245,7 +280,19 @@ internal sealed class IndexerSidecarConverger
                     contentRecorded = true;
                 }
 
-                if (_searchEnabled && _ensureStoreSearch is not null)
+                if (_searchEnabled && _ensureStoreSearchWithCursor is not null && _cursorSessionFactory is not null)
+                {
+                    search = ConvergeStoreSidecar(
+                        IndexerPhaseNames.Search,
+                        () => ConvergeWithCursor(
+                            storeRoot,
+                            session,
+                            StoreSidecarKind.Search,
+                            _ensureStoreSearchWithCursor),
+                        storeSequence);
+                    searchRecorded = true;
+                }
+                else if (_searchEnabled && _ensureStoreSearch is not null)
                 {
                     search = ConvergeStoreSidecar(
                         IndexerPhaseNames.Search,
@@ -354,6 +401,47 @@ internal sealed class IndexerSidecarConverger
             phase.Fail(storeSequence);
             return FailedOutcome(ex);
         }
+    }
+
+    private SidecarConvergenceDetail ConvergeWithCursor(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        StoreSidecarKind kind,
+        StoreCursorConvergence converge)
+    {
+        IStoreSidecarCursorSession cursor = _cursorSessionFactory!(storeRoot, session, kind);
+        SidecarConvergenceDetail detail = converge(storeRoot, session, cursor);
+        StoreSidecarCursorCompletion completion = cursor.CompleteCommitted();
+        if (!completion.Succeeded)
+            throw new IOException(completion.Error ?? "Sidecar cursor convergence is incomplete.");
+        return detail with { DidWork = detail.DidWork || completion.DidWork };
+    }
+
+    private static IStoreSidecarCursorSession CreateCursorSession(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        StoreSidecarKind kind)
+    {
+        string binaryPath = Path.Combine(
+            AppContext.BaseDirectory,
+            ".tools",
+            OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
+        return new StoreSidecarCursorSession(
+            storeRoot,
+            session.Snapshot,
+            kind,
+            (cursor, sequence) => StoreConsumerCursorRunner.Advance(
+                binaryPath,
+                storeRoot,
+                cursor.FamilyId,
+                cursor.GenerationName,
+                cursor.ConsumerId,
+                sequence),
+            cursor => StoreConsumerCursorRunner.Release(
+                binaryPath,
+                storeRoot,
+                cursor.FamilyId,
+                cursor.ConsumerId));
     }
 
     private void RecordConvergenceDetailSafely(string kind, SidecarConvergenceDetail detail)

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 namespace Miller.Indexing;
 
@@ -316,7 +317,19 @@ public sealed class SymbolSearchSidecar
 
     internal SidecarConvergenceDetail EnsureStoreCurrentDetailed(
         string storeRoot,
-        IWorkspaceReadSession session)
+        IWorkspaceReadSession session) =>
+        EnsureStoreCurrentCore(storeRoot, session, cursor: null);
+
+    internal SidecarConvergenceDetail EnsureStoreCurrentWithCursor(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        IStoreSidecarCursorSession cursor) =>
+        EnsureStoreCurrentCore(storeRoot, session, cursor);
+
+    private SidecarConvergenceDetail EnsureStoreCurrentCore(
+        string storeRoot,
+        IWorkspaceReadSession session,
+        IStoreSidecarCursorSession? cursor)
     {
         if (!Enabled)
             return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
@@ -325,6 +338,20 @@ public sealed class SymbolSearchSidecar
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, session.Snapshot.ViewId);
         if (StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
             return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
+
+        if (cursor is not null)
+        {
+            StoreSidecarStamp? previous = StoreSidecarCatalog.TryRead(searchDbPath);
+            if (!CanReadDelta(previous, expected) || !cursor.TryProtectBaseline(previous!))
+            {
+                cursor.PrepareTarget(expected.StoreLogSequence);
+                SidecarConvergenceReason fallbackReason = ClassifyBaseline(previous, expected);
+                SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
+                return new(SidecarConvergencePath.Full, fallbackReason, true);
+            }
+            cursor.PrepareTarget(expected.StoreLogSequence);
+        }
+
         if (StoreSidecarCatalog.TryFastForwardEmptyDelta(
                 searchDbPath,
                 expected,
@@ -342,10 +369,30 @@ public sealed class SymbolSearchSidecar
         SidecarConvergenceReason reason = TryApplyStoreDelta(searchDbPath, expected, session, out bool applied);
         if (applied)
             return new(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true);
-
         SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
         return new(SidecarConvergencePath.Full, reason, true);
     }
+
+    private static SidecarConvergenceReason ClassifyBaseline(StoreSidecarStamp? previous, StoreSidecarStamp expected) =>
+        previous is null
+            ? SidecarConvergenceReason.DeltaMissing
+            : !SameDeltaIdentity(previous, expected)
+                ? SidecarConvergenceReason.IdentityChanged
+                : previous.StoreLogSequence >= expected.StoreLogSequence
+                    ? SidecarConvergenceReason.StampMismatch
+                    : SidecarConvergenceReason.DeltaIncomplete;
+
+    private static bool CanReadDelta(StoreSidecarStamp? previous, StoreSidecarStamp expected) =>
+        previous is not null && SameDeltaIdentity(previous, expected) &&
+        previous.StoreLogSequence < expected.StoreLogSequence;
+
+    private static bool SameDeltaIdentity(StoreSidecarStamp previous, StoreSidecarStamp expected) =>
+        previous.Kind == expected.Kind &&
+        string.Equals(previous.FamilyId, expected.FamilyId, StringComparison.Ordinal) &&
+        string.Equals(previous.ViewId, expected.ViewId, StringComparison.Ordinal) &&
+        string.Equals(previous.StoreInstanceId, expected.StoreInstanceId, StringComparison.Ordinal) &&
+        string.Equals(previous.GenerationName, expected.GenerationName, StringComparison.Ordinal) &&
+        string.Equals(previous.IndexLevel, expected.IndexLevel, StringComparison.Ordinal);
 
     private SidecarConvergenceReason TryApplyStoreDelta(
         string searchDbPath,

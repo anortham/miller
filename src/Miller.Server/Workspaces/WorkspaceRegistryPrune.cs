@@ -122,6 +122,18 @@ public static class WorkspaceRegistryPrune
                         continue;
                     }
 
+                    if (!dryRun && !StoreSidecarReclaim.RecordIntent(target))
+                    {
+                        StoreViewRetirementOutcome intentFailure = IntentFailure(target);
+                        retirementFailures.Add(new RetirementFailure(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            intentFailure));
+                        blockedFamilies.Add(target.FamilyId);
+                        kept++;
+                        continue;
+                    }
                     if (!WorkspaceRemoval.TryRetireView(
                             target,
                             retireView,
@@ -148,7 +160,18 @@ public static class WorkspaceRegistryPrune
                 continue;
             }
 
-            _ = StoreSidecarReclaim.RecordIntent(target);
+            if (!awaitProducerRetirement && !StoreSidecarReclaim.RecordIntent(target))
+            {
+                StoreViewRetirementOutcome intentFailure = IntentFailure(target!);
+                retirementFailures.Add(new RetirementFailure(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    row.CanonicalRoot,
+                    intentFailure));
+                blockedFamilies.Add(target!.FamilyId);
+                kept++;
+                continue;
+            }
             registry.Remove(row.WorkspaceId);
             if (awaitProducerRetirement)
             {
@@ -348,6 +371,16 @@ public static class WorkspaceRegistryPrune
             0,
             0,
             "producer retirement deferred by the per-run prune limit; rerun prune to advance");
+
+    private static StoreViewRetirementOutcome IntentFailure(StoreSidecarReclaimTarget target) =>
+        new(
+            StoreViewRetirementDisposition.Failed,
+            target.FamilyId,
+            target.ViewId,
+            0,
+            0,
+            0,
+            StoreSidecarReclaim.IntentNotRecordedReason);
 
     /// <summary>
     /// One pass over EVERY registered family, not only the families this prune touched.

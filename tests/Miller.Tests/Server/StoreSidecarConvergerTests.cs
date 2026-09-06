@@ -647,12 +647,28 @@ public sealed class StoreSidecarConvergerTests
             ? new(SidecarConvergencePath.Full, SidecarConvergenceReason.None, true)
             : new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
 
-    private static IndexerSidecarConverger NewRealStoreConverger(ILogger logger, bool searchEnabled = false) =>
-        new(
-            new SymbolSearchSidecar(searchEnabled, RegionIndexOptions.Disabled),
-            new ContentCorpusSidecar(),
+    private static IndexerSidecarConverger NewRealStoreConverger(ILogger logger, bool searchEnabled = false)
+    {
+        var search = new SymbolSearchSidecar(searchEnabled, RegionIndexOptions.Disabled);
+        var content = new ContentCorpusSidecar();
+        return new(
+            searchEnabled,
+            content.EnsureBuilt,
+            (string path, long revision, string root, out string? reason) =>
+                search.EnsureBuilt(path, revision, root, out reason),
+            (string path, long revision, string root, out string? reason) =>
+                search.EnsureCurrent(path, revision, root, out reason),
+            ContentCorpusSidecar.ContentDbPathFor,
+            SymbolSearchSidecar.SearchDbPathFor,
+            static (_, _, _) => false,
             logger,
-            new VectorConvergeSignal(enabled: false));
+            new VectorConvergeSignal(enabled: false),
+            content.EnsureStoreCurrentDetailed,
+            search.EnsureStoreCurrentDetailed,
+            ensureStoreContentWithCursor: content.EnsureStoreCurrentWithCursor,
+            ensureStoreSearchWithCursor: search.EnsureStoreCurrentWithCursor,
+            cursorSessionFactory: static (_, _, _) => new PassthroughCursorSession());
+    }
 
     private static void AppendReusedManifestImport(StoreFixture fixture) =>
         ExecuteStore(
@@ -779,6 +795,17 @@ public sealed class StoreSidecarConvergerTests
             Exception? exception,
             Func<TState, Exception?, string> formatter) =>
             throw new InvalidOperationException("logger failed");
+    }
+
+    private sealed class PassthroughCursorSession : IStoreSidecarCursorSession
+    {
+        public bool TryProtectBaseline(StoreSidecarStamp baseline) => true;
+
+        public void PrepareTarget(long sequence)
+        {
+        }
+
+        public StoreSidecarCursorCompletion CompleteCommitted() => new(true, false, null);
     }
 
     private sealed class FixtureStoreSession : IWorkspaceReadSession

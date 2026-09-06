@@ -320,15 +320,6 @@ public static class WorkspaceRemoval
             return WorkspaceRemoveResult.RefusedSensitive(millerDir, workspaceId, root);
         }
 
-        // The view id lives in the store_members row, which the workspace delete cascades away. Capture it
-        // BEFORE the delete: after the row is gone nothing on disk records which view this workspace owned, and
-        // the sidecars would be unreclaimable forever. Nothing is deleted from the capture alone.
-        //
-        // The capture lives in MEMORY, so it dies with a crashed process. Every registry delete below is
-        // therefore preceded by StoreSidecarReclaim.RecordIntent, which writes the same mapping to disk beside
-        // the sidecars; the reclaim clears it only once the delete pass completes. The intent write sits
-        // immediately before each delete so a refusal above never leaves a record behind, and a write that fails
-        // never fails the removal — it surfaces in the reclaim's skip reason instead.
         StoreViewCapture capture = CaptureStoreView(registry, workspaceId);
         if (capture.Failure is { } captureFailure)
         {
@@ -344,6 +335,14 @@ public static class WorkspaceRemoval
         {
             if (workspaceId is null)
                 return WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root);
+            if (!StoreSidecarReclaim.RecordIntent(sidecarTarget))
+            {
+                return WorkspaceRemoveResult.RefusedRetirement(
+                    millerDir,
+                    workspaceId,
+                    root,
+                    IntentFailure(sidecarTarget!));
+            }
             if (awaitProducerRetirement)
             {
                 StoreViewRetirementTargetResult missingRetirement =
@@ -401,6 +400,14 @@ public static class WorkspaceRemoval
             {
                 if (leases is null)
                     return WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root);
+                if (!StoreSidecarReclaim.RecordIntent(sidecarTarget))
+                {
+                    return WorkspaceRemoveResult.RefusedRetirement(
+                        millerDir,
+                        workspaceId,
+                        root,
+                        IntentFailure(sidecarTarget!));
+                }
                 if (awaitProducerRetirement)
                 {
                     StoreViewRetirementTargetResult retirement =
@@ -450,10 +457,7 @@ public static class WorkspaceRemoval
         Action<StoreSidecarReclaimTarget>? onRetirementOwed)
     {
         if (workspaceId is not null)
-        {
-            _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
-        }
 
         if (!awaitProducerRetirement)
         {
@@ -498,6 +502,8 @@ public static class WorkspaceRemoval
         Func<string, IDisposable?>? acquireSidecarLease = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
+        if (!StoreSidecarReclaim.RecordIntent(target))
+            return new StoreSidecarReclaimResult(0, 0, 0, StoreSidecarReclaim.IntentNotRecordedReason);
         _ = TryRetireView(target, retireView, apply: true, out _);
         return StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease);
     }
@@ -607,10 +613,14 @@ public static class WorkspaceRemoval
             0,
             error);
 
+    private static StoreViewRetirementOutcome IntentFailure(StoreSidecarReclaimTarget target) =>
+        FailedRetirement(target, StoreSidecarReclaim.IntentNotRecordedReason);
+
     private static bool IsExpectedRetirementFailure(Exception failure) =>
         failure is IOException
             or UnauthorizedAccessException
             or InvalidOperationException
+            or TimeoutException
             or NotSupportedException
             or ArgumentException
             or System.ComponentModel.Win32Exception;

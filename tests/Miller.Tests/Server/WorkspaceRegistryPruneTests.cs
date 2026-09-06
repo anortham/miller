@@ -736,6 +736,37 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
     }
 
     [Fact]
+    public void Run_Intent_write_failure_keeps_member_without_producer_retirement()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-intent-fail");
+        const string workspaceId = "ws-prune-intent-fail-1";
+        string goneRoot = Register(workspaceId, "intent-fail-repo", rootExists: false);
+        const string viewId = "view-prune-intent-fail";
+        JoinFamily(family, workspaceId, goneRoot, viewId);
+        string owedPath = Path.Combine(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot),
+            StoreSidecarCatalog.ViewKey(viewId) + StoreSidecarReclaim.OwedRecordSuffix);
+        Directory.CreateDirectory(owedPath);
+        int producerCalls = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (target, apply) =>
+            {
+                producerCalls++;
+                return RetireView(target, apply);
+            });
+
+        Assert.Empty(result.Pruned);
+        Assert.Single(result.RetirementFailures);
+        Assert.Equal(StoreSidecarReclaim.IntentNotRecordedReason, result.RetirementFailures[0].Outcome.Error);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(_registry.Get(workspaceId));
+    }
+
+    [Fact]
     public void Run_MalformedStoreMemberKeepsRegistryRowAndSkipsProducer()
     {
         string goneRoot = Register("ws-prune-malformed-1", "malformed-repo", rootExists: false);

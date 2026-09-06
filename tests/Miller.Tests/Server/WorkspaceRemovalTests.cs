@@ -796,6 +796,68 @@ public sealed class WorkspaceRemovalTests : IDisposable
     }
 
     [Fact]
+    public void RemoveById_Intent_write_failure_prevents_retirement_and_deletion()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-intent-fail");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-intent-fail-01";
+        Register(registry, workspaceId, "store-intent-fail-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-intent-fail");
+        const string viewId = "view-intent-fail";
+        registry.UpsertStoreMember(workspaceId, family.FamilyId, viewId, root, WorkspaceRootIdentity.Unknown);
+        string owedPath = Path.Combine(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot),
+            StoreSidecarCatalog.ViewKey(viewId) + StoreSidecarReclaim.OwedRecordSuffix);
+        Directory.CreateDirectory(owedPath);
+        int producerCalls = 0;
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-intent-fail-disp",
+            liveRoot: null,
+            retireView: (target, apply) =>
+            {
+                producerCalls++;
+                return RetireView(target, apply);
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedRetirement, result.Result);
+        Assert.Equal(StoreSidecarReclaim.IntentNotRecordedReason, result.ViewRetirement?.Error);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(registry.Get(workspaceId));
+        Assert.True(Directory.Exists(millerDir));
+    }
+
+    [Fact]
+    public void RemoveById_Ambiguous_apply_failure_retains_pre_retirement_intent()
+    {
+        var (root, _) = MakeWorkspace("ws-store-intent-ambiguous");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-intent-ambiguous-01";
+        Register(registry, workspaceId, "store-intent-ambiguous-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-intent-ambiguous");
+        const string viewId = "view-intent-ambiguous";
+        registry.UpsertStoreMember(workspaceId, family.FamilyId, viewId, root, WorkspaceRootIdentity.Unknown);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-intent-ambiguous-disp",
+            liveRoot: null,
+            retireView: (target, apply) =>
+            {
+                if (apply)
+                    throw new TimeoutException("reply lost");
+                return RetireView(target, apply);
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedRetirement, result.Result);
+        Assert.NotNull(registry.Get(workspaceId));
+        Assert.Single(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot),
+            "*" + StoreSidecarReclaim.OwedRecordSuffix));
+    }
+
+    [Fact]
     public void RemoveById_DeletesTheRemovedViewsStoreSidecars()
     {
         var (root, _) = MakeWorkspace("ws-store-member");
