@@ -130,13 +130,15 @@
         <p>
           The audit answers whether the tool is correct and complete enough to ship. It cannot answer
           whether the tool is worth installing. That takes measurement against the baseline users
-          actually have, which for a code tool in 2026 is a capable agent with shell access rather than a
-          rival product. After remediation, Miller ran that experiment too: same agent, same tasks, same
-          budgets, with and without the tool. The agent got 2.2× more tasks right with Miller and halved
-          the wrong-action rate, from 27% to 13%; at the doubled budget it made no wrong-action errors at
-          all. The experiment was rerun on Miller v1.22.1 on 2026-08-25 with the same tasks, repositories,
-          model, seed, and budgets, and the 2.2× result held. The details, including what the rerun did
-          not reproduce, are on the <a href="benchmark.html">benchmark page</a>.
+          actually have, which for a code tool in 2026 is a capable agent with native tools rather than a
+          rival product. Miller's existing visible calibration did not run that comparison: its baseline
+          was a restricted MCP adapter exposing <code>grep</code>, <code>read_file</code>, and
+          <code>list_files</code>. In August Run A, Miller v1.22.1 scored 11 of 15 at the frozen budget
+          versus 5 for that adapter. Five tasks required product-issued identities unavailable to the
+          adapter; on the ten neutral tasks, Miller scored 7 versus 5. Both Run A efficiency gates failed.
+          These are useful results for that controlled baseline, not a native-agent result.
+          The details, including the dated July result and what August did not reproduce, are on the
+          <a href="benchmark.html">benchmark page</a>.
         </p>
         <p>
           To run this on your own tool: write the replacement standard down first, counting calls,

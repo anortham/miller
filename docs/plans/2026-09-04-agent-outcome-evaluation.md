@@ -155,9 +155,9 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
 5. Verify every number against the finding, confirm all local links, and preview the HTML if layout changed materially. Do not change the release version from memory or from this plan.
 
 **Acceptance criteria:**
-- [ ] Claims identify the run and baseline restrictions.
-- [ ] Historical results remain accessible without being presented as new measurements.
-- [ ] No new efficacy or semantic equivalence claim is introduced.
+- [x] Claims identify the run and baseline restrictions.
+- [x] Historical results remain accessible without being presented as new measurements.
+- [x] No new efficacy or semantic equivalence claim is introduced.
 
 ## Task 3: Implement a genuine native-tool adapter
 

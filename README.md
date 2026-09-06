@@ -5,12 +5,16 @@ a workspace and answers structural questions over MCP and a matching CLI: find s
 build focused context, trace relationships, and assess change impact, so an agent does not have to grep
 and reread the repo by hand.
 
-In a paired benchmark, the same agent got 2.2x more tasks right with Miller than with grep and file
-reads (11/15 vs 5/15), with a 0% vs 27% wrong-action rate. Doubling the bare agent's call and token
-budget made it worse, not better. Method, caveats, and raw evidence are in
-[the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md), on the
-[summary page](https://anortham.github.io/miller/benchmark.html), and on the
-[method page](https://anortham.github.io/miller/method.html).
+In the August 25 visible calibration, Codex `gpt-5.6-sol` at medium solved 11 of 15 tasks with
+Miller at the frozen budget versus 5 with a bare MCP adapter; the bare arm stayed at 5 of 15 when
+the budget doubled. Five tasks required product-issued identities unavailable to that adapter. On
+the ten neutral tasks, Run A scored 7 with Miller versus 5. This was not a native-agent comparison,
+and Miller failed both Run A efficiency gates. Method, caveats, and raw evidence
+are in [the August calibration finding](docs/findings/2026-08-25-miller-vs-bare-agent-v1.22.1-calibration.md),
+on the [summary page](https://anortham.github.io/miller/benchmark.html), and on the
+[method page](https://anortham.github.io/miller/method.html). The
+[July 29 result](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md) remains available as
+dated historical evidence; its claim that more budget made the bare arm worse did not reproduce in August.
 
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default,
 fully local, and off-switchable; lexical-only results stay byte-identical either way. It does need a
