@@ -1,23 +1,20 @@
 ---
 id: complete-remaining-architecture-plans-m2-m4-m5
 title: Complete remaining architecture plans M2 M4 M5
-status: active
+status: completed
 created: 2026-09-06T05:18:59.397Z
-updated: 2026-09-06T08:08:07.939Z
+updated: 2026-09-06T13:12:19.485Z
 tags: []
 ---
 
-## Goal
-Complete M2 sidecar convergence, M4 behavior-preserving Context boundaries, and M5 native-agent evaluation implementation plus dry qualification.
+## Completed implementation
+M2 sidecar convergence/cursors/costs, M4 Context boundaries, and M5 native-agent evaluation implementation plus dry qualification are complete on feature/remaining-architecture-plans. Source/evidence integration is 14e9e383d2a52a5e42b7d328ef8988ed58d3d732; base a2979482. Worktree /home/murphy/source/miller/.worktrees/wal-recurrence is retained. Main/runtime unchanged.
 
-## Constraints
-Preserve public outputs, reader safety, producer/query/embedding ownership, semantic/CT zero-work, and historical evidence. Astra plans/reviews/integrates; sol_worker executes bounded packets. No paid campaigns, pushes, releases, deployments, or main runtime rebuilds authorized. No scope reduction.
+## Verification
+M2/M4 Release build zero warnings/errors, fast10002 passed, Scale220 passed, exact public goldens, published julie-extract2.40.4 cursor contract and40languages. M5 final Python436 run/433 passed/3skips; lint/format/compile and exact CLI dryartifact reproduction pass. Prepared imagef3e39a67/bindinge9523ca4 passed24isolation probes and36offlineverifier cases. Baseline-aware paired CT proof20dec2ea/mapping25880720 verifies sourceequality/nativezeroCT/exactaffectedcase/cleanup.
 
-## Success
-All three plans implemented and verified. M5 empirical campaign remains separately campaign-not-run pending approval.
+## Boundaries
+M5 harness-qualified; campaign-not-run. Full36tasks/360synthetic dryattempts; proposeddevelopmentpilot24tasks/240attempts excludes12holdouts. Actualprovider spend0. Model/provider/pricing/budget and paidapproval remain unset. S1 qualifications do not match current portable runtime/model/process identity; secondarycannotjoin. No push, PR, merge, release or paidcampaign authorized/performed.
 
-## Execution
-Worktree /home/murphy/source/miller/.worktrees/wal-recurrence; branch feature/remaining-architecture-plans; base a2979482. Specs docs/plans/2026-09-04-{sidecar-convergence-costs,context-query-boundaries,agent-outcome-evaluation}.md. Per-plan .razorback/sdd ledgers carry detailed acceptance and reports.
-
-## Status
-M2/M4 implementation and joint verification committed through 7e746f28. Release build clean, fast10002 pass, Scale220 pass, final all40-language Context/published cursor class2 pass. Documentation closure pending. M5 neutral contracts and corrected public claims committed; complete six-repo36-task corpus and native runner await final scoped review/commit. Task5 controller/scoring and Task6 physical dry qualification remain. Separate primary lexical, conceptual semantic, and CT-selection campaigns; exact execution-envelope/approval/accounting decisions in task-5-decisions.md. Main restart healthy; task index refresh SQLITE_BUSY, use evidence-backed focused fallback and do not reopen index investigation.
+## Durable handoff
+See docs/findings/2026-09-06-m2-m4-integration-verification.md; docs/findings/2026-09-04-agent-outcomes-harness-qualification.md; .memories/autonomous-run-2026-09-06-remaining-architecture-plans.md. Raw evidence remains at paths/digests recorded there. Unrelated worktrees and preservedbranches untouched. Metadata-only completion ledger update follows sourcecommit.

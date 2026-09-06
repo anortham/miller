@@ -1,6 +1,6 @@
 # Autonomous execution report: remaining architecture plans
 
-**Status:** Verified, local integration pending
+**Status:** Complete implementation and local integration at `14e9e383`
 
 **Plans:** [Sidecar convergence costs](../docs/plans/2026-09-04-sidecar-convergence-costs.md), [Context query boundaries](../docs/plans/2026-09-04-context-query-boundaries.md), [Native-agent outcome evaluation](../docs/plans/2026-09-04-agent-outcome-evaluation.md)
 
@@ -66,7 +66,7 @@ External review: none. This run used lead-only review and focused worker correct
 - M2 changes cover sidecar convergence details, producer cursor identity/session handling, Server orchestration, SQLite evidence, tests, and the joint finding.
 - M4 changes cover Context characterization, query service, builder/model, renderer, adapter cleanup, caller migration, tests, and the joint finding.
 - M5 changes cover benchmark contracts and corpus, runner/controller/CT/scoring modules, runtime image preparation, public docs, dry artifacts, findings, tests, and run memories.
-- Exact pending integration inventory: `/tmp/miller-final-verification.eC3qbs/integration-files-inventory.txt`, SHA-256 `b18df71b8b4862eb426691add18158fbf5d6624a60b81b37c8e649b5108f7fcf`.
+- Pre-integration inventory snapshot: `/tmp/miller-final-verification.eC3qbs/integration-files-inventory.txt`, SHA-256 `b18df71b8b4862eb426691add18158fbf5d6624a60b81b37c8e649b5108f7fcf`; commit `14e9e383` is the authoritative final file list.
 
 ## Evidence
 
@@ -80,7 +80,7 @@ External review: none. This run used lead-only review and focused worker correct
 
 ## Source control
 
-- **Riding along:** M2 and M4 commits are on `feature/remaining-architecture-plans`. The verified M5 source, docs, evidence, and this report remain unstaged in the same worktree for lead integration.
+- **Local integration:** M2, M4, and the verified M5 source, docs, evidence, and run report are on `feature/remaining-architecture-plans`; M5 landed in `14e9e383`.
 - **Main:** `/home/murphy/source/miller` was not modified by this run. It is clean and was already one commit ahead of `origin/main` at the final inventory.
 - **User worktrees:** `feature/ct-providers-jvm-ruby-php-gdscript`, `fix/julie-2402-adoption`, `fix/tool-latency`, and `fix/v1.27-postrelease-audit` are clean and untouched.
 - **Unrelated local state:** `fix/v1.26.0-mcp-dogfood` retains its pre-existing untracked `.tools` path. This run did not clean or modify it.
@@ -90,6 +90,5 @@ External review: none. This run used lead-only review and focused worker correct
 
 ## Next steps
 
-- Lead reviews the final integration inventory, stages only the accepted M5 and report files, and commits them locally.
 - Keep the branch and worktree until the user chooses whether to merge or push.
 - Do not run the paid campaign until the missing approval inputs are frozen and explicitly authorized.
