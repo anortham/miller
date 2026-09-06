@@ -80,9 +80,7 @@ public sealed class WorkspaceOpenPrimeServiceTests
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.AlreadyQueued, harness.Service.TryEnqueue(target.Id));
 
         release.Set();
-        Assert.True(SpinWait.SpinUntil(
-            () => harness.Registry.Get(target.Id)?.State == WorkspaceRegistryState.Ready,
-            TimeSpan.FromSeconds(5)));
+        await WaitUntilAsync(() => harness.Registry.Get(target.Id)?.State == WorkspaceRegistryState.Ready);
         Assert.Equal(1, scanCount);
 
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, WaitForRetry(harness.Service, target.Id));
@@ -101,9 +99,7 @@ public sealed class WorkspaceOpenPrimeServiceTests
         await harness.Service.StartAsync(CancellationToken.None);
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(target.Id));
 
-        Assert.True(SpinWait.SpinUntil(
-            () => harness.Registry.Get(target.Id)?.State == WorkspaceRegistryState.Ready,
-            TimeSpan.FromSeconds(5)));
+        await WaitUntilAsync(() => harness.Registry.Get(target.Id)?.State == WorkspaceRegistryState.Ready);
         Assert.False(harness.Bootstrap.IsBound);
 
         await harness.Service.StopAsync(CancellationToken.None);
@@ -199,10 +195,9 @@ public sealed class WorkspaceOpenPrimeServiceTests
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(failed.Id));
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(ready.Id));
 
-        Assert.True(SpinWait.SpinUntil(
+        await WaitUntilAsync(
             () => harness.Registry.Get(failed.Id)?.State == WorkspaceRegistryState.Error &&
-                harness.Registry.Get(ready.Id)?.State == WorkspaceRegistryState.Ready,
-            TimeSpan.FromSeconds(5)));
+                harness.Registry.Get(ready.Id)?.State == WorkspaceRegistryState.Ready);
         Assert.Contains("synthetic prime failure", harness.Registry.Get(failed.Id)?.LastError);
         Assert.Equal(1, scanCount);
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, WaitForRetry(harness.Service, failed.Id));
@@ -227,10 +222,9 @@ public sealed class WorkspaceOpenPrimeServiceTests
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(failed.Id));
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(ready.Id));
 
-        Assert.True(SpinWait.SpinUntil(
+        await WaitUntilAsync(
             () => harness.Registry.Get(failed.Id)?.State == WorkspaceRegistryState.Error &&
-                harness.Registry.Get(ready.Id)?.State == WorkspaceRegistryState.Ready,
-            TimeSpan.FromSeconds(5)));
+                harness.Registry.Get(ready.Id)?.State == WorkspaceRegistryState.Ready);
         Assert.Contains("synthetic refresh resolution failure", harness.Registry.Get(failed.Id)?.LastError);
         Assert.Equal(1, scanCount);
         Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, WaitForRetry(harness.Service, failed.Id));
@@ -295,6 +289,14 @@ public sealed class WorkspaceOpenPrimeServiceTests
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"StopAsync took {stopwatch.Elapsed}.");
         release.Set();
         await harness.Service.StopAsync(CancellationToken.None);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+        while (!condition())
+            await Task.Delay(10, deadline.Token);
     }
 
     private static WorkspaceOpenPrimeEnqueueResult WaitForRetry(

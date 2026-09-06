@@ -5,7 +5,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [v1.28.0 release notes](release-notes/v1.28.0.md) - shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
+- [v1.28.1 release notes](release-notes/v1.28.1.md) - julie-extract 2.40.6 avoids redundant SQLite configuration writes during shared-store reads.
+- [v1.28.0 release notes](release-notes/v1.28.0.md) - historical release notes for shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
 - [v1.28.0 release verification](findings/2026-09-06-v1.28.0-release-verification.md) - dogfood repairs, Linux and Windows gates, cursor-cost measurements, and package verification status.
 - [v1.28.0 performance review](findings/2026-09-06-v1.28.0-performance-review.md) - same-index CLI comparison, live MCP timings, reader-registration overhead, and cache/sidecar measurements.
 

@@ -19,13 +19,13 @@ public sealed class RevisionFactCacheLeaseTests
         b.AddFile(1, "b.cs");
         b.AddSymbol(1, "b", "Beta", "class", "b.cs");
         var store = new RevisionFactCacheStore(byteBudget: 1);
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
         int loads = 0;
         var first = Task.Run(() => store.Acquire("a", "r1", () =>
         {
             Interlocked.Increment(ref loads);
-            entered.Set();
+            entered.SetResult();
             if (!release.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))
                 throw new TimeoutException();
             return a.OpenRead();
@@ -33,16 +33,19 @@ public sealed class RevisionFactCacheLeaseTests
         Task<RevisionFactCacheLease>? second = null;
         try
         {
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             using var other = store.Acquire("b", "r1", b.OpenRead, b.Visibility());
             second = Task.Run(() => store.Acquire("a", "r1", () =>
             {
                 Interlocked.Increment(ref loads);
                 return a.OpenRead();
             }, a.Visibility()), TestContext.Current.CancellationToken);
-            Assert.True(SpinWait.SpinUntil(
-                () => second.IsCompleted || store.GetResourceSnapshot().CoalescedLoadCount > 0,
-                TimeSpan.FromSeconds(5)));
+            using (var coalesced = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken))
+            {
+                coalesced.CancelAfter(TimeSpan.FromSeconds(5));
+                while (!second.IsCompleted && store.GetResourceSnapshot().CoalescedLoadCount == 0)
+                    await Task.Delay(10, coalesced.Token);
+            }
             using var newer = replaceIdentity
                 ? store.Acquire("a", "r2", a.OpenRead, a.Visibility())
                 : null;

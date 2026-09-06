@@ -29,7 +29,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.26.3](https://github.com/anortham/miller/releases/tag/v1.26.3)** ·
+> **Current release: [v1.28.0](https://github.com/anortham/miller/releases/tag/v1.28.0)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
@@ -183,7 +183,7 @@ or registered root path. The CLI also accepts `current` and `primary` and adds `
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.40.5 ships hand-written extractors
+Miller indexes what the pinned extractor parses. `julie-extract` 2.40.6 ships hand-written extractors
 for **40 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,

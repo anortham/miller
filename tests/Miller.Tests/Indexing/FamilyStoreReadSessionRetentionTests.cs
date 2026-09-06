@@ -15,7 +15,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
     public async Task JoiningAFailedWarmDoesNotClaimAnotherSessionsUnclosedConnection()
     {
         using StoreFixture fixture = StoreFixture.Create();
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var finish = new ManualResetEventSlim();
         using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
         FailingCloseConnection? failed = null;
@@ -25,7 +25,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
             {
                 int ordinal = Interlocked.Increment(ref opens);
                 if (ordinal != 3) return RecordingOpen(path, [], ordinal);
-                entered.Set();
+                entered.SetResult();
                 if (!finish.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) throw new TimeoutException();
                 return failed = new FailingCloseConnection(path);
             }));
@@ -36,7 +36,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
         Task shared = Task.CompletedTask;
         try
         {
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
             shared = joining.WarmResolutionFactsInBackground();
             finish.Set();
             await Assert.ThrowsAsync<IOException>(() => original);
@@ -865,7 +865,8 @@ public sealed class FamilyStoreReadSessionRetentionTests
     [InlineData("2.40.3", true)]
     [InlineData("2.40.4", true)]
     [InlineData("2.40.5", true)]
-    [InlineData("2.40.6", false)]
+    [InlineData("2.40.6", true)]
+    [InlineData("2.40.7", false)]
     [InlineData("2.41.0", false)]
     public void ReaderCapabilityAcceptsImplementedFloorAndRefusesFutureFloor(string floor, bool accepted)
     {
