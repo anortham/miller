@@ -50,7 +50,7 @@ inside Miller's release archives.
 ### julie-extract
 
 Miller delegates all source extraction to the pinned **`julie-extract`** binary
-    (<https://github.com/anortham/julie-extractors>), currently pinned at version **2.40.3**
+    (<https://github.com/anortham/julie-extractors>), currently pinned at version **2.40.4**
 (see [`scripts/julie-pins.json`](scripts/julie-pins.json)). It is the same author's own project (Alan
 Northam) and is shipped inside Miller's release archives under `.tools/julie-extract`. Refer to the
 julie-extractors repository for its license terms and for the licenses of the tree-sitter grammars it

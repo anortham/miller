@@ -179,7 +179,7 @@ Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID,
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.40.3 ships hand-written extractors
+Miller indexes what the pinned extractor parses. `julie-extract` 2.40.4 ships hand-written extractors
 for **40 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,

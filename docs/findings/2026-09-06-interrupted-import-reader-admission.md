@@ -106,3 +106,44 @@ before the final green run.
 
 Published package evidence is in
 [Julie's release record](https://github.com/anortham/julie-extractors/blob/main/docs/release-evidence/2026-09-06-v2-40-3-release.md).
+
+## Follow-up: empty WAL checkpoints and 2.40.4 adoption
+
+The subsequent removed-view cleanup exposed a separate invalidation problem.
+Julie reader acquire, renew, and release completion checkpointed both databases,
+including an unchanged store with an empty WAL. An empty TRUNCATE can increment
+another SQLite connection's `data_version` without changing stored rows. Repeated
+reader polling therefore caused `maintenance_inspection_raced` even while the
+store-log watermark and database mtime stayed unchanged. This was not repeated
+extraction or evidence of stored rows continually changing.
+
+Julie now skips missing, empty, and header-only WALs per database, preserving
+bounded checkpoint attempts for real frames and unknown metadata. Miller's own
+checkpoint helper also skips empty WALs while preserving corrupt/locked database
+validation. Retention and maintenance concurrent-mutation guards are unchanged.
+Both fixes were merged before this release; their regressions passed on Linux
+and Windows NTFS.
+
+[Julie 2.40.4](https://github.com/anortham/julie-extractors/releases/tag/v2.40.4)
+was published from `5701a0b5` after local gates and source CI passed. All four
+downloaded archives matched their public SHA-256 digests, every executable matched
+its packaged checksum, and the release body matched the tagged notes. Miller
+restored the public Linux binary without a source override and now pins 2.40.4.
+The independently qualified reader-capability ceiling accepts 2.40.4 and refuses
+2.40.5 and 2.41.0; earlier supported producer floors remain accepted.
+
+Public-package qualification passed in the isolated verification worktree:
+
+- 54 focused producer/bootstrap/schema/capability tests; no skips or failures.
+- Release build: zero warnings and errors.
+- Fast suite: 9,926 passed, nine skipped.
+- Scale suite: 218 passed, 24 skipped.
+
+Raw logs are `/tmp/miller-2404-{focused,build,fast,scale}.log`. The tested pin
+diff exactly matched the main checkout. Existing main-output Miller processes
+were not overwritten or killed; rebuild and restart are still required to deploy
+the fixes. The removed M3 view's retirement remains deferred until that deployment;
+this release does not claim that live cleanup has already succeeded.
+
+Package verification details are in
+[Julie's 2.40.4 release record](https://github.com/anortham/julie-extractors/blob/main/docs/release-evidence/2026-09-06-v2-40-4-release.md).
