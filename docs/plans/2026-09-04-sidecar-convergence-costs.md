@@ -100,9 +100,9 @@ internal readonly record struct SidecarConvergenceDetail(
 5. Record detail through existing phase/telemetry facilities; recorder failures stay contained.
 6. Run the focused class and Miller impact; confirm no Core dependency.
 
-- [ ] Detail types are Indexing-owned.
-- [ ] Existing bool/result/JSON tests pass.
-- [ ] Every path/reason is asserted.
+- [x] Detail types are Indexing-owned.
+- [x] Existing bool/result/JSON tests pass.
+- [x] Every path/reason is asserted.
 
 ### Task 2 — Add typed Julie consumer-cursor runner
 

@@ -311,15 +311,20 @@ public sealed class SymbolSearchSidecar
         throw lastMismatch!;
     }
 
-    public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session)
+    public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session) =>
+        EnsureStoreCurrentDetailed(storeRoot, session).DidWork;
+
+    internal SidecarConvergenceDetail EnsureStoreCurrentDetailed(
+        string storeRoot,
+        IWorkspaceReadSession session)
     {
         if (!Enabled)
-            return false;
+            return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
         ArgumentNullException.ThrowIfNull(session);
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, session.Snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, session.Snapshot.ViewId);
         if (StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
-            return false;
+            return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
         if (StoreSidecarCatalog.TryFastForwardEmptyDelta(
                 searchDbPath,
                 expected,
@@ -331,33 +336,38 @@ public sealed class SymbolSearchSidecar
                         revision,
                         RegionOptions)))
         {
-            return true;
+            return new(SidecarConvergencePath.EmptyDelta, SidecarConvergenceReason.None, true);
         }
 
-        if (TryApplyStoreDelta(searchDbPath, expected, session))
-            return true;
+        SidecarConvergenceReason reason = TryApplyStoreDelta(searchDbPath, expected, session, out bool applied);
+        if (applied)
+            return new(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true);
 
         SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
-        return true;
+        return new(SidecarConvergencePath.Full, reason, true);
     }
 
-    private bool TryApplyStoreDelta(
+    private SidecarConvergenceReason TryApplyStoreDelta(
         string searchDbPath,
         StoreSidecarStamp expected,
-        IWorkspaceReadSession session)
+        IWorkspaceReadSession session,
+        out bool applied)
     {
+        applied = false;
         StoreSidecarStamp? previous = StoreSidecarCatalog.TryRead(searchDbPath);
-        if (previous is null ||
-            previous.StoreLogSequence >= expected.StoreLogSequence ||
-            previous.Kind != expected.Kind ||
+        if (previous is null)
+            return SidecarConvergenceReason.DeltaMissing;
+        if (previous.Kind != expected.Kind ||
             !string.Equals(previous.FamilyId, expected.FamilyId, StringComparison.Ordinal) ||
             !string.Equals(previous.ViewId, expected.ViewId, StringComparison.Ordinal) ||
             !string.Equals(previous.StoreInstanceId, expected.StoreInstanceId, StringComparison.Ordinal) ||
             !string.Equals(previous.GenerationName, expected.GenerationName, StringComparison.Ordinal) ||
             !string.Equals(previous.IndexLevel, expected.IndexLevel, StringComparison.Ordinal))
         {
-            return false;
+            return SidecarConvergenceReason.IdentityChanged;
         }
+        if (previous.StoreLogSequence >= expected.StoreLogSequence)
+            return SidecarConvergenceReason.StampMismatch;
 
         RevisionDeltaResult delta = RevisionDeltaReader.Read(
             session,
@@ -366,7 +376,7 @@ public sealed class SymbolSearchSidecar
         if (delta.Status != RevisionDeltaStatus.Complete ||
             delta.ToRevision != expected.StoreLogSequence)
         {
-            return false;
+            return SidecarConvergenceReason.DeltaIncomplete;
         }
 
         var paths = new HashSet<string>(StringComparer.Ordinal);
@@ -386,12 +396,15 @@ public sealed class SymbolSearchSidecar
                 paths,
                 expected,
                 RegionOptions);
-            return StoreSidecarCatalog.IsCurrent(searchDbPath, expected);
+            if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+                return SidecarConvergenceReason.StampMismatch;
+            applied = true;
+            return SidecarConvergenceReason.None;
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            return false;
+            return SidecarConvergenceReason.ApplyFailed;
         }
     }
 

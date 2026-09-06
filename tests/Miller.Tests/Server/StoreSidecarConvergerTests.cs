@@ -1,9 +1,12 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -45,8 +48,8 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             signal,
-            ensureStoreContent: (root, _) => { calls.Add("content:" + root); return true; },
-            ensureStoreSearch: (root, _) => { calls.Add("search:" + root); return true; });
+            ensureStoreContent: (root, _) => { calls.Add("content:" + root); return Detail(true); },
+            ensureStoreSearch: (root, _) => { calls.Add("search:" + root); return Detail(true); });
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -83,7 +86,7 @@ public sealed class StoreSidecarConvergerTests
             ensureStoreSearch: (_, _) =>
             {
                 calls.Add("search");
-                return true;
+                return Detail(true);
             });
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-" + Guid.NewGuid().ToString("N"));
@@ -117,7 +120,7 @@ public sealed class StoreSidecarConvergerTests
             NullLogger.Instance,
             signal,
             ensureStoreContent: (_, _) => throw new TimeoutException(new string('x', 512)),
-            ensureStoreSearch: (_, _) => true);
+            ensureStoreSearch: (_, _) => Detail(true));
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-result-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -160,7 +163,7 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             signal,
-            ensureStoreContent: (_, _) => false,
+            ensureStoreContent: (_, _) => Detail(false),
             vectorDrainAvailable: static () => true);
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-queued-" + Guid.NewGuid().ToString("N"));
@@ -233,8 +236,8 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             signal,
-            ensureStoreContent: (_, _) => ++contentRuns == 1,
-            ensureStoreSearch: (_, _) => ++searchRuns == 1,
+            ensureStoreContent: (_, _) => Detail(++contentRuns == 1),
+            ensureStoreSearch: (_, _) => Detail(++searchRuns == 1),
             phaseSink: phases);
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-phases-" + Guid.NewGuid().ToString("N"));
@@ -265,6 +268,7 @@ public sealed class StoreSidecarConvergerTests
     public void ConvergeStore_RecordsContainedSidecarFailure()
     {
         var phases = new RecordingPhaseSink();
+        var details = new RecordingDetailLogger();
         using var fixture = JulieDbFixture.CreateDefault();
         using var session = new FixtureStoreSession(fixture);
         var converger = new IndexerSidecarConverger(
@@ -275,10 +279,10 @@ public sealed class StoreSidecarConvergerTests
             static path => path,
             static path => path,
             (_, _, _) => false,
-            NullLogger.Instance,
+            details,
             new VectorConvergeSignal(enabled: true),
             ensureStoreContent: (_, _) => throw new TimeoutException("sidecar lease timeout"),
-            ensureStoreSearch: (_, _) => true,
+            ensureStoreSearch: (_, _) => Detail(true),
             phaseSink: phases);
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-phase-failure-" + Guid.NewGuid().ToString("N"));
@@ -297,6 +301,8 @@ public sealed class StoreSidecarConvergerTests
         Assert.False(content.DidWork);
         Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "search").Outcome);
         Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "sidecar_total").Outcome);
+        Assert.DoesNotContain(details.Details, static entry => entry.Kind == "content");
+        Assert.Single(details.Details, static entry => entry.Kind == "search");
     }
 
     [Fact]
@@ -315,8 +321,8 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             new VectorConvergeSignal(enabled: true),
-            ensureStoreContent: (_, _) => { calls.Add("content"); return true; },
-            ensureStoreSearch: (_, _) => { calls.Add("search"); return true; },
+            ensureStoreContent: (_, _) => { calls.Add("content"); return Detail(true); },
+            ensureStoreSearch: (_, _) => { calls.Add("search"); return Detail(true); },
             phaseSink: phases);
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-missing-sequence-" + Guid.NewGuid().ToString("N"));
@@ -351,8 +357,8 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             signal,
-            ensureStoreContent: (_, _) => true,
-            ensureStoreSearch: (_, _) => true);
+            ensureStoreContent: (_, _) => Detail(true),
+            ensureStoreSearch: (_, _) => Detail(true));
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-lease-failure-" + Guid.NewGuid().ToString("N"));
         File.WriteAllText(root, "not a directory");
@@ -389,7 +395,7 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             signal,
-            ensureStoreContent: (_, _) => { contentCalls++; return true; },
+            ensureStoreContent: (_, _) => { contentCalls++; return Detail(true); },
             phaseSink: new ThrowingPhaseSink());
 
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-sink-" + Guid.NewGuid().ToString("N"));
@@ -405,6 +411,165 @@ public sealed class StoreSidecarConvergerTests
 
         Assert.Equal(1, contentCalls);
         Assert.Equal(0, signal.TargetRevision);
+    }
+
+    [Fact]
+    public void ConvergeStore_Records_full_missing_then_current_from_the_actual_content_sidecar()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger);
+
+        StoreSidecarConvergenceResult first = converger.ConvergeStore(fixture.Binding.StoreRoot, session);
+        StoreSidecarConvergenceResult second = converger.ConvergeStore(fixture.Binding.StoreRoot, session);
+
+        Assert.Equal("repaired", first.Content.Status);
+        Assert.True(first.Content.DidWork);
+        Assert.Equal("current", second.Content.Status);
+        Assert.False(second.Content.DidWork);
+        Assert.Equal(
+            [
+                new SidecarConvergenceDetail(SidecarConvergencePath.Full, SidecarConvergenceReason.DeltaMissing, true),
+                new SidecarConvergenceDetail(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false),
+            ],
+            logger.Details.Select(static entry => entry.Detail));
+        Assert.All(logger.Details, static entry => Assert.Equal(LogLevel.Information, entry.Level));
+    }
+
+    [Fact]
+    public void ConvergeStore_Records_empty_delta_from_the_actual_content_sidecar()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            converger.ConvergeStore(fixture.Binding.StoreRoot, initial);
+        AppendReusedManifestImport(fixture);
+        logger.Details.Clear();
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, updated);
+
+        Assert.True(result.Content.DidWork);
+        Assert.Equal(
+            new SidecarConvergenceDetail(SidecarConvergencePath.EmptyDelta, SidecarConvergenceReason.None, true),
+            Assert.Single(logger.Details).Detail);
+    }
+
+    [Fact]
+    public void ConvergeStore_Records_incremental_from_the_actual_content_sidecar()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            converger.ConvergeStore(fixture.Binding.StoreRoot, initial);
+        AppendAddedFileManifest(fixture);
+        logger.Details.Clear();
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, updated);
+
+        Assert.True(result.Content.DidWork);
+        Assert.Equal(
+            new SidecarConvergenceDetail(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true),
+            Assert.Single(logger.Details).Detail);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ConvergeStore_Records_identity_or_stamp_full_fallback_from_the_actual_content_sidecar(bool identityChanged)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        converger.ConvergeStore(fixture.Binding.StoreRoot, session);
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Content,
+            fixture.Binding.ViewId);
+        StoreSidecarStamp stamp = StoreSidecarCatalog.TryRead(databasePath)!;
+        StoreSidecarCatalog.Stamp(
+            databasePath,
+            identityChanged
+                ? stamp with { GenerationName = "gen-other" }
+                : stamp with { ManifestHash = "manifest-other" });
+        logger.Details.Clear();
+
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, session);
+
+        Assert.Equal("repaired", result.Content.Status);
+        Assert.True(result.Content.DidWork);
+        Assert.Equal(
+            new SidecarConvergenceDetail(
+                SidecarConvergencePath.Full,
+                identityChanged ? SidecarConvergenceReason.IdentityChanged : SidecarConvergenceReason.StampMismatch,
+                true),
+            Assert.Single(logger.Details).Detail);
+    }
+
+    [Fact]
+    public void ConvergeStore_Records_incomplete_delta_full_fallback_from_the_actual_content_sidecar()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            converger.ConvergeStore(fixture.Binding.StoreRoot, initial);
+        AppendReusedManifestImport(fixture);
+        ExecuteStore(fixture, "DELETE FROM store_log WHERE sequence <= 2;");
+        logger.Details.Clear();
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, updated);
+
+        Assert.Equal("repaired", result.Content.Status);
+        Assert.True(result.Content.DidWork);
+        Assert.Equal(
+            new SidecarConvergenceDetail(SidecarConvergencePath.Full, SidecarConvergenceReason.DeltaIncomplete, true),
+            Assert.Single(logger.Details).Detail);
+    }
+
+    [Fact]
+    public void ConvergeStore_Records_apply_failed_full_fallback_from_the_actual_content_sidecar()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var logger = new RecordingDetailLogger();
+        IndexerSidecarConverger converger = NewRealStoreConverger(logger, searchEnabled: true);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            converger.ConvergeStore(fixture.Binding.StoreRoot, initial);
+        AppendAddedFileManifest(fixture);
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        Execute(databasePath, "DROP TABLE symbols_fts;");
+        logger.Details.Clear();
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, updated);
+
+        Assert.Equal("repaired", result.Search.Status);
+        Assert.True(result.Search.DidWork);
+        Assert.Equal(
+            new SidecarConvergenceDetail(SidecarConvergencePath.Full, SidecarConvergenceReason.ApplyFailed, true),
+            Assert.Single(logger.Details, static entry => entry.Kind == "search").Detail);
+    }
+
+    [Fact]
+    public void ConvergeStore_Contains_detail_recorder_failure_without_changing_public_success()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        IndexerSidecarConverger converger = NewRealStoreConverger(new ThrowingLogger());
+
+        StoreSidecarConvergenceResult result = converger.ConvergeStore(fixture.Binding.StoreRoot, session);
+
+        Assert.Equal("repaired", result.Content.Status);
+        Assert.True(result.Content.DidWork);
     }
 
     [Fact]
@@ -474,8 +639,69 @@ public sealed class StoreSidecarConvergerTests
             (_, _, _) => false,
             NullLogger.Instance,
             new VectorConvergeSignal(enabled: true),
-            ensureStoreContent,
+            (root, session) => Detail(ensureStoreContent(root, session)),
             ensureStoreSearch: null);
+
+    private static SidecarConvergenceDetail Detail(bool didWork) =>
+        didWork
+            ? new(SidecarConvergencePath.Full, SidecarConvergenceReason.None, true)
+            : new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
+
+    private static IndexerSidecarConverger NewRealStoreConverger(ILogger logger, bool searchEnabled = false) =>
+        new(
+            new SymbolSearchSidecar(searchEnabled, RegionIndexOptions.Disabled),
+            new ContentCorpusSidecar(),
+            logger,
+            new VectorConvergeSignal(enabled: false));
+
+    private static void AppendReusedManifestImport(StoreFixture fixture) =>
+        ExecuteStore(
+            fixture,
+            """
+            INSERT INTO store_log VALUES
+              (3,'request-reuse','store_import_l3_chunk','view-a',2,2,3,0,'{}','2026-08-09T00:00:03Z'),
+              (4,'request-reuse','store_import_completed','view-a',2,NULL,3,1,
+               '{"manifest":{"disposition":"reused"}}','2026-08-09T00:00:04Z'),
+              (5,'request-reuse','store_resolve_completed','view-a',2,NULL,3,1,
+               '{}','2026-08-09T00:00:05Z');
+            """);
+
+    private static void AppendAddedFileManifest(StoreFixture fixture) =>
+        ExecuteStore(
+            fixture,
+            """
+            INSERT INTO file_versions VALUES
+              (3,'added.cs','blake3:added',1,'csharp',12,1,NULL,1,2,3);
+            INSERT INTO manifests VALUES
+              ('view-a',3,'manifest-added','request-added','2026-08-09T00:00:02Z');
+            INSERT INTO manifest_entries VALUES
+              ('view-a',3,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:02Z',NULL,NULL),
+              ('view-a',3,'added.cs','csharp',3,'indexed','blake3:added','2026-08-09T00:00:02Z',NULL,NULL);
+            INSERT INTO symbols VALUES
+              (3,'added-symbol','added.cs','csharp','Added','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            UPDATE views
+            SET current_generation=3,
+                updated_at='2026-08-09T00:00:02Z'
+            WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              (3,'request-added','manifest_flipped','view-a',3,NULL,NULL,1,'{}','2026-08-09T00:00:02Z');
+            """);
+
+    private static void ExecuteStore(StoreFixture fixture, string sql) =>
+        Execute(Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"), sql);
+
+    private static void Execute(string databasePath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 
     private static long ScalarLong(string path, string sql)
     {
@@ -507,6 +733,52 @@ public sealed class StoreSidecarConvergerTests
     private sealed class ThrowingPhaseSink : IIndexerPhaseSink
     {
         public void Record(IndexerPhaseRecord record) => throw new InvalidOperationException("sink failed");
+    }
+
+    private sealed class RecordingDetailLogger : ILogger
+    {
+        public List<(LogLevel Level, string Kind, SidecarConvergenceDetail Detail)> Details { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (state is not IReadOnlyList<KeyValuePair<string, object?>> values)
+                return;
+            string? kind = values.FirstOrDefault(static pair => pair.Key == "SidecarKind").Value as string;
+            object? path = values.FirstOrDefault(static pair => pair.Key == "ConvergencePath").Value;
+            object? reason = values.FirstOrDefault(static pair => pair.Key == "ConvergenceReason").Value;
+            object? didWork = values.FirstOrDefault(static pair => pair.Key == "DidWork").Value;
+            if (kind is not null
+                && path is SidecarConvergencePath convergencePath
+                && reason is SidecarConvergenceReason convergenceReason
+                && didWork is bool changed)
+            {
+                Details.Add((logLevel, kind, new SidecarConvergenceDetail(convergencePath, convergenceReason, changed)));
+            }
+        }
+    }
+
+    private sealed class ThrowingLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("logger failed");
     }
 
     private sealed class FixtureStoreSession : IWorkspaceReadSession

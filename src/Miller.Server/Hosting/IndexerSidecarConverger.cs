@@ -87,8 +87,8 @@ internal sealed class IndexerSidecarConverger
     private readonly Func<Exception, string, Action, bool> _tryRecover;
     private readonly ILogger _logger;
     private readonly VectorConvergeSignal _vectorSignal;
-    private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreContent;
-    private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreSearch;
+    private readonly Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? _ensureStoreContent;
+    private readonly Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? _ensureStoreSearch;
     private readonly Func<bool> _vectorDrainAvailable;
     private readonly IIndexerPhaseSink _phaseSink;
 
@@ -112,8 +112,8 @@ internal sealed class IndexerSidecarConverger
                 SidecarCorruptionRecovery.TryRebuildCorruptSidecar(ex, sidecarPath, rebuild, logger),
             logger,
             vectorSignal,
-            contentSidecar.EnsureStoreCurrent,
-            searchSidecar.EnsureStoreCurrent,
+            contentSidecar.EnsureStoreCurrentDetailed,
+            searchSidecar.EnsureStoreCurrentDetailed,
             phaseSink,
             vectorDrainAvailable)
     {
@@ -129,8 +129,8 @@ internal sealed class IndexerSidecarConverger
         Func<Exception, string, Action, bool> tryRecover,
         ILogger logger,
         VectorConvergeSignal? vectorSignal = null,
-        Func<string, IWorkspaceReadSession, bool>? ensureStoreContent = null,
-        Func<string, IWorkspaceReadSession, bool>? ensureStoreSearch = null,
+        Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? ensureStoreContent = null,
+        Func<string, IWorkspaceReadSession, SidecarConvergenceDetail>? ensureStoreSearch = null,
         IIndexerPhaseSink? phaseSink = null,
         Func<bool>? vectorDrainAvailable = null)
     {
@@ -333,15 +333,16 @@ internal sealed class IndexerSidecarConverger
 
     private StoreSidecarConvergenceOutcome ConvergeStoreSidecar(
         string kind,
-        Func<bool> converge,
+        Func<SidecarConvergenceDetail> converge,
         long? storeSequence)
     {
         using var phase = new IndexerPhaseScope(_phaseSink, kind);
         try
         {
-            bool didWork = converge();
-            phase.Complete(storeSequence, didWork);
-            return didWork
+            SidecarConvergenceDetail detail = converge();
+            phase.Complete(storeSequence, detail.DidWork);
+            RecordConvergenceDetailSafely(kind, detail);
+            return detail.DidWork
                 ? new(StoreSidecarConvergenceStatuses.Repaired, true, false, false, null)
                 : new(StoreSidecarConvergenceStatuses.Current, false, false, false, null);
         }
@@ -352,6 +353,22 @@ internal sealed class IndexerSidecarConverger
                 kind);
             phase.Fail(storeSequence);
             return FailedOutcome(ex);
+        }
+    }
+
+    private void RecordConvergenceDetailSafely(string kind, SidecarConvergenceDetail detail)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Family-store {SidecarKind} convergence used {ConvergencePath} because {ConvergenceReason}; did work: {DidWork}.",
+                kind,
+                detail.Path,
+                detail.Reason,
+                detail.DidWork);
+        }
+        catch
+        {
         }
     }
 
