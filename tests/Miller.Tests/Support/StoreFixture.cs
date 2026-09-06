@@ -79,7 +79,9 @@ internal sealed class StoreFixture : IDisposable
             Pooling = false,
         }.ToString());
         connection.Open();
+        using SqliteTransaction transaction = connection.BeginTransaction();
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText =
             """
             CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
@@ -282,5 +284,6 @@ internal sealed class StoreFixture : IDisposable
             """;
         command.Parameters.AddWithValue("$root", workspace);
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 }
