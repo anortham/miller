@@ -32,6 +32,13 @@ public sealed class FamilyStoreReadException(
     Exception? innerException = null) : IOException(message, innerException)
 {
     public FamilyStoreReadFailure Failure { get; } = failure;
+
+    internal bool IsReaderAdmissionBusy => Failure == FamilyStoreReadFailure.BindingNotReady
+        && InnerException is StoreReaderRegistrationException
+        {
+            Failure: ReaderFailure.Busy,
+            MayHaveAcquired: false,
+        };
 }
 
 public sealed class FamilyStoreReadSession :

@@ -930,23 +930,24 @@ public sealed class CrossWorkspaceRefreshService
     private WorkspaceFreshnessProbe ReadStoreProbe(WorkspaceRegistryRow row) =>
         _readStoreProbe(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
 
-    private WorkspaceFreshnessProbe? TryReadStoreProbe(WorkspaceRegistryRow row)
+    private WorkspaceFreshnessProbe? TryReadStoreProbe(WorkspaceRegistryRow row, bool preserveAdmissionBusy = false)
     {
         try
         {
             return ReadStoreProbe(row);
         }
         catch (Exception ex) when (
-            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+            !(preserveAdmissionBusy && ex is FamilyStoreReadException { IsReaderAdmissionBusy: true })
+            && ex is (FileNotFoundException or DirectoryNotFoundException or IOException
                 or InvalidOperationException or SqliteException or UnauthorizedAccessException
-                or ArgumentException)
+                or ArgumentException))
         {
             return null;
         }
     }
 
     private bool HasReadableIndex(WorkspaceRegistryRow row, bool useStore) =>
-        useStore ? TryReadStoreProbe(row) is not null : File.Exists(row.IndexDbPath);
+        useStore ? TryReadStoreProbe(row, preserveAdmissionBusy: true) is not null : File.Exists(row.IndexDbPath);
 
     private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(

@@ -1149,9 +1149,8 @@ public sealed class WorkspaceIndexProvider
     }
 
     /// <summary>
-    /// "Does this workspace's view actually OPEN?" — the probe the serve-then-refresh arm asks before it promises a
-    /// pinned view. Anything other than a clean open counts as NOT readable, so the workspace takes the foreground
-    /// path and gets an honest answer (or a healed index) instead of a promised stale one.
+    /// Probes whether the workspace can serve a pinned read. Definitive reader-admission contention propagates
+    /// without scheduling a refresh; other open failures select foreground repair.
     ///
     /// <para>It runs <see cref="WorkspaceReadSessionFactory.Probe"/> because that shares its branch with
     /// <see cref="WorkspaceReadSessionFactory.Open"/>, which is what the read itself calls. A file-existence check
@@ -1160,8 +1159,8 @@ public sealed class WorkspaceIndexProvider
     /// where the file exists and the read fails. The blocking default healed both by refreshing first; a probe that
     /// answers from the directory entry would turn each into one hard error per workspace instead.</para>
     ///
-    /// <para>In store mode the probe usually answers from the freshness stamp with no database open at all; the
-    /// legacy branch opens the artifact read-only, runs the same schema gate every reader runs, and closes it.</para>
+    /// <para>Store probes acquire retention before opening the pinned metadata. The legacy branch opens the
+    /// artifact read-only, runs the same schema gate every reader runs, and closes it.</para>
     /// </summary>
     /// <param name="row">The registry row to probe.</param>
     /// <param name="storeEnabled">Null reads <c>MILLER_INDEX_STORE</c>, exactly as the read path does.</param>
@@ -1185,7 +1184,8 @@ public sealed class WorkspaceIndexProvider
 
             return true;
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException
+            and not FamilyStoreReadException { IsReaderAdmissionBusy: true })
         {
             return false;
         }

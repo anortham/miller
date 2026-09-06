@@ -15,6 +15,42 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     private readonly string _dir;
     private readonly string _registryDbPath;
 
+    [Theory]
+    [InlineData("writer")]
+    [InlineData("backoff")]
+    [InlineData("governor")]
+    public void ReaderAdmissionBusy_DoesNotMarkExistingStoreMissing(string refusal)
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("admission-busy");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        registry.UpsertSeen("target-ws", "target", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        WorkspaceRegistryRow before = registry.Get("target-ws")!;
+        DateTimeOffset now = new(2026, 9, 6, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        if (refusal == "backoff")
+            policy.RecordFailure(ScanIntent.IncrementalReconcile, ScanFailurePolicy.SigkillExitCode, jobs: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease? held = refusal == "governor" ? HoldMachineScanAdmission(home) : null;
+        var expected = new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady,
+            "The family-store reader could not acquire retention.",
+            new StoreReaderRegistrationException(ReaderFailure.Busy));
+        var service = NewService(registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("Unexpected scan."),
+            acquireLock: _ => refusal == "writer" ? null : new NoopLease(),
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) => throw expected,
+            failurePolicyFor: (_, _) => policy,
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        Assert.Same(expected, Assert.Throws<FamilyStoreReadException>(
+            () => service.Refresh("target-ws", force: refusal == "governor")));
+        Assert.Equal(before, registry.Get("target-ws"));
+    }
+
     public CrossWorkspaceRefreshServiceTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "miller-cross-workspace-refresh-" + Guid.NewGuid().ToString("N"));

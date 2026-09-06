@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Tools;
 
@@ -95,6 +96,11 @@ public sealed record ToolDiagnostic(
 
         return exception switch
         {
+            FamilyStoreReadException { IsReaderAdmissionBusy: true } =>
+                Unavailable(
+                    "reader_admission_busy",
+                    "Store reader admission is temporarily busy. Retry the same call after the active store operation completes.",
+                    [new ToolDiagnosticAction("retry the same call", "wait for store reader admission")]),
             IncompatibleExtractException =>
                 Corruption(
                     "schema_incompatible",

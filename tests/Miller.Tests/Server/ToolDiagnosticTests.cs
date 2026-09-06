@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -14,6 +16,41 @@ public sealed class ToolDiagnosticTests : IDisposable
         "miller-tool-diagnostic-" + Guid.NewGuid().ToString("N"));
 
     public ToolDiagnosticTests() => Directory.CreateDirectory(_dir);
+
+    [Fact]
+    public void ReaderAdmissionBusy_RendersUnavailableWithRetryInsteadOfMissingArtifact()
+    {
+        var error = new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady,
+            "The family-store reader could not acquire retention.",
+            new StoreReaderRegistrationException(ReaderFailure.Busy));
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(error);
+
+        Assert.Equal("reader_admission_busy", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Unavailable, diagnostic.Class);
+        string compact = ToolDiagnosticRenderer.Render("inspect", diagnostic, json: false);
+        string json = ToolDiagnosticRenderer.Render("inspect", diagnostic, json: true);
+        Assert.Contains("retry the same call", compact, StringComparison.Ordinal);
+        using JsonDocument document = JsonDocument.Parse(json);
+        Assert.Equal("reader_admission_busy", document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.DoesNotContain("artifact_missing", json, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public void ReaderAdmissionBusy_DoesNotReclassifyOtherRetentionFailures(bool busy, bool ambiguous, bool corrupt)
+    {
+        var error = new FamilyStoreReadException(
+            corrupt ? FamilyStoreReadFailure.Corrupt : FamilyStoreReadFailure.BindingNotReady,
+            "The family-store reader could not acquire retention.",
+            new StoreReaderRegistrationException(busy ? ReaderFailure.Busy : ReaderFailure.StaleSnapshot, ambiguous));
+
+        Assert.Equal("artifact_unavailable", ToolDiagnostic.FromException(error).Code);
+        Assert.Equal("artifact_unavailable", ToolDiagnostic.FromException(
+            new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady, "Unpublished view.")).Code);
+    }
 
     public void Dispose()
     {

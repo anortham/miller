@@ -19,6 +19,38 @@ public sealed class StoreReaderConsumerTests : IDisposable
 {
     private readonly string? _storeMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
 
+    [Theory]
+    [InlineData(WorkspaceRefreshMode.Background)]
+    [InlineData(WorkspaceRefreshMode.None)]
+    public void ReaderAdmissionBusy_DoesNotRefreshOrMarkTheRegisteredIndexMissing(WorkspaceRefreshMode mode)
+    {
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding,
+            _ => throw new StoreReaderRegistrationException(ReaderFailure.Busy));
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(fixture.Root, "registry.db"));
+        WorkspaceRegistryRow row = registry.UpsertSeen("workspace-a", "example", fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
+        int refreshCalls = 0;
+        var refresh = new CrossWorkspaceRefreshService(registry,
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected scan."),
+            _ => { refreshCalls++; throw new InvalidOperationException("Unexpected refresh."); },
+            _ => 0, TimeSpan.Zero, TimeSpan.FromMilliseconds(1), _ => { },
+            () => DateTimeOffset.UtcNow, SymbolSearchSidecar.Disabled);
+        var provider = new WorkspaceIndexProvider(null, null, registry, refresh, SymbolSearchSidecar.Disabled,
+            new SupplementalEdgeCache(), new RevisionFactCacheStore(), new BackgroundRefreshGate(), readerClient: reader.Client);
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(
+            () => provider.ResolveSymbolRead("workspace-a", mode));
+
+        Assert.Equal(ReaderFailure.Busy, Assert.IsType<StoreReaderRegistrationException>(error.InnerException).Failure);
+        Assert.Equal(0, refreshCalls);
+        Assert.Equal(row, registry.Get("workspace-a"));
+        Assert.DoesNotContain("open", reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
     [Fact]
     public void IndexerLevelReadUsesTheWorkspaceProducer()
     {
