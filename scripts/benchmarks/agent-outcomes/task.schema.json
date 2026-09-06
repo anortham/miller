@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-outcomes/task-v1.json",
+  "title": "Native agent outcome task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "task_id",
+    "repo_id",
+    "source_commit",
+    "snapshot_sha256",
+    "language",
+    "workflow",
+    "prompt",
+    "verifier_id",
+    "allowed_write_paths",
+    "max_wall_seconds",
+    "max_model_tokens"
+  ],
+  "properties": {
+    "contract_id": { "const": "agent-outcomes-v1" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "repo_id": { "$ref": "#/$defs/id" },
+    "source_commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "snapshot_sha256": { "$ref": "#/$defs/sha256" },
+    "language": { "$ref": "#/$defs/id" },
+    "workflow": { "enum": ["location", "concept", "references", "safe_edit", "repair", "test_selection"] },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 20000 },
+    "verifier_id": { "$ref": "#/$defs/id" },
+    "allowed_write_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/repoPath" }
+    },
+    "max_wall_seconds": { "type": "integer", "minimum": 1 },
+    "max_model_tokens": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "repoPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\).+$"
+    }
+  }
+}

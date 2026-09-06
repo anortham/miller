@@ -131,10 +131,10 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
 5. Run the worker command green. Add null/missing-cost and malformed-event schema fixtures now, before runner work.
 
 **Acceptance criteria:**
-- [ ] Correct native answers pass with zero product metadata.
-- [ ] Invalid locations and forbidden mutations fail even if the agent claims success.
-- [ ] Contract examples validate and malformed identities fail explicitly.
-- [ ] The old task/scorer contract remains unchanged.
+- [x] Correct native answers pass with zero product metadata.
+- [x] Invalid locations and forbidden mutations fail even if the agent claims success.
+- [x] Contract examples validate and malformed identities fail explicitly.
+- [x] The old task/scorer contract remains unchanged.
 
 ## Task 2: Align current claims with existing evidence
 

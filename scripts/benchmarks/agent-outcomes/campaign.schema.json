@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-outcomes/campaign-v1.json",
+  "title": "Native agent outcome campaign",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "campaign_id",
+    "task_set_sha256",
+    "host",
+    "model",
+    "arms",
+    "repetition_count",
+    "order_seed",
+    "platform_toolchain_image_sha256",
+    "network_policy",
+    "resource_limits",
+    "approved_total_run_count",
+    "pricing",
+    "approved_money_ceiling"
+  ],
+  "properties": {
+    "contract_id": { "const": "agent-outcomes-v1" },
+    "campaign_id": { "$ref": "#/$defs/id" },
+    "task_set_sha256": { "$ref": "#/$defs/sha256" },
+    "host": { "$ref": "#/$defs/host" },
+    "model": { "$ref": "#/$defs/model" },
+    "arms": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/arm" }
+    },
+    "repetition_count": { "type": "integer", "minimum": 1 },
+    "order_seed": { "type": "integer" },
+    "platform_toolchain_image_sha256": { "$ref": "#/$defs/sha256" },
+    "network_policy": { "enum": ["denied", "allowlist", "unrestricted"] },
+    "resource_limits": { "$ref": "#/$defs/resourceLimits" },
+    "approved_total_run_count": { "type": "integer", "minimum": 1 },
+    "pricing": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/pricing" }
+      ]
+    },
+    "approved_money_ceiling": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "number", "exclusiveMinimum": 0 }
+      ]
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "nullableCount": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 0 }
+      ]
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "binary_sha256"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "version": { "type": "string", "minLength": 1 },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_id", "reasoning"],
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f]+$"
+        },
+        "reasoning": { "type": "string", "minLength": 1 }
+      }
+    },
+    "runtimeIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sidecar_commit", "binary_sha256", "runtime_payload_sha256", "model_id",
+        "model_sha256", "model_manifest_sha256", "miller_fixture_commit",
+        "resolved_backend", "process_mode", "served_dimensions",
+        "conformance_harness_sha256", "throughput_harness_sha256",
+        "concurrency_harness_sha256"
+      ],
+      "properties": {
+        "sidecar_commit": { "$ref": "#/$defs/commit" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "model_id": { "type": "string", "minLength": 1 },
+        "model_sha256": { "$ref": "#/$defs/sha256" },
+        "model_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "miller_fixture_commit": { "$ref": "#/$defs/commit" },
+        "resolved_backend": { "type": "string", "minLength": 1 },
+        "process_mode": { "enum": ["stdio", "broker"] },
+        "served_dimensions": { "type": "integer", "minimum": 1 },
+        "conformance_harness_sha256": { "$ref": "#/$defs/sha256" },
+        "throughput_harness_sha256": { "$ref": "#/$defs/sha256" },
+        "concurrency_harness_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "arm": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arm_id", "runtime_identity", "runtime_qualification_sha256"],
+          "properties": {
+            "arm_id": { "enum": ["native", "native+miller-lexical"] },
+            "runtime_identity": { "type": "null" },
+            "runtime_qualification_sha256": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arm_id", "runtime_identity", "runtime_qualification_sha256"],
+          "properties": {
+            "arm_id": { "const": "native+miller-semantic" },
+            "runtime_identity": { "$ref": "#/$defs/runtimeIdentity" },
+            "runtime_qualification_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "resourceLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_parallel_runs", "memory_bytes"],
+      "properties": {
+        "max_parallel_runs": { "type": "integer", "minimum": 1 },
+        "memory_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "input_per_million", "cached_input_per_million", "output_per_million"],
+      "properties": {
+        "currency": { "type": "string", "minLength": 1 },
+        "input_per_million": { "type": "number", "minimum": 0 },
+        "cached_input_per_million": { "type": "number", "minimum": 0 },
+        "output_per_million": { "type": "number", "minimum": 0 }
+      }
+    },
+    "runRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "total_model_input_tokens": { "type": "null" },
+                "total_model_cached_tokens": { "type": "null" },
+                "total_model_output_tokens": { "type": "null" }
+              }
+            },
+            {
+              "properties": {
+                "total_model_input_tokens": { "type": "integer", "minimum": 0 },
+                "total_model_cached_tokens": { "type": "integer", "minimum": 0 },
+                "total_model_output_tokens": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "contract_id", "campaign_sha256", "run_id", "task_id", "arm_id",
+        "repetition", "order", "outcome", "verifier_evidence_sha256",
+        "wall_time_seconds", "native_tool_counts", "miller_calls",
+        "total_model_input_tokens", "total_model_cached_tokens",
+        "total_model_output_tokens", "raw_event_sha256", "price_derived_cost"
+      ],
+      "properties": {
+        "contract_id": { "const": "agent-outcomes-v1" },
+        "campaign_sha256": { "$ref": "#/$defs/sha256" },
+        "run_id": { "$ref": "#/$defs/id" },
+        "task_id": { "$ref": "#/$defs/id" },
+        "arm_id": { "enum": ["native", "native+miller-lexical", "native+miller-semantic"] },
+        "repetition": { "type": "integer", "minimum": 1 },
+        "order": { "type": "integer", "minimum": 1 },
+        "outcome": { "enum": ["correct", "incorrect", "timeout", "product_error", "infrastructure_void", "unsupported"] },
+        "verifier_evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "wall_time_seconds": { "type": "number", "minimum": 0 },
+        "native_tool_counts": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "miller_calls": { "type": "integer", "minimum": 0 },
+        "total_model_input_tokens": { "$ref": "#/$defs/nullableCount" },
+        "total_model_cached_tokens": { "$ref": "#/$defs/nullableCount" },
+        "total_model_output_tokens": { "$ref": "#/$defs/nullableCount" },
+        "raw_event_sha256": { "$ref": "#/$defs/sha256" },
+        "price_derived_cost": {
+          "oneOf": [{ "type": "null" }, { "type": "number", "minimum": 0 }]
+        }
+      }
+    },
+    "runtimeSetup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "download_bytes", "download_seconds", "extraction_seconds",
+        "sidecar_convergence_seconds", "model_load_seconds", "peak_process_memory_bytes",
+        "shared_broker_mode", "steady_state_ready", "measurement_scope"
+      ],
+      "properties": {
+        "download_bytes": { "$ref": "#/$defs/nullableCount" },
+        "download_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "extraction_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "sidecar_convergence_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "model_load_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "peak_process_memory_bytes": { "$ref": "#/$defs/nullableCount" },
+        "shared_broker_mode": { "type": ["boolean", "null"] },
+        "steady_state_ready": { "type": ["boolean", "null"] },
+        "measurement_scope": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "correctness", "sufficient_evidence", "calls", "tokens", "wall_time_seconds",
+        "retries", "irrelevant_output", "retrieval_diagnostics", "fallback"
+      ],
+      "properties": {
+        "correctness": { "$ref": "#/$defs/countMetric" },
+        "sufficient_evidence": { "$ref": "#/$defs/countMetric" },
+        "calls": { "$ref": "#/$defs/nullableMetric" },
+        "tokens": { "$ref": "#/$defs/nullableMetric" },
+        "wall_time_seconds": { "$ref": "#/$defs/nullableMetric" },
+        "retries": { "$ref": "#/$defs/nullableMetric" },
+        "irrelevant_output": { "$ref": "#/$defs/nullableMetric" },
+        "retrieval_diagnostics": { "$ref": "#/$defs/nullableMetric" },
+        "fallback": { "$ref": "#/$defs/nullableMetric" }
+      }
+    },
+    "countMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "total"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "nullableMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": { "type": ["number", "integer", "boolean", "string", "object", "null"] }
+      }
+    },
+    "reportArm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arm_id", "runtime_identity", "runtime_qualification_sha256", "metrics"],
+      "properties": {
+        "arm_id": { "$ref": "#/$defs/id" },
+        "runtime_identity": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/runtimeIdentity" }] },
+        "runtime_qualification_sha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
+        "metrics": { "$ref": "#/$defs/metrics" }
+      }
+    },
+    "finalReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "campaign_sha256", "arms"],
+      "properties": {
+        "schema": { "const": "agent-outcomes-v1" },
+        "campaign_sha256": { "$ref": "#/$defs/sha256" },
+        "arms": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/reportArm" } }
+      }
+    }
+  }
+}
