@@ -21,7 +21,10 @@ public sealed class StoreWalCheckpointTests
             using var command = setup.CreateCommand();
             command.CommandText = "PRAGMA journal_mode=WAL; CREATE TABLE facts(x); INSERT INTO facts VALUES(1);";
             command.ExecuteNonQuery();
-            header = File.ReadAllBytes(database + "-wal")[..32];
+            using var wal = new FileStream(database + "-wal", FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            header = new byte[32];
+            wal.ReadExactly(header);
         }
         if (headerOnly)
             File.WriteAllBytes(database + "-wal", header);
