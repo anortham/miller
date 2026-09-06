@@ -131,10 +131,10 @@ This test must fail if the current output changes; it must not construct the fut
 
 **Acceptance:**
 
-- [ ] Compact and JSON pre-move goldens cover ordinary, actionable, source-rescue, reference-aware, semantic-off, budget-bounded, and empty paths.
-- [ ] Cancellation phase order and completed-phase behavior are captured.
-- [ ] Cold/warm retrieval and source-read counts are captured where existing seams expose them.
-- [ ] The oracle is produced by the current public boundary and is committed before movement.
+- [x] Compact and JSON pre-move goldens cover ordinary, actionable, source-rescue, reference-aware, semantic-off, budget-bounded, and empty paths.
+- [x] Cancellation phase order and completed-phase behavior are captured.
+- [x] Cold/warm retrieval and source-read counts are captured where existing seams expose them.
+- [x] The oracle is produced by the current public boundary and is committed before movement.
 
 ## Task 2: Extract resolved query orchestration
 

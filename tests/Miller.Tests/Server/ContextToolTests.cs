@@ -18,7 +18,7 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>Pins context pivot ranking, evidence packing, rendering, semantic policy, and task anchors.</summary>
-public sealed class ContextToolTests
+public sealed partial class ContextToolTests
 {
     private const string ControllerId = "00000000000000000000000000000001";
     private const string ServiceId = "00000000000000000000000000000002";
