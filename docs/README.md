@@ -5,7 +5,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [Reader-retention restart recovery](findings/2026-09-05-reader-retention-restart-recovery.md) - the live legacy-store upgrade case missed by M1's initial fixtures, normal-workflow recovery, and paired producer/bootstrap fixes awaiting integration.
+- [M2/M4 integration verification](findings/2026-09-06-m2-m4-integration-verification.md) - published 2.40.4 cursor ordering and recovery, SQLite sidecar parity/cost evidence, 40-language Content/Search/Context projection, byte-stable Context boundaries, and combined build/fast/Scale gates.
+- [Reader-retention restart recovery](findings/2026-09-05-reader-retention-restart-recovery.md) - the live legacy-store upgrade case missed by M1's initial fixtures, normal-workflow recovery, and the paired producer/bootstrap fixes that preceded the current 2.40.4 pin.
 - [Architecture review follow-up program](plans/2026-09-04-architecture-review-program.md) - seven implementation plans across Miller, julie-extractors, and julie-semantic-sidecar, with execution order, file ownership, compatibility gates, and verification. Its preparation-state table is historical; consult each plan's acceptance and findings for execution evidence.
 - [M1 reader-retention qualification](findings/2026-09-04-reader-retention-integration.md) - implementation, native retention and 40-language evidence, Linux/Windows verification, published 2.40.0 pin adoption, and remaining native process-identity limits.
 - [`findings/2026-09-04-v1.27.2-release-verification.md`](findings/2026-09-04-v1.27.2-release-verification.md) - live v1.27.2 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, and published-package smoke with the local schema digest.
@@ -93,7 +94,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`../README.md`](../README.md) - public entry point: quickstart, tool overview, architecture summary, troubleshooting.
 - [`install.md`](install.md) - full install guide: plugin details and session hooks, manual binary install, MCP configuration, instruction-tier harnesses, source checkout, local plugin development.
 - [`cli.md`](cli.md) - CLI reference: server vs one-shot modes, command examples, tool surface details, dashboard, local proof commands, text/JSON output contract.
-- [`known-limits.md`](known-limits.md) - current boundaries: A8 in-place search/content sidecar apply (implemented, not proven closed), semantic retrieval knobs, region search, bridge provider scope, Blazor resolution, AOT packaging, server restart pickup.
+- [`known-limits.md`](known-limits.md) - current boundaries: reader process-identity qualification, report-only sidecar cost baselines, semantic retrieval knobs, region search, bridge provider scope, Blazor resolution, AOT packaging, and server restart pickup.
 - [`findings/2026-08-09-index-store-ph3-acceptance.md`](findings/2026-08-09-index-store-ph3-acceptance.md) - v1.18 default-on family-store acceptance: view-scoped reads, orchestration, sidecars, migration, rollback export, provenance, and the disclosed A7/A8 follow-ups.
 - [`plans/2026-08-09-index-store-ph3-cleanup-plan.md`](plans/2026-08-09-index-store-ph3-cleanup-plan.md) - historical v4.3 execution-drift cleanup and the origin of the A7/A8 follow-up boundaries.
 - [`findings/2026-08-10-julie-extract-2.31.3-adoption.md`](findings/2026-08-10-julie-extract-2.31.3-adoption.md) - public 2.31.3 producer hardening pin, four-platform archive checksums, tag provenance, and restored-binary verification.

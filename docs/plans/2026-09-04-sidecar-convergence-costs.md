@@ -10,6 +10,8 @@
 
 **Architecture Quality:** Consumer-cursor watermarking is isolated behind an Indexing adapter; reader retention remains the separate M1 session concern; Server orchestrates. The main risk is advancing a watermark before sidecar commit or accepting a producer report for a different generation.
 
+**Status (2026-09-06):** Complete and locally qualified. Tasks 1 through 4 are integrated, and the [joint M2/M4 finding](../findings/2026-09-06-m2-m4-integration-verification.md) records the published 2.40.4 producer cursor, crash recovery, SQLite parity/cost, 40-language projection, build, fast, and Scale evidence. Timing and RSS remain report-only.
+
 ## Global Constraints
 
 - Preserve `SymbolSearchSidecar.EnsureStoreCurrent(string, IWorkspaceReadSession)` and `ContentCorpusSidecar.EnsureStoreCurrent(string, IWorkspaceReadSession)` behavior.
@@ -235,9 +237,9 @@ internal readonly record struct SidecarConvergenceCounters(
 3. Keep A8 open unless producer ordering, response validation, and local cost evidence all pass.
 4. Correctly link Julie with `../../../julie-extractors/...` from Miller `docs/plans`.
 
-- [ ] A8 wording matches evidence.
-- [ ] Links resolve.
-- [ ] No MCP/schema contract changes.
+- [x] A8 wording matches evidence.
+- [x] Links resolve.
+- [x] No MCP/schema contract changes.
 
 ## Safety matrix
 
@@ -255,3 +257,5 @@ internal readonly record struct SidecarConvergenceCounters(
 ## Completion evidence
 
 Completion requires focused tests for the matrix, SQLite equivalence, deterministic counters, producer response validation, exact command evidence, and Scale validation against the pinned Julie release when real artifacts are used. No hard latency or RSS bound is claimed.
+
+Completion evidence is in [the joint M2/M4 integration finding](../findings/2026-09-06-m2-m4-integration-verification.md), with machine-readable records under [`docs/findings/sidecar-convergence`](../findings/sidecar-convergence/).

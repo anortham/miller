@@ -1,9 +1,11 @@
 # Known limits
 
 - Family-store mode is default-on. Set `MILLER_INDEX_STORE=off` for the legacy standalone compatibility
-  and rollback path. Until the Ph4/Ph5 A7 durable reader-pin
-  protocol lands, producer GC must not run concurrently with live Miller family-store readers; an unpinned
-  non-current generation may be reclaimed during a long read. The explicit standalone path is unaffected.
+  and rollback path. Family-store read sessions acquire producer-owned retention before opening a serving
+  generation and release it after their last connection closes. Unknown process identity and failed renewal
+  or release retain protection and can delay cleanup. Native forced owner death, PID reuse, and unknown kernel
+  identity remain explicit Miller qualification limits; see the
+  [M1 finding](findings/2026-09-04-reader-retention-integration.md). The explicit standalone path is unaffected.
 - Generated ignore policy is Miller-owned state at
   `$MILLER_HOME/.miller/ignore-policies/<canonical-workspace-id>.julieignore`. Workspace removal derives the ID
   from the validated canonical root and deletes only that exact
@@ -11,11 +13,15 @@
   versions are not migrated or auto-deleted: ownership cannot be proven from a header after a user edits the file,
   so review and remove those legacy files manually. If the global policy cannot be removed, the removal result
   reports the cleanup warning while keeping the existing `.miller` and registry safeguards.
-- Search and content family-store sidecars apply store file changes in place when the sidecar stamp and a complete
-  revision delta match (A8, shipped in v1.19.4). A failed or ineligible delta still falls back to a full
-  WriteStoreView with no log. There is no local reproducible cost gate, so A8 is implemented, not proven closed.
-  Convergence is serialized by the family sidecar lease, so concurrent workspaces can leave a sidecar stale until
-  a later converge succeeds; store readers refuse a stale sidecar rather than serving a legacy artifact.
+- Search and content family-store sidecars use per-kind durable consumer cursors and apply file changes in place
+  only when the sidecar stamp and complete protected revision delta match. Sidecar data and stamp commit before
+  the final cursor advance; incomplete history, identity changes, and unsafe recovery fall back to a full build.
+  SQLite logical-row/stamp parity, deterministic counters, crash-boundary recovery, the published 2.40.4 cursor
+  contract, and the 40-language read/projection path are locally qualified in the
+  [M2/M4 integration finding](findings/2026-09-06-m2-m4-integration-verification.md). Its five-run synthetic timing
+  and RSS are report-only, not performance promises. Convergence remains serialized by the family sidecar lease,
+  so concurrent workspaces can leave a sidecar stale until a later converge succeeds; readers refuse a stale
+  sidecar rather than serving a legacy artifact.
 - Local semantic/vector retrieval is owned by Miller and **on by default**. Set `MILLER_SEMANTIC=off`
   for the permanent zero-work path: no broker path derivation, model access, process, accelerator
   probe, vector read/write, or semantic telemetry. `MILLER_SEMANTIC=shadow` builds and measures
@@ -96,4 +102,3 @@
   evicted-held entries until the reading session disposes. Cache size estimates reflect internal
   memory models, not process RSS; process RSS is measured separately by platform samplers and is
   not guaranteed to stay within the 256 MiB soft retained budget.
-

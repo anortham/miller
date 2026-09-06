@@ -10,6 +10,8 @@
 
 **Architecture Quality:** This is an internal responsibility-boundary refactor with behavior preservation as the acceptance criterion. The risk is high because the current class combines routing, retrieval, semantic admission, graph/body reads, cancellation, telemetry, and rendering. Keep the existing seams and types until characterization parity proves each move; do not split by arbitrary line count or introduce plugin/provider interfaces.
 
+**Status (2026-09-06):** Complete and locally qualified. The immutable pre-move public fixture remains byte-identical, all callers use the shared query/build/render path, and the [joint M2/M4 finding](../findings/2026-09-06-m2-m4-integration-verification.md) records focused parity plus the combined build, fast, Scale, and all-language Context evidence.
+
 ## Global Constraints
 
 - Preserve the public `ContextTool` constructors and MCP `Context`/`ContextWithCancellation` signatures, attributes, descriptions, defaults, schema, and cancellation-token behavior.
@@ -324,7 +326,7 @@ dotnet test
 - [x] CLI and semantic-model evaluator use the shared internal path.
 - [x] Public MCP metadata and all output/behavior contracts are unchanged.
 - [x] Impact analysis finds no bypass, dead forwarder, or unexpected caller.
-- [ ] Verification ledger records focused tests, build, fast suite, and parity evidence.
+- [x] Verification ledger records focused tests, build, fast suite, and parity evidence.
 
 ## Completion Boundary
 
