@@ -168,6 +168,7 @@ public sealed class RevisionFactCacheStore
 
         Lazy<RevisionFactCache> lazy;
         long entryToken;
+        ScopeEntry acquiredEntry;
         lock (_gate)
         {
             if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? existing)
@@ -176,6 +177,7 @@ public sealed class RevisionFactCacheStore
                 existing.LastUsed = ++_clock;
                 lazy = existing.Lazy;
                 entryToken = existing.Token;
+                acquiredEntry = existing;
                 if (!lazy.IsValueCreated)
                     _coalescedLoadCount++;
             }
@@ -228,7 +230,8 @@ public sealed class RevisionFactCacheStore
                             }
                         },
                         LazyThreadSafetyMode.ExecutionAndPublication);
-                    _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock, entryToken);
+                    acquiredEntry = new ScopeEntry(revisionIdentity, lazy, ++_clock, entryToken);
+                    _scopes[workspaceScope] = acquiredEntry;
                     previousHold = null;
                 }
                 finally
@@ -236,6 +239,7 @@ public sealed class RevisionFactCacheStore
                     previousHold?.Dispose();
                 }
             }
+            acquiredEntry.PendingAcquires++;
         }
 
         RevisionFactCache cache;
@@ -247,6 +251,7 @@ public sealed class RevisionFactCacheStore
         {
             lock (_gate)
             {
+                acquiredEntry.PendingAcquires--;
                 if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? current)
                     && current.Token == entryToken)
                 {
@@ -259,6 +264,7 @@ public sealed class RevisionFactCacheStore
 
         lock (_gate)
         {
+            acquiredEntry.PendingAcquires--;
             if (_scopes.TryGetValue(workspaceScope, out ScopeEntry? current)
                 && current.Token == entryToken)
             {
@@ -304,7 +310,10 @@ public sealed class RevisionFactCacheStore
             return;
 
         foreach (string scope in _scopes
-                     .Where(pair => !string.Equals(pair.Key, keepScope, StringComparison.Ordinal))
+                     // Pending acquisitions coordinate single-flight, including the interval between
+                     // Lazy completion and lease registration. They cannot be evicted as retained LRU.
+                     .Where(pair => !string.Equals(pair.Key, keepScope, StringComparison.Ordinal)
+                         && pair.Value.PendingAcquires == 0 && pair.Value.Lazy.IsValueCreated)
                      .OrderBy(pair => pair.Value.LastUsed)
                      .Select(pair => pair.Key)
                      .ToArray())
@@ -334,5 +343,7 @@ public sealed class RevisionFactCacheStore
         internal long LastUsed { get; set; }
 
         internal long Token { get; }
+
+        internal int PendingAcquires { get; set; }
     }
 }

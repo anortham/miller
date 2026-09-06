@@ -219,21 +219,110 @@ public sealed class FactCacheResourceAccountingTests
 
     [Fact]
     public void Benchmark_FactCacheResources()
-    {
-        string? outputPath = Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_OUTPUT");
-        int runs = int.TryParse(Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_RUNS"), out int r) ? r : 5;
-        int workspaces = int.TryParse(Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_WORKSPACES"), out int w) ? w : 2;
-        int revisions = int.TryParse(Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_REVISIONS"), out int rev) ? rev : 2;
-        long budgetMb = long.TryParse(Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_BUDGET_MB"), out long b) ? b : 256;
-        string fixtureType = Environment.GetEnvironmentVariable("BENCH_FACT_CACHE_FIXTURE") ?? "sqlite-synthetic";
+        => RunBenchmark(Environment.GetEnvironmentVariable);
 
-        long budgetBytes = budgetMb * 1024L * 1024L;
+    [Theory]
+    [InlineData("FIXTURE", "does-not-exist")]
+    [InlineData("FIXTURE", "")]
+    [InlineData("RUNS", "0")]
+    [InlineData("RUNS", "-1")]
+    [InlineData("RUNS", "garbage")]
+    [InlineData("RUNS", "2147483648")]
+    [InlineData("RUNS", "2147483647")]
+    [InlineData("RUNS", "")]
+    [InlineData("RUNS", "1.5")]
+    [InlineData("RUNS", "+1")]
+    [InlineData("WORKSPACES", "0")]
+    [InlineData("WORKSPACES", "-1")]
+    [InlineData("WORKSPACES", "garbage")]
+    [InlineData("WORKSPACES", "2147483648")]
+    [InlineData("REVISIONS", "0")]
+    [InlineData("REVISIONS", "-1")]
+    [InlineData("REVISIONS", "garbage")]
+    [InlineData("REVISIONS", "2147483638")]
+    [InlineData("BUDGET_MB", "0")]
+    [InlineData("BUDGET_MB", "-1")]
+    [InlineData("BUDGET_MB", "garbage")]
+    [InlineData("BUDGET_MB", "8796093022208")]
+    [InlineData("BUDGET_MB", "9223372036854775808")]
+    public void Benchmark_InvalidInputIsRejectedBeforeOutputChanges(string option, string value)
+    {
+        string output = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(output, "existing report");
+            var inputs = new Dictionary<string, string>
+            {
+                ["BENCH_FACT_CACHE_OUTPUT"] = output,
+                ["BENCH_FACT_CACHE_RUNS"] = "1",
+                ["BENCH_FACT_CACHE_WORKSPACES"] = "1",
+                ["BENCH_FACT_CACHE_REVISIONS"] = "1",
+                [$"BENCH_FACT_CACHE_{option}"] = value
+            };
+            var error = Assert.Throws<ArgumentException>(() => RunBenchmark(name => inputs.GetValueOrDefault(name)));
+            Assert.Contains($"BENCH_FACT_CACHE_{option}", error.Message);
+            Assert.Equal("existing report", File.ReadAllText(output));
+        }
+        finally
+        {
+            File.Delete(output);
+        }
+    }
+
+    [Theory]
+    [InlineData("1", 1L, 1048576L)]
+    [InlineData("0001", 1L, 1048576L)]
+    [InlineData("8796093022207", 8796093022207L, 9223372036853727232L)]
+    public void Benchmark_ValidInputsProduceMatchingOptionsAndRuns(string budget, long expectedMb, long expectedBytes)
+    {
+        string output = Path.GetTempFileName();
+        try
+        {
+            var inputs = new Dictionary<string, string>
+            {
+                ["BENCH_FACT_CACHE_OUTPUT"] = output,
+                ["BENCH_FACT_CACHE_FIXTURE"] = "sqlite-synthetic",
+                ["BENCH_FACT_CACHE_RUNS"] = "2",
+                ["BENCH_FACT_CACHE_WORKSPACES"] = "1",
+                ["BENCH_FACT_CACHE_REVISIONS"] = "1",
+                ["BENCH_FACT_CACHE_BUDGET_MB"] = budget
+            };
+            RunBenchmark(name => inputs.GetValueOrDefault(name));
+            using var report = JsonDocument.Parse(File.ReadAllText(output));
+            JsonElement options = report.RootElement.GetProperty("options");
+            Assert.Equal("sqlite-synthetic", options.GetProperty("fixture").GetString());
+            Assert.Equal(2, options.GetProperty("runs").GetInt32());
+            Assert.Equal(1, options.GetProperty("workspaces").GetInt32());
+            Assert.Equal(1, options.GetProperty("revisions").GetInt32());
+            Assert.Equal(expectedMb, options.GetProperty("budget_mb").GetInt64());
+            Assert.Equal(expectedBytes, report.RootElement.GetProperty("diagnostics").GetProperty("cache_budget_bytes").GetInt64());
+            Assert.Equal(2, report.RootElement.GetProperty("runs").GetArrayLength());
+            Assert.Equal(1, report.RootElement.GetProperty("deterministic_summary").GetProperty("loads").GetInt32());
+        }
+        finally
+        {
+            File.Delete(output);
+        }
+    }
+
+    private static void RunBenchmark(Func<string, string?> readArgument)
+    {
+        string? outputPath = readArgument("BENCH_FACT_CACHE_OUTPUT");
+        int runs = (int)ReadPositiveArgument(readArgument, "RUNS", 5, int.MaxValue - 1);
+        int workspaces = (int)ReadPositiveArgument(readArgument, "WORKSPACES", 2, int.MaxValue - 1);
+        int revisions = (int)ReadPositiveArgument(readArgument, "REVISIONS", 2, int.MaxValue - 10);
+        long budgetMb = ReadPositiveArgument(readArgument, "BUDGET_MB", 256, long.MaxValue / (1024L * 1024L));
+        string fixtureType = readArgument("BENCH_FACT_CACHE_FIXTURE") ?? "sqlite-synthetic";
+        if (fixtureType != "sqlite-synthetic")
+            throw new ArgumentException("BENCH_FACT_CACHE_FIXTURE must be sqlite-synthetic.");
+
+        long budgetBytes = checked(budgetMb * 1024L * 1024L);
 
         var runResults = new List<BenchmarkRunRecord>();
 
         for (int runIndex = 1; runIndex <= runs; runIndex++)
         {
-            BenchmarkRunRecord runRecord = ExecuteBenchmarkRun(runIndex, fixtureType, workspaces, revisions, budgetBytes);
+            BenchmarkRunRecord runRecord = ExecuteBenchmarkRun(runIndex, workspaces, revisions, budgetBytes);
             runResults.Add(runRecord);
         }
 
@@ -306,14 +395,24 @@ public sealed class FactCacheResourceAccountingTests
         }
     }
 
+    private static long ReadPositiveArgument(Func<string, string?> readArgument, string option, long defaultValue, long maximum)
+    {
+        string name = $"BENCH_FACT_CACHE_{option}";
+        string? value = readArgument(name);
+        if (value is null)
+            return defaultValue;
+        if (value.Length == 0 || value.Any(c => c is < '0' or > '9')
+            || !long.TryParse(value, out long parsed) || parsed < 1 || parsed > maximum)
+            throw new ArgumentException($"{name} must be a positive integer no greater than {maximum}.");
+        return parsed;
+    }
+
     private static BenchmarkRunRecord ExecuteBenchmarkRun(
         int runIndex,
-        string fixtureType,
         int workspaceCount,
         int revisionCount,
         long budgetBytes)
     {
-        _ = fixtureType;
         var sw = Stopwatch.StartNew();
         var store = new RevisionFactCacheStore(byteBudget: budgetBytes);
         var fixtures = new List<ResolutionStoreFixture>();

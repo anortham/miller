@@ -7,6 +7,70 @@ namespace Miller.Tests.Indexing.Resolution;
 
 public sealed class RevisionFactCacheLeaseTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Acquire_PendingLoadSurvivesBudgetEviction_StaysSingleFlight(bool replaceIdentity)
+    {
+        using var a = ResolutionStoreFixture.Create();
+        using var b = ResolutionStoreFixture.Create();
+        a.AddFile(1, "a.cs");
+        a.AddSymbol(1, "a", "Alpha", "class", "a.cs");
+        b.AddFile(1, "b.cs");
+        b.AddSymbol(1, "b", "Beta", "class", "b.cs");
+        var store = new RevisionFactCacheStore(byteBudget: 1);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int loads = 0;
+        var first = Task.Run(() => store.Acquire("a", "r1", () =>
+        {
+            Interlocked.Increment(ref loads);
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))
+                throw new TimeoutException();
+            return a.OpenRead();
+        }, a.Visibility()), TestContext.Current.CancellationToken);
+        Task<RevisionFactCacheLease>? second = null;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            using var other = store.Acquire("b", "r1", b.OpenRead, b.Visibility());
+            second = Task.Run(() => store.Acquire("a", "r1", () =>
+            {
+                Interlocked.Increment(ref loads);
+                return a.OpenRead();
+            }, a.Visibility()), TestContext.Current.CancellationToken);
+            Assert.True(SpinWait.SpinUntil(
+                () => second.IsCompleted || store.GetResourceSnapshot().CoalescedLoadCount > 0,
+                TimeSpan.FromSeconds(5)));
+            using var newer = replaceIdentity
+                ? store.Acquire("a", "r2", a.OpenRead, a.Visibility())
+                : null;
+            release.Set();
+            using var firstLease = await first;
+            using var secondLease = await second;
+            Assert.Equal(1, loads);
+            Assert.Same(firstLease.Cache, secondLease.Cache);
+            CacheResourceSnapshot snapshot = store.GetResourceSnapshot();
+            Assert.Equal(replaceIdentity ? 3 : 2, snapshot.LoadCount);
+            Assert.Equal(replaceIdentity ? 4 : 3, snapshot.ActiveLeaseCount);
+            Assert.Equal(replaceIdentity ? 3 : 2, snapshot.UniqueLiveEntryCount);
+            Assert.Equal(firstLease.Cache.ResidentBytes + other.Cache.ResidentBytes
+                + (newer?.Cache.ResidentBytes ?? 0), snapshot.UniqueLiveBytes);
+            Assert.Equal(1, snapshot.RetainedEntryCount);
+            using var current = store.Acquire("a", replaceIdentity ? "r2" : "r1",
+                () => throw new InvalidOperationException("The retained cache must not reload."), a.Visibility());
+            Assert.Same(newer?.Cache ?? firstLease.Cache, current.Cache);
+        }
+        finally
+        {
+            release.Set();
+            (await first).Dispose();
+            if (second is not null) (await second).Dispose();
+        }
+        Assert.Equal(0, store.GetResourceSnapshot().ActiveLeaseCount);
+    }
+
     [Fact]
     public void Acquire_HoldingLeaseThroughLruEviction_KeepsCacheUsableAndCountedAsEvictedHeld()
     {
