@@ -176,7 +176,8 @@ public sealed class StoreFamilyResolver
                         family.StoreRoot,
                         reconciled.ViewId,
                         facts.WorkspaceRoot,
-                        StoreBindingState.Ready);
+                        selected.IsPublished ? StoreBindingState.Ready : StoreBindingState.Planned,
+                        selected.IsPublished ? StoreViewReplan.None : StoreViewReplan.NeverPublished);
                     StoreWorkspacePointer.Write(facts.WorkspaceRoot, reconciledBinding);
                     return reconciledBinding;
                 }
@@ -246,7 +247,7 @@ public sealed class StoreFamilyResolver
                 return false;
             StoreCatalogView? view = catalog.Views.SingleOrDefault(item =>
                 ArtifactRootIdentity.Matches(item.Root, facts.WorkspaceRoot));
-            if (view is null)
+            if (view is null || !view.IsPublished)
                 return false;
 
             var candidate = new StoreFamilyBinding(
@@ -290,10 +291,11 @@ public sealed class StoreFamilyResolver
         if (catalog.FamilyId != family.FamilyId)
             family = _registry.ReplaceStoreFamilyIdentity(family.FamilyId, catalog.FamilyId, family.StoreRoot);
 
-        if (selected is null)
+        if (selected is null || !selected.IsPublished)
         {
-            // The serving catalog does not carry this view id at all. Two causes: the first import never
-            // completed, or the view was published and then lost. Both recover the same way — re-plan THIS
+            // A view row is created before the first manifest is published. An interrupted import can
+            // leave that row with current_generation NULL; it is no more readable than an absent row.
+            // Either the first import never completed, or a published view was lost. Re-plan THIS
             // view id and let the caller import it. A Planned binding grants no reads (FamilyStoreReadSession
             // .Open and .Probe both refuse a non-Ready binding), so re-planning can never serve a wrong tree.
             // The registry decides only how LOUD Miller is, never whether it recovers.
@@ -306,7 +308,7 @@ public sealed class StoreFamilyResolver
             StoreMemberRegistryRow planned = _registry.UpsertStoreMember(
                 facts.WorkspaceId,
                 family.FamilyId,
-                member.ViewId,
+                selected?.ViewId ?? member.ViewId,
                 facts.WorkspaceRoot,
                 facts.RootIdentity);
             var plannedBinding = new StoreFamilyBinding(
@@ -567,11 +569,11 @@ public sealed class StoreFamilyResolver
 
         using SqliteCommand views = connection.CreateCommand();
         views.Transaction = snapshot;
-        views.CommandText = "SELECT view_id, root FROM views ORDER BY view_id";
+        views.CommandText = "SELECT view_id, root, current_generation FROM views ORDER BY view_id";
         using SqliteDataReader reader = views.ExecuteReader();
         var rows = new List<StoreCatalogView>();
         while (reader.Read())
-            rows.Add(new StoreCatalogView(reader.GetString(0), reader.GetString(1)));
+            rows.Add(new StoreCatalogView(reader.GetString(0), reader.GetString(1), !reader.IsDBNull(2)));
         return new StoreCatalog(familyId, rows);
     }
 
@@ -640,5 +642,5 @@ public sealed class StoreFamilyResolver
     }
 
     private sealed record StoreCatalog(Guid FamilyId, IReadOnlyList<StoreCatalogView> Views);
-    private sealed record StoreCatalogView(string ViewId, string Root);
+    private sealed record StoreCatalogView(string ViewId, string Root, bool IsPublished);
 }

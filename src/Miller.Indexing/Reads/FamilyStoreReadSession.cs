@@ -503,7 +503,7 @@ public sealed class FamilyStoreReadSession :
     }
 
     /// <summary>
-    /// Metadata-only import planning. An absent view cannot acquire a serving manifest.
+    /// Metadata-only import planning. An absent or unpublished view cannot acquire a serving manifest.
     /// A present view still needs normal admission and identity validation before any serving read.
     /// </summary>
     internal static bool HasViewForImportPreflight(StoreFamilyBinding binding)
@@ -516,15 +516,16 @@ public sealed class FamilyStoreReadSession :
         _ = ValidateStoreMetadata(ReadStoreMetadata(connection, compatibilityOnly: true), binding);
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = validation;
-        command.CommandText = "SELECT root FROM views WHERE view_id=$view";
+        command.CommandText = "SELECT root, current_generation FROM views WHERE view_id=$view";
         command.Parameters.AddWithValue("$view", binding.ViewId);
-        object? root = command.ExecuteScalar();
-        if (root is null)
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
             return false;
+        object root = reader.GetValue(0);
         if (root is not string workspaceRoot || !ArtifactRootIdentity.Matches(workspaceRoot, binding.WorkspaceRoot))
             throw new FamilyStoreReadException(FamilyStoreReadFailure.ViewRootMismatch,
                 "The planned family-store view records a different workspace root.");
-        return true;
+        return !reader.IsDBNull(1);
     }
 
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
