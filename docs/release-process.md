@@ -84,6 +84,19 @@ Semantic restore failure fails the release job even though semantic retrieval is
 (ADR-0003): a local build with no restore is fine, but a published archive silently missing the sidecar is
 not.
 
+### Extractor pin qualification
+
+When bumping `julie-extract`, update the archive hashes, `MillerExtractContract.PinnedJulieExtractVersion`,
+its explicit expected-version tests, README, and third-party notice together. Restore the published
+binary before verification.
+
+Fresh family stores use their creator's product version as `min_reader_version`. A pin bump therefore
+also requires explicit qualification of `FamilyStoreReadSession.ReaderContractCapability`: compare the
+producer's reader/schema/coordinator contracts, test a newly created store with the published binary,
+and advance the capability only after that evidence supports it. Keep the capability independent of
+the download pin and retain rejection tests for the next unsupported version. Run the real-producer
+retention and sidecar cursor Scale tests before starting the full Windows release gate.
+
 To bump the semantic pin:
 
 1. Update `version` and every `sha256` under `sidecar` (four triples) in `scripts/semantic-pins.json`;
