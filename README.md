@@ -29,7 +29,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.28.0](https://github.com/anortham/miller/releases/tag/v1.28.0)** ·
+> **Current release: [v1.28.1](https://github.com/anortham/miller/releases/tag/v1.28.1)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
