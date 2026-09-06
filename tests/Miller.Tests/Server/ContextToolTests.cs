@@ -462,7 +462,7 @@ public sealed partial class ContextToolTests
 
         // "OrderService" search-seeds OrderService; both-direction expansion at 1 hop reaches its dependency
         // (OrderRepo), its dependents (OrderController), and the test (OrderServiceTests).
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "OrderService", tokenBudget: 4000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
@@ -488,7 +488,7 @@ public sealed partial class ContextToolTests
         MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, Array.Empty<GraphEdge>());
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.Run(
+        string output = ContextPipelineTestDriver.Run(
             index,
             resolver,
             query: "Locate the path-key normalizer and exact function definition",
@@ -520,7 +520,7 @@ public sealed partial class ContextToolTests
         // Seed exactly OrderRepo (via entry_symbols, with a non-matching query) so the assertion isolates the
         // zero-hop behaviour: no neighbour expansion, only the seed itself. (A lexical "OrderService" query would
         // BM25-match every "Order*" symbol — that is correct search behaviour but not what this test pins.)
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 4000, maxHops: 0,
             entrySymbols: new[] { "OrderRepo" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
@@ -536,7 +536,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
 
         // A query that matches nothing lexical, but OrderRepo passed as an entry symbol seeds the cluster.
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 4000, maxHops: 1,
             entrySymbols: new[] { "OrderRepo" }, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
@@ -552,7 +552,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
 
         // A failing-test hint mentioning OrderController as an identifier token → seeds it even with a vague query.
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "something broke", tokenBudget: 4000, maxHops: 1,
             entrySymbols: null, failingTest: "OrderController.PlaceOrder threw", stackTrace: null,
             json: false, out _, out _);
@@ -567,7 +567,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "npe", tokenBudget: 4000, maxHops: 0,
             entrySymbols: null, failingTest: null,
             stackTrace: "at OrderRepo.Load(int id) in OrderRepo.cs:line 12", json: false, out _, out _);
@@ -582,16 +582,16 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string full = ContextTool.Run(index, resolver,
+        string full = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int fullCount, out _);
 
-        string seedOnly = ContextTool.Run(index, resolver,
+        string seedOnly = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int seedCount, out _);
         int tinyBudget = checked((int)TokenEstimator.Count(seedOnly));
 
-        string tiny = ContextTool.Run(index, resolver,
+        string tiny = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: tinyBudget, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int tinyCount, out _);
 
@@ -608,7 +608,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "OrderService", tokenBudget: 0, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
@@ -625,7 +625,7 @@ public sealed partial class ContextToolTests
 
         foreach (int tokenBudget in new[] { 16, 32, 64, 128, 256, 512 })
         {
-            string output = ContextTool.Run(index, resolver,
+            string output = ContextPipelineTestDriver.Run(index, resolver,
                 query: "BudgetRoot", tokenBudget, maxHops: 1,
                 entrySymbols: null, failingTest: null, stackTrace: null, json, out int selectedCount, out _);
 
@@ -653,7 +653,7 @@ public sealed partial class ContextToolTests
         int selectedCount;
         if (referenceAware)
         {
-            output = ContextTool.RunReferenceAware(
+            output = ContextPipelineTestDriver.RunReferenceAware(
                 index, index.Graph, resolver,
                 query: "zzz no lexical match zzz", tokenBudget: 1, maxHops: 0,
                 entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -670,7 +670,7 @@ public sealed partial class ContextToolTests
         }
         else
         {
-            output = ContextTool.Run(index, resolver,
+            output = ContextPipelineTestDriver.Run(index, resolver,
                 query: "OrderService", tokenBudget: 1, maxHops: 0,
                 entrySymbols: null, failingTest: null, stackTrace: null, json,
                 out selectedCount, out _);
@@ -686,10 +686,10 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildRenderBudgetFixture();
 
-        string full = ContextTool.Run(index, resolver,
+        string full = ContextPipelineTestDriver.Run(index, resolver,
             query: "BudgetRoot", tokenBudget: 100000, maxHops: 0,
             entrySymbols: null, failingTest: null, stackTrace: null, json: true, out _, out _);
-        string bounded = ContextTool.Run(index, resolver,
+        string bounded = ContextPipelineTestDriver.Run(index, resolver,
             query: "BudgetRoot", tokenBudget: 512, maxHops: 0,
             entrySymbols: null, failingTest: null, stackTrace: null, json: true, out int boundedCount, out _);
 
@@ -711,7 +711,7 @@ public sealed partial class ContextToolTests
 
         // maxHops 99 clamps to 2 — but it must still WORK (not throw / not return empty). The 2-hop closure from
         // OrderController reaches OrderService (1) then OrderRepo + OrderServiceTests (2).
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "OrderController", tokenBudget: 100000, maxHops: 99,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
@@ -728,7 +728,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "   ", tokenBudget: 4000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
@@ -743,7 +743,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
 
         // An empty query is fine when other seeds (entry_symbols) are present — the query is not the only anchor.
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "", tokenBudget: 4000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
@@ -762,7 +762,7 @@ public sealed partial class ContextToolTests
         // OrderRepo, OrderServiceTests (3 reached). candidatesExamined is the D10 bytes_examined work proxy: the
         // total candidate set the packer considered = seeds + reached = 4. Pins finding 4 (was silently 0). A
         // large budget keeps every candidate so the selected count matches the examined count here.
-        ContextTool.Run(index, resolver,
+        ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false,
             out int selectedCount, out int candidatesExamined);
@@ -778,7 +778,7 @@ public sealed partial class ContextToolTests
 
         // A tiny budget truncates the SELECTED bundle, but the work proxy reflects the candidates considered, not
         // the smaller selected set — so candidatesExamined > selectedCount under a truncating budget.
-        ContextTool.Run(index, resolver,
+        ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 25, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false,
             out int selectedCount, out int candidatesExamined);
@@ -793,7 +793,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        ContextTool.Run(index, resolver,
+        ContextPipelineTestDriver.Run(index, resolver,
             query: "   ", tokenBudget: 4000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false,
             out _, out int candidatesExamined);
@@ -808,7 +808,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "OrderService", tokenBudget: 100000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: true, out _, out _);
 
@@ -838,7 +838,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
@@ -855,7 +855,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildSharedFileFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "Alpha", "Beta", "Gamma" }, failingTest: null, stackTrace: null,
             json: false, out int count, out _);
@@ -881,7 +881,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
@@ -899,7 +899,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildWideFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "Hub", tokenBudget: 100000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
@@ -963,7 +963,7 @@ public sealed partial class ContextToolTests
         // Anchor the bundle on Order (empty query → no BM25 seeds; the seed name "Order" is the scoring token).
         // All three neighbours sit at hop 1. Under the old (hop, id) order the unrelated Helper (smallest id ..01)
         // led; relevance ranking must surface the same-file OrderRepo and the name-overlap OrderQueue ahead of it.
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "Order" }, failingTest: null, stackTrace: null, json: true, out _, out _);
 
@@ -983,7 +983,7 @@ public sealed partial class ContextToolTests
 
         // OrderDeep (hop 2) shares the "Order" token (score 2) yet must still sort AFTER the unrelated hop-1
         // Helper (score 0): hop dominates relevance, so a hop-2 relevant neighbour never leapfrogs a hop-1 one.
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "", tokenBudget: 100000, maxHops: 2,
             entrySymbols: new[] { "Order" }, failingTest: null, stackTrace: null, json: true, out _, out _);
 
@@ -998,7 +998,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildSharedFileFixture();
 
-        string output = ContextTool.Run(index, resolver,
+        string output = ContextPipelineTestDriver.Run(index, resolver,
             query: "", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "Alpha", "Beta" }, failingTest: null, stackTrace: null,
             json: true, out int count, out _);
@@ -1017,7 +1017,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1147,7 +1147,7 @@ public sealed partial class ContextToolTests
             IsExact: true,
             SiteProvenance: "target_token");
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index,
             index.Graph,
             resolver,
@@ -1209,7 +1209,7 @@ public sealed partial class ContextToolTests
         Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", null);
         try
         {
-            ContextTool.RunReferenceAwareActionable(
+            ContextPipelineTestDriver.RunReferenceAwareActionable(
                 index,
                 index.Graph,
                 resolver,
@@ -1271,7 +1271,7 @@ public sealed partial class ContextToolTests
         string batchOutput;
         try
         {
-            batchOutput = ContextTool.RunReferenceAwareActionable(
+            batchOutput = ContextPipelineTestDriver.RunReferenceAwareActionable(
             index,
             index.Graph,
             resolver,
@@ -1315,7 +1315,7 @@ public sealed partial class ContextToolTests
         Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", "off");
         try
         {
-            string fallbackOutput = ContextTool.RunReferenceAware(
+            string fallbackOutput = ContextPipelineTestDriver.RunReferenceAware(
                 index,
                 index.Graph,
                 resolver,
@@ -1357,7 +1357,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         int batchCalls = 0;
 
-        string output = ContextTool.RunReferenceAwareActionable(
+        string output = ContextPipelineTestDriver.RunReferenceAwareActionable(
             index,
             index.Graph,
             resolver,
@@ -1393,7 +1393,7 @@ public sealed partial class ContextToolTests
     public void RunReferenceAware_WhenBaseBundleConsumesBudget_PerformsNoEvidenceRead()
     {
         var (index, resolver) = BuildFixture();
-        string baseOutput = ContextTool.RunReferenceAware(
+        string baseOutput = ContextPipelineTestDriver.RunReferenceAware(
             index,
             index.Graph,
             resolver,
@@ -1413,7 +1413,7 @@ public sealed partial class ContextToolTests
             out _);
         int batchCalls = 0;
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index,
             index.Graph,
             resolver,
@@ -1446,7 +1446,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1478,7 +1478,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1528,7 +1528,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build([symbol]);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunReferenceAwareActionable(
+        string output = ContextPipelineTestDriver.RunReferenceAwareActionable(
             index,
             index.Graph,
             resolver,
@@ -1572,7 +1572,7 @@ public sealed partial class ContextToolTests
             12,
             ReferenceKind.TypeUsage);
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1593,7 +1593,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.RunReferenceAware(
+        string output = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 0, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1622,7 +1622,7 @@ public sealed partial class ContextToolTests
 
         foreach (int tokenBudget in new[] { 16, 32, 64, 128, 256, 512 })
         {
-            string output = ContextTool.RunReferenceAware(
+            string output = ContextPipelineTestDriver.RunReferenceAware(
                 index, index.Graph, resolver,
                 query: "zzz no lexical match zzz", tokenBudget, maxHops: 0,
                 entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1663,7 +1663,7 @@ public sealed partial class ContextToolTests
                 ReferenceKind.TypeUsage))
             .ToArray();
 
-        string full = ContextTool.RunReferenceAware(
+        string full = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: int.MaxValue, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1674,7 +1674,7 @@ public sealed partial class ContextToolTests
             out _, out _);
 
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        string bounded = ContextTool.RunReferenceAware(
+        string bounded = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 40000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1704,7 +1704,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         string longSnippet = new('x', 5000);
 
-        string full = ContextTool.RunReferenceAware(
+        string full = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1717,7 +1717,7 @@ public sealed partial class ContextToolTests
                     containingSymbolName: "OrderService"),
             },
             out _, out _);
-        string bounded = ContextTool.RunReferenceAware(
+        string bounded = ContextPipelineTestDriver.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 512, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
@@ -1799,7 +1799,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         var phases = new List<string>();
 
-        _ = ContextTool.RunActionableWithCancellation(
+        _ = ContextPipelineTestDriver.RunActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -1834,6 +1834,7 @@ public sealed partial class ContextToolTests
                 "pivot_bodies",
                 "candidate_pack",
                 "bounded_render",
+                "bundle",
             ],
             phases);
     }
@@ -2075,7 +2076,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -2129,7 +2130,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -2163,7 +2164,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         IndexedSymbol repo = Assert.Single(index.FindByName("OrderRepo"));
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -2205,7 +2206,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -2310,7 +2311,7 @@ public sealed partial class ContextToolTests
     [Fact]
     public void Context_CompactReportsExactAmbiguousLimitWithoutTruncation()
     {
-        IndexedSymbol[] matches = Enumerable.Range(0, ContextTool.AnchorAmbiguousMatchLimit)
+        IndexedSymbol[] matches = Enumerable.Range(0, ContextBundleBuilder.AnchorAmbiguousMatchLimit)
             .Select(i => new IndexedSymbol(
                 i,
                 (11_000 + i).ToString("x32"),
@@ -2693,7 +2694,7 @@ public sealed partial class ContextToolTests
         Assert.Equal("semantic_rank_1", first.GetProperty("reason").GetString());
         Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
         Assert.Equal(1, arm.SymbolCalls);
-        Assert.Equal(26, ContextTool.SemanticSeedStrength);
+        Assert.Equal(26, ContextBundleBuilder.SemanticSeedStrength);
     }
 
     [Fact]
@@ -2720,12 +2721,12 @@ public sealed partial class ContextToolTests
         const string query = "durable persistence boundary";
         IndexedSymbol trueSymbol = Assert.Single(index.FindByName("SymbolsArtifactIdentity"));
         string[] terms = ["durable", "persistence", "boundary"];
-        int junkAffinity = ContextTool.TaskQueryAffinity(symbols[0], terms);
+        int junkAffinity = ContextBundleBuilder.TaskQueryAffinity(symbols[0], terms);
         Assert.InRange(junkAffinity, 12, 18);
-        Assert.True(ContextTool.SemanticSeedStrength > junkAffinity);
-        Assert.Equal(0, ContextTool.TaskQueryAffinity(trueSymbol, terms));
+        Assert.True(ContextBundleBuilder.SemanticSeedStrength > junkAffinity);
+        Assert.Equal(0, ContextBundleBuilder.TaskQueryAffinity(trueSymbol, terms));
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -2854,9 +2855,9 @@ public sealed partial class ContextToolTests
         string manyTokens = string.Join(' ', uniqueSymbols.Select(static symbol => symbol.Name));
 
         IReadOnlyList<IndexedSymbol> tokenBound =
-            ContextTool.FindNamedAnchorCandidates(uniqueIndex, manyTokens, out bool tokensTruncated);
+            ContextBundleBuilder.FindNamedAnchorCandidates(uniqueIndex, manyTokens, out bool tokensTruncated);
 
-        Assert.Equal(ContextTool.AnchorIdentifierTokenLimit, tokenBound.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorIdentifierTokenLimit, tokenBound.Count);
         Assert.True(tokensTruncated);
 
         IndexedSymbol[] homonyms = Enumerable.Range(0, 20)
@@ -2876,16 +2877,16 @@ public sealed partial class ContextToolTests
         var homonymIndex = MillerRepositoryIndex.Build(homonyms);
 
         IReadOnlyList<IndexedSymbol> matchBound =
-            ContextTool.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
+            ContextBundleBuilder.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
 
-        Assert.Equal(ContextTool.AnchorMatchesPerToken, matchBound.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorMatchesPerToken, matchBound.Count);
         Assert.True(matchesTruncated);
     }
 
     [Fact]
     public void NamedAnchorCandidates_ExactBoundsAreNotTruncated()
     {
-        IndexedSymbol[] uniqueSymbols = Enumerable.Range(0, ContextTool.AnchorIdentifierTokenLimit)
+        IndexedSymbol[] uniqueSymbols = Enumerable.Range(0, ContextBundleBuilder.AnchorIdentifierTokenLimit)
             .Select(i => new IndexedSymbol(
                 i,
                 (700 + i).ToString("x32"),
@@ -2901,15 +2902,15 @@ public sealed partial class ContextToolTests
             .ToArray();
         var uniqueIndex = MillerRepositoryIndex.Build(uniqueSymbols);
 
-        IReadOnlyList<IndexedSymbol> tokenBound = ContextTool.FindNamedAnchorCandidates(
+        IReadOnlyList<IndexedSymbol> tokenBound = ContextBundleBuilder.FindNamedAnchorCandidates(
             uniqueIndex,
             string.Join(' ', uniqueSymbols.Select(static symbol => symbol.Name)),
             out bool tokensTruncated);
 
-        Assert.Equal(ContextTool.AnchorIdentifierTokenLimit, tokenBound.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorIdentifierTokenLimit, tokenBound.Count);
         Assert.False(tokensTruncated);
 
-        IndexedSymbol[] homonyms = Enumerable.Range(0, ContextTool.AnchorMatchesPerToken)
+        IndexedSymbol[] homonyms = Enumerable.Range(0, ContextBundleBuilder.AnchorMatchesPerToken)
             .Select(i => new IndexedSymbol(
                 i,
                 (800 + i).ToString("x32"),
@@ -2926,9 +2927,9 @@ public sealed partial class ContextToolTests
         var homonymIndex = MillerRepositoryIndex.Build(homonyms);
 
         IReadOnlyList<IndexedSymbol> matchBound =
-            ContextTool.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
+            ContextBundleBuilder.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
 
-        Assert.Equal(ContextTool.AnchorMatchesPerToken, matchBound.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorMatchesPerToken, matchBound.Count);
         Assert.False(matchesTruncated);
     }
 
@@ -2940,9 +2941,9 @@ public sealed partial class ContextToolTests
             Enumerable.Range(1, 100).Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
 
         IReadOnlyList<(string File, int Line)> frames =
-            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+            ContextBundleBuilder.ParseStackFrames(stackTrace, out bool truncated);
 
-        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorStackFrameLimit, frames.Count);
         Assert.Equal(("src/File1.cs", 1), frames[0]);
         Assert.True(truncated);
     }
@@ -2952,13 +2953,13 @@ public sealed partial class ContextToolTests
     {
         string stackTrace = string.Join(
             '\n',
-            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit)
+            Enumerable.Range(1, ContextBundleBuilder.AnchorStackFrameLimit)
                 .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
 
         IReadOnlyList<(string File, int Line)> frames =
-            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+            ContextBundleBuilder.ParseStackFrames(stackTrace, out bool truncated);
 
-        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorStackFrameLimit, frames.Count);
         Assert.False(truncated);
     }
 
@@ -2967,14 +2968,14 @@ public sealed partial class ContextToolTests
     {
         string dotnetFrames = string.Join(
             '\n',
-            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit)
+            Enumerable.Range(1, ContextBundleBuilder.AnchorStackFrameLimit)
                 .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
         string stackTrace = dotnetFrames + "\nFile \"src/python_file.py\", line 25";
 
         IReadOnlyList<(string File, int Line)> frames =
-            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+            ContextBundleBuilder.ParseStackFrames(stackTrace, out bool truncated);
 
-        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.Equal(ContextBundleBuilder.AnchorStackFrameLimit, frames.Count);
         Assert.True(truncated);
     }
 
@@ -2987,7 +2988,7 @@ public sealed partial class ContextToolTests
             "File \"src/third.py\", line 12";
 
         IReadOnlyList<(string File, int Line)> frames =
-            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+            ContextBundleBuilder.ParseStackFrames(stackTrace, out bool truncated);
 
         Assert.Equal(
             [("src/first.py", 4), ("src/second.cs", 8), ("src/third.py", 12)],
@@ -3005,7 +3006,7 @@ public sealed partial class ContextToolTests
         var tool = new ContextTool(provider);
         string stackTrace = string.Join(
             '\n',
-            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit + 1)
+            Enumerable.Range(1, ContextBundleBuilder.AnchorStackFrameLimit + 1)
                 .Select(i => $"at Unknown{i} (src/Missing{i}.cs:{i})"));
 
         string output = tool.Context(
@@ -3039,7 +3040,7 @@ public sealed partial class ContextToolTests
         var tool = new ContextTool(provider);
         string stackTrace = string.Join(
             '\n',
-            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit + 1)
+            Enumerable.Range(1, ContextBundleBuilder.AnchorStackFrameLimit + 1)
                 .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
 
         string output = tool.Context(
@@ -3075,7 +3076,7 @@ public sealed partial class ContextToolTests
     {
         string hint = string.Join(' ', Enumerable.Repeat("Repeated Unique", 30));
 
-        string[] tokens = ContextTool.ExtractIdentifierTokens(hint).ToArray();
+        string[] tokens = ContextBundleBuilder.ExtractIdentifierTokens(hint).ToArray();
 
         Assert.Equal(["Repeated", "Unique"], tokens);
     }
@@ -3083,7 +3084,7 @@ public sealed partial class ContextToolTests
     [Fact]
     public void Truncate_DoesNotSplitSurrogatePairs()
     {
-        string output = ContextTool.Truncate("abc😀xyz", 5);
+        string output = ContextTextBounds.Truncate("abc😀xyz", 5);
 
         Assert.Equal("abc…", output);
         Assert.DoesNotContain(output.EnumerateRunes(), static rune => rune.Value == 0xFFFD);
@@ -3092,21 +3093,21 @@ public sealed partial class ContextToolTests
     [Fact]
     public void Truncate_NonPositiveLimitReturnsEmpty()
     {
-        Assert.Empty(ContextTool.Truncate("value", -1));
-        Assert.Empty(ContextTool.Truncate(string.Empty, 0));
-        Assert.Empty(ContextTool.Truncate("value", 0));
+        Assert.Empty(ContextTextBounds.Truncate("value", -1));
+        Assert.Empty(ContextTextBounds.Truncate(string.Empty, 0));
+        Assert.Empty(ContextTextBounds.Truncate("value", 0));
     }
 
     [Fact]
     public void Truncate_OneCharacterLimitReturnsEllipsis()
     {
-        Assert.Equal("…", ContextTool.Truncate("value", 1));
+        Assert.Equal("…", ContextTextBounds.Truncate("value", 1));
     }
 
     [Fact]
     public void Truncate_SurrogatePairAtStartReturnsOnlyEllipsis()
     {
-        Assert.Equal("…", ContextTool.Truncate("😀x", 2));
+        Assert.Equal("…", ContextTextBounds.Truncate("😀x", 2));
     }
 
     [Fact]
@@ -3188,8 +3189,8 @@ public sealed partial class ContextToolTests
             "eval/sidecar/generate.py", 1, 40, null, false);
         string[] terms = ["sidecar"];
 
-        int nameAffinity = ContextTool.TaskQueryAffinity(nameOnly, terms);
-        int pathAffinity = ContextTool.TaskQueryAffinity(pathOnly, terms);
+        int nameAffinity = ContextBundleBuilder.TaskQueryAffinity(nameOnly, terms);
+        int pathAffinity = ContextBundleBuilder.TaskQueryAffinity(pathOnly, terms);
 
         Assert.True(pathAffinity <= nameAffinity, $"path-only {pathAffinity} should be ≤ name-only {nameAffinity}");
         Assert.Equal(12, nameAffinity);
@@ -3211,7 +3212,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3248,7 +3249,7 @@ public sealed partial class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3298,7 +3299,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3359,11 +3360,11 @@ public sealed partial class ContextToolTests
                 containingSymbolId: correctId,
                 containingSymbolName: "SymbolsArtifactIdentity"));
 
-        IReadOnlyList<ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+        IReadOnlyList<ContextSourceSeed> seeds = ContextBundleBuilder.LoadSourceRescueSeeds(
             index, content, query, excludeTests: true);
         Assert.Contains(seeds, seed => seed.Symbol.SymbolId == correctId);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3406,7 +3407,7 @@ public sealed partial class ContextToolTests
         var index = MillerRepositoryIndex.Build([symbol]);
         var resolver = new SmartTargetResolver(index);
         const string query = "how does artifact generation matching work for sidecars";
-        var seeds = ContextTool.LoadSourceRescueSeeds(
+        var seeds = ContextBundleBuilder.LoadSourceRescueSeeds(
             index,
             new StubTextContentSearchIndex(
                 SourceHit(
@@ -3418,7 +3419,7 @@ public sealed partial class ContextToolTests
             query,
             excludeTests: true);
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3461,8 +3462,8 @@ public sealed partial class ContextToolTests
                 containingSymbolId: correctId,
                 containingSymbolName: "OrderRepo"));
 
-        Assert.Empty(ContextTool.LoadSourceRescueSeeds(index, content, "OrderRepo", excludeTests: false));
-        Assert.Empty(ContextTool.LoadSourceRescueSeeds(index, contentIndex: null, "how does order work", excludeTests: false));
+        Assert.Empty(ContextBundleBuilder.LoadSourceRescueSeeds(index, content, "OrderRepo", excludeTests: false));
+        Assert.Empty(ContextBundleBuilder.LoadSourceRescueSeeds(index, contentIndex: null, "how does order work", excludeTests: false));
     }
 
     [Fact]
@@ -3479,7 +3480,7 @@ public sealed partial class ContextToolTests
             new(symbol, Rank: 1),
         };
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3542,7 +3543,7 @@ public sealed partial class ContextToolTests
             SourceHit("src/c.ts", 2, "gamma prose", "s4", "c5", fourthId, "Gamma"),
             SourceHit("tests/promote.test.ts", 2, "test prose", "s5", "c6", testId, "PromoteTests"));
 
-        IReadOnlyList<ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+        IReadOnlyList<ContextSourceSeed> seeds = ContextBundleBuilder.LoadSourceRescueSeeds(
             index,
             content,
             "how does promotion prose work",
@@ -3579,7 +3580,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         const string query = "how does unreadable artifact refuse generation proof";
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3656,7 +3657,7 @@ public sealed partial class ContextToolTests
             SmartTargetResolver targetResolver)
         {
             var batches = new List<string[]>();
-            ContextTool.RunActionable(
+            ContextPipelineTestDriver.RunActionable(
                 repositoryIndex,
                 repositoryIndex.Graph,
                 targetResolver,
@@ -3717,7 +3718,7 @@ public sealed partial class ContextToolTests
 
         // The read session no longer has the first test — the search sidecar can name a symbol the served view
         // dropped. The batch omits it; every other promotion in the same batch must still land.
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3779,7 +3780,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         using var cancellation = new CancellationTokenSource();
 
-        Assert.Throws<OperationCanceledException>(() => ContextTool.RunActionableWithCancellation(
+        Assert.Throws<OperationCanceledException>(() => ContextPipelineTestDriver.RunActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -3828,7 +3829,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         const string query = "how does unreadable artifact refuse generation proof";
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3885,7 +3886,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         const string query = "how does unreadable artifact refuse generation proof";
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -3948,7 +3949,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         const string query = "which tests cover unreadable artifact refuse generation";
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -4014,7 +4015,7 @@ public sealed partial class ContextToolTests
         var resolver = new SmartTargetResolver(index);
         const string query = "how does unreadable artifact refuse generation proof";
 
-        string output = ContextTool.RunActionable(
+        string output = ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -4198,7 +4199,7 @@ public sealed partial class ContextToolTests
         // Pick a symbol the wide window carries, the narrow window drops, and that the bundle does not already
         // hold: admitting it as a seed must CHANGE the rendered bundle, or asserting the bundle is unchanged
         // proves nothing.
-        string Render(IReadOnlyList<ContextSemanticSeed>? seeds) => ContextTool.RunActionable(
+        string Render(IReadOnlyList<ContextSemanticSeed>? seeds) => ContextPipelineTestDriver.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -4274,7 +4275,7 @@ public sealed partial class ContextToolTests
         Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", null);
         try
         {
-            ContextTool.RunReferenceAwareActionable(
+            ContextPipelineTestDriver.RunReferenceAwareActionable(
                 index,
                 index.Graph,
                 resolver,
@@ -4364,7 +4365,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         var phases = new List<string>();
 
-        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+        _ = ContextPipelineTestDriver.RunReferenceAwareActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -4405,6 +4406,7 @@ public sealed partial class ContextToolTests
                 "reference_items",
                 "candidate_pack",
                 "bounded_render",
+                "bundle_remainder",
             ],
             phases);
     }
@@ -4461,7 +4463,7 @@ public sealed partial class ContextToolTests
         var referencePhaseObservations = 0;
         var countObservations = 0;
 
-        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+        _ = ContextPipelineTestDriver.RunReferenceAwareActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -4504,7 +4506,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildHubFixture(120);
         var read = new List<string>();
 
-        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+        _ = ContextPipelineTestDriver.RunReferenceAwareActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -4534,7 +4536,7 @@ public sealed partial class ContextToolTests
             CancellationToken.None);
 
         Assert.Equal(121, candidatesExamined);
-        Assert.Equal(ContextTool.ReferenceReadChunkSize, read.Count);
+        Assert.Equal(ContextBundleBuilder.ReferenceReadChunkSize, read.Count);
         Assert.Equal(read.Count, read.Distinct(StringComparer.Ordinal).Count());
     }
 
@@ -4548,7 +4550,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildHubFixture(10);
         var read = new List<string>();
 
-        string output = ContextTool.RunReferenceAwareActionableWithCancellation(
+        string output = ContextPipelineTestDriver.RunReferenceAwareActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -4588,7 +4590,7 @@ public sealed partial class ContextToolTests
         var (index, resolver) = BuildFixture();
         var read = new List<string>();
 
-        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+        _ = ContextPipelineTestDriver.RunReferenceAwareActionableWithCancellation(
             index,
             index.Graph,
             resolver,
@@ -4634,7 +4636,7 @@ public sealed partial class ContextToolTests
         Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", "on");
         try
         {
-            _ = ContextTool.RunReferenceAwareActionable(
+            _ = ContextPipelineTestDriver.RunReferenceAwareActionable(
                 index,
                 index.Graph,
                 resolver,

@@ -121,11 +121,11 @@ public sealed class LiveContextImpactTests
                 target: "Process", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false, out _, out _);
             Assert.Contains("ProcessWorks", impactProcess);
 
-            string legacyContext = ContextTool.Run(index, resolver,
+            string legacyContext = ContextPipelineTestDriver.Run(index, resolver,
                 query: "order processing", tokenBudget: 4000, maxHops: 1,
                 entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-            string actionableContext = ContextTool.RunActionable(
+            string actionableContext = ContextPipelineTestDriver.RunActionable(
                 index,
                 index.Graph,
                 resolver,
@@ -170,7 +170,7 @@ public sealed class LiveContextImpactTests
             for (int i = 0; i < ctxSamples; i++)
             {
                 var ctxSw = Stopwatch.StartNew();
-                _ = ContextTool.RunActionable(
+                _ = ContextPipelineTestDriver.RunActionable(
                     index,
                     index.Graph,
                     resolver,
@@ -195,7 +195,7 @@ public sealed class LiveContextImpactTests
                 $"[local-performance] actionable context p95 over {ctxSamples} runs: {ctxP95Ms:F1}ms " +
                 $"(min {ctxRunsMs[0]:F1}ms, max {ctxRunsMs[ctxSamples - 1]:F1}ms)");
 
-            string tiny = ContextTool.RunActionable(
+            string tiny = ContextPipelineTestDriver.RunActionable(
                 index,
                 index.Graph,
                 resolver,

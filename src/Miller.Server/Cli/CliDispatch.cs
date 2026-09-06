@@ -2083,7 +2083,7 @@ public static class CliDispatch
                 Json: json,
                 SemanticSeeds: null,
                 SourceSeeds: sourceSeeds,
-                ReadBody: symbol => ContextTool.ReadPivotBody(
+                ReadBody: symbol => ContextQueryService.ReadPivotBody(
                     readScope.Session,
                     ctx.WorkspaceRoot,
                     symbol),
@@ -2092,14 +2092,14 @@ public static class CliDispatch
                     readScope.Session,
                     symbol.SymbolId,
                     new ReferenceEvidenceBounds(
-                        ContextTool.ReferenceRowsPerSymbol,
-                        ContextTool.ReferenceRowsPerSymbol)),
+                        ContextQueryService.ReferenceRowsPerSymbol,
+                        ContextQueryService.ReferenceRowsPerSymbol)),
                 ReadOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
                     readScope.Session,
                     symbol.SymbolId,
                     new ReferenceEvidenceBounds(
-                        ContextTool.ReferenceRowsPerSymbol,
-                        ContextTool.ReferenceRowsPerSymbol)),
+                        ContextQueryService.ReferenceRowsPerSymbol,
+                        ContextQueryService.ReferenceRowsPerSymbol)),
                 ReadContentChunks: (symbols, excludeTests) => ReadContextContentChunks(
                     ctx,
                     symbols,
@@ -2110,7 +2110,7 @@ public static class CliDispatch
         string output = result.Output;
         if (result.SelectedCount == 0)
         {
-            ToolDiagnostic diagnostic = ContextTool.EmptyDiagnostic(
+            ToolDiagnostic diagnostic = ContextQueryService.EmptyDiagnostic(
                 o.Query,
                 tokenBudget,
                 result.CandidatesExamined,
@@ -2176,11 +2176,7 @@ public static class CliDispatch
         }
     }
 
-    /// <summary>Outgoing evidence for context's term-rescue promotion set, in one batched read.</summary>
-    /// <summary>
-    /// The CLI mirror of <c>ContextTool.ReadOutgoingBatch</c>: one outgoing-only batch read, with an id the
-    /// read session cannot resolve absent from the result rather than denying the whole promotion set.
-    /// </summary>
+    /// <summary>Reads outgoing evidence in one batch and omits ids the session cannot resolve.</summary>
     private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadContextOutgoingEvidence(
         IWorkspaceReadSession session,
         IReadOnlyList<string> symbolIds) =>
@@ -2189,8 +2185,8 @@ public static class CliDispatch
             symbolIds,
             new ReferenceEvidenceQuery(
                 new ReferenceEvidenceBounds(
-                    ContextTool.ReferenceRowsPerSymbol,
-                    ContextTool.ReferenceRowsPerSymbol)));
+                    ContextQueryService.ReferenceRowsPerSymbol,
+                    ContextQueryService.ReferenceRowsPerSymbol)));
 
     private static IReadOnlyList<TextContentSearchHit> ReadContextContentChunks(
         WorkspaceContext context,
@@ -2207,13 +2203,13 @@ public static class CliDispatch
                 snapshot,
                 symbols,
                 excludeTests,
-                ContextTool.ContentChunksPerSymbol)
+                ContextQueryService.ContentChunksPerSymbol)
             : ContentCorpusContextReader.ReadContainingSymbolChunks(
                 location.ContentDbPath,
                 context.ExtractDbPath,
                 symbols,
                 excludeTests,
-                ContextTool.ContentChunksPerSymbol);
+                ContextQueryService.ContentChunksPerSymbol);
     }
 
     private static string[]? OptionValues(string? value) =>

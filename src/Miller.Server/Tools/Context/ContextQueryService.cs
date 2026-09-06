@@ -13,6 +13,9 @@ namespace Miller.Server.Tools.Context;
 
 internal sealed class ContextQueryService
 {
+    internal const int ReferenceRowsPerSymbol = 12;
+    internal const int ContentChunksPerSymbol = 2;
+
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -124,28 +127,28 @@ internal sealed class ContextQueryService
                     json,
                     semanticSeeds,
                     sourceSeeds,
-                    symbol => ContextTool.ReadPivotBody(context.ReadSession, context.WorkspaceRoot, symbol),
+                    symbol => ReadPivotBody(context.ReadSession, context.WorkspaceRoot, symbol),
                     readOutgoingMany,
                     symbol => ReferenceEvidenceReader.Read(
                         context.ReadSession,
                         symbol.SymbolId,
                         new ReferenceEvidenceBounds(
-                            ContextTool.ReferenceRowsPerSymbol,
-                            ContextTool.ReferenceRowsPerSymbol)),
+                            ReferenceRowsPerSymbol,
+                            ReferenceRowsPerSymbol)),
                     symbol => ReferenceEvidenceReader.ReadOutgoing(
                         context.ReadSession,
                         symbol.SymbolId,
                         new ReferenceEvidenceBounds(
-                            ContextTool.ReferenceRowsPerSymbol,
-                            ContextTool.ReferenceRowsPerSymbol)),
+                            ReferenceRowsPerSymbol,
+                            ReferenceRowsPerSymbol)),
                     (symbols, excludeTests) => ReadContentChunks(context.ReadSession, symbols, excludeTests),
                     symbols => ReferenceEvidenceReader.ReadMany(
                         context.ReadSession,
                         symbols.Select(static symbol => symbol.SymbolId).ToArray(),
                         new ReferenceEvidenceQuery(
                             new ReferenceEvidenceBounds(
-                                ContextTool.ReferenceRowsPerSymbol,
-                                ContextTool.ReferenceRowsPerSymbol))),
+                                ReferenceRowsPerSymbol,
+                                ReferenceRowsPerSymbol))),
                     request.CancellationToken,
                     (phase, counts) => CompletePhase(
                         phase,
@@ -159,7 +162,7 @@ internal sealed class ContextQueryService
             ToolDiagnostic? diagnostic = null;
             if (result.SelectedCount == 0)
             {
-                diagnostic = ContextTool.EmptyDiagnostic(
+                diagnostic = EmptyDiagnostic(
                     request.Query,
                     effectiveTokenBudget,
                     result.CandidatesExamined,
@@ -220,74 +223,124 @@ internal sealed class ContextQueryService
     internal static ContextResolvedQueryResult ExecuteResolved(ContextResolvedQueryRequest request)
     {
         request.CancellationToken.ThrowIfCancellationRequested();
-        ContextReferenceReadCounts? referenceReadCounts = null;
-        int selectedCount;
-        int candidatesExamined;
-        string output;
-        switch (request.ReferenceMode)
+        ContextResolvedQueryResult result = request.ReferenceMode switch
         {
-            case ContextReferenceMode.Off:
-                output = ContextTool.RunActionableWithCancellation(
-                    request.Index,
-                    request.Graph,
-                    request.Resolver,
-                    request.Query,
-                    request.TokenBudget,
-                    request.MaxHops,
-                    request.EntrySymbols,
-                    request.EditedFiles,
-                    request.FailingTest,
-                    request.StackTrace,
-                    request.SemanticSeeds,
-                    request.SourceSeeds,
-                    request.ReadBody,
-                    request.ReadOutgoingMany,
-                    request.Json,
-                    out selectedCount,
-                    out candidatesExamined,
-                    request.CancellationToken,
-                    phase => request.PhaseObserver?.Invoke(phase, null),
-                    request.Retrieval);
-                break;
-            case ContextReferenceMode.Usage:
-                output = ContextTool.RunReferenceAwareActionableWithCancellation(
-                    request.Index,
-                    request.Graph,
-                    request.Resolver,
-                    request.Query,
-                    request.TokenBudget,
-                    request.MaxHops,
-                    request.EntrySymbols,
-                    request.EditedFiles,
-                    request.FailingTest,
-                    request.StackTrace,
-                    request.SemanticSeeds,
-                    request.SourceSeeds,
-                    request.ReadBody,
-                    request.ReferenceDepth,
-                    request.ExcludeTests,
-                    request.Json,
-                    request.ReadReferenceEvidence ?? throw MissingReader(nameof(request.ReadReferenceEvidence)),
-                    request.ReadOutgoingEvidence ?? throw MissingReader(nameof(request.ReadOutgoingEvidence)),
-                    request.ReadContentChunks ?? throw MissingReader(nameof(request.ReadContentChunks)),
-                    request.ReadMany,
-                    out selectedCount,
-                    out candidatesExamined,
-                    request.CancellationToken,
-                    phase => request.PhaseObserver?.Invoke(
-                        phase,
-                        phase == "reference_items" ? referenceReadCounts : null),
-                    request.Retrieval,
-                    counts => referenceReadCounts = counts);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(request.ReferenceMode));
-        }
+            ContextReferenceMode.Off => ExecuteOrdinary(request),
+            ContextReferenceMode.Usage => ExecuteReferenceAware(request),
+            _ => throw new ArgumentOutOfRangeException(nameof(request.ReferenceMode)),
+        };
 
         request.PhaseObserver?.Invoke(
             request.ReferenceMode == ContextReferenceMode.Usage ? "bundle_remainder" : "bundle",
             null);
-        return new ContextResolvedQueryResult(output, selectedCount, candidatesExamined);
+        return result;
+    }
+
+    private static ContextResolvedQueryResult ExecuteOrdinary(ContextResolvedQueryRequest request)
+    {
+        ContextBundleBuildResult built = ContextBundleBuilder.BuildActionable(
+            request.Index,
+            request.Graph,
+            request.Resolver,
+            request.Query,
+            request.TokenBudget,
+            request.MaxHops,
+            request.EntrySymbols,
+            request.EditedFiles,
+            request.FailingTest,
+            request.StackTrace,
+            request.SemanticSeeds,
+            request.SourceSeeds,
+            request.ReadBody,
+            request.ReadOutgoingMany,
+            request.CancellationToken,
+            phase => request.PhaseObserver?.Invoke(phase, null),
+            request.Retrieval);
+        if (built.Candidates.Count == 0)
+        {
+            return new ContextResolvedQueryResult(
+                ContextBundleRenderer.RenderNoPivots(
+                    built.AnchorDiagnostics,
+                    request.TokenBudget,
+                    request.Json),
+                SelectedCount: 0,
+                built.CandidatesExamined);
+        }
+
+        IReadOnlyList<Candidate> selected = ContextBundleRenderer.SelectOrdinary(
+            built.Candidates,
+            request.TokenBudget,
+            request.CancellationToken);
+        request.PhaseObserver?.Invoke("candidate_pack", null);
+        string output = ContextBundleRenderer.RenderOrdinary(
+            selected,
+            built.AnchorDiagnostics,
+            request.Query,
+            request.TokenBudget,
+            request.Json,
+            out int selectedCount,
+            request.CancellationToken);
+        request.PhaseObserver?.Invoke("bounded_render", null);
+        return new ContextResolvedQueryResult(output, selectedCount, built.CandidatesExamined);
+    }
+
+    private static ContextResolvedQueryResult ExecuteReferenceAware(ContextResolvedQueryRequest request)
+    {
+        ContextReferenceBuildResult built = ContextBundleBuilder.BuildReferenceAware(
+            request.Index,
+            request.Graph,
+            request.Resolver,
+            request.Query,
+            request.TokenBudget,
+            request.MaxHops,
+            request.EntrySymbols,
+            request.EditedFiles,
+            request.FailingTest,
+            request.StackTrace,
+            request.SemanticSeeds,
+            request.SourceSeeds,
+            request.ReadBody,
+            request.ReferenceDepth,
+            request.ExcludeTests,
+            request.ReadReferenceEvidence ?? throw MissingReader(nameof(request.ReadReferenceEvidence)),
+            request.ReadOutgoingEvidence ?? throw MissingReader(nameof(request.ReadOutgoingEvidence)),
+            request.ReadContentChunks ?? throw MissingReader(nameof(request.ReadContentChunks)),
+            request.ReadMany,
+            (items, diagnostics, query) => ContextBundleRenderer.EstimateReferenceTokens(
+                items,
+                diagnostics,
+                query,
+                request.Json),
+            request.CancellationToken,
+            phase => request.PhaseObserver?.Invoke(phase, null),
+            request.Retrieval);
+        if (built.Candidates.Count == 0)
+        {
+            return new ContextResolvedQueryResult(
+                ContextBundleRenderer.RenderNoPivots(
+                    built.AnchorDiagnostics,
+                    request.TokenBudget,
+                    request.Json),
+                SelectedCount: 0,
+                built.CandidatesExamined);
+        }
+
+        request.PhaseObserver?.Invoke("reference_items", built.ReadCounts);
+        IReadOnlyList<ReferenceContextItem> selected = ContextBundleRenderer.SelectReference(
+            built.Items,
+            request.TokenBudget,
+            request.CancellationToken);
+        request.PhaseObserver?.Invoke("candidate_pack", null);
+        string output = ContextBundleRenderer.RenderReference(
+            selected,
+            built.AnchorDiagnostics,
+            request.Query,
+            request.TokenBudget,
+            request.Json,
+            out int selectedCount,
+            request.CancellationToken);
+        request.PhaseObserver?.Invoke("bounded_render", null);
+        return new ContextResolvedQueryResult(output, selectedCount, built.CandidatesExamined);
     }
 
     internal static ContextReferenceMode ParseReferenceMode(string? mode) =>
@@ -304,6 +357,57 @@ internal sealed class ContextQueryService
         string query,
         bool excludeTests) =>
         ContextBundleBuilder.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
+
+    internal static ToolDiagnostic EmptyDiagnostic(
+        string query,
+        int tokenBudget,
+        int candidatesExamined,
+        IReadOnlyList<string>? entrySymbols,
+        int maxTokenBudget)
+    {
+        string recoveryQuery = entrySymbols?
+            .FirstOrDefault(static entry => !string.IsNullOrWhiteSpace(entry)) ?? query;
+        if (candidatesExamined == 0)
+        {
+            return ToolDiagnostic.ExpectedEmpty(
+                "no_context_symbols",
+                "No context symbols matched the supplied evidence.",
+                [new ToolDiagnosticAction(
+                    $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(recoveryQuery)}\")",
+                    "find a concrete entry symbol")]);
+        }
+
+        long requestedNextBudget = Math.Max((long)tokenBudget + 256, (long)tokenBudget * 2);
+        int nextBudget = (int)Math.Min(maxTokenBudget, requestedNextBudget);
+        return ToolDiagnostic.ExpectedEmpty(
+            "context_budget_exhausted",
+            "Context candidates matched, but none fit token_budget.",
+            [
+                new ToolDiagnosticAction(
+                    $"context(query=\"{ToolDiagnosticText.EscapeCallArgument(query)}\", token_budget={nextBudget})",
+                    "retry with more room"),
+                new ToolDiagnosticAction(
+                    $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(recoveryQuery)}\", mode=\"symbol\")",
+                    "narrow to one exact entry symbol"),
+            ]);
+    }
+
+    internal static ExtractReader.BodyReadResult ReadPivotBody(
+        WorkspaceReadHandle readSession,
+        string workspaceRoot,
+        IndexedSymbol symbol)
+    {
+        try
+        {
+            return ExtractReader.ReadBody(readSession, workspaceRoot, symbol);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return ExtractReader.BodyReadResult.Unavailable(
+                ExtractReader.BodyUnavailableReason.FileHashUnavailable);
+        }
+    }
 
     private static InvalidOperationException MissingReader(string name) =>
         new($"Reference mode usage requires {name}.");
@@ -410,8 +514,8 @@ internal sealed class ContextQueryService
             symbolIds,
             new ReferenceEvidenceQuery(
                 new ReferenceEvidenceBounds(
-                    ContextTool.ReferenceRowsPerSymbol,
-                    ContextTool.ReferenceRowsPerSymbol)));
+                    ReferenceRowsPerSymbol,
+                    ReferenceRowsPerSymbol)));
 
     private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
         WorkspaceReadHandle readSession,
@@ -422,13 +526,13 @@ internal sealed class ContextQueryService
             readSession.Snapshot,
             symbols,
             excludeTests,
-            ContextTool.ContentChunksPerSymbol)
+            ContentChunksPerSymbol)
         : ContentCorpusContextReader.ReadContainingSymbolChunks(
             ContentCorpusSidecar.ContentDbPathFor(RequiredLegacyArtifactPath(readSession)),
             RequiredLegacyArtifactPath(readSession),
             symbols,
             excludeTests,
-            ContextTool.ContentChunksPerSymbol);
+            ContentChunksPerSymbol);
 
     private static string RequiredLegacyArtifactPath(WorkspaceReadHandle readSession) =>
         readSession.LegacyArtifactPath

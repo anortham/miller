@@ -320,10 +320,10 @@ dotnet test
 
 **Acceptance:**
 
-- [ ] Only the adapter, query service, builder, renderer, and any necessary shared internal model file remain.
-- [ ] CLI and semantic-model evaluator use the shared internal path.
-- [ ] Public MCP metadata and all output/behavior contracts are unchanged.
-- [ ] Impact analysis finds no bypass, dead forwarder, or unexpected caller.
+- [x] Only the adapter, query service, builder, renderer, and any necessary shared internal model file remain.
+- [x] CLI and semantic-model evaluator use the shared internal path.
+- [x] Public MCP metadata and all output/behavior contracts are unchanged.
+- [x] Impact analysis finds no bypass, dead forwarder, or unexpected caller.
 - [ ] Verification ledger records focused tests, build, fast suite, and parity evidence.
 
 ## Completion Boundary

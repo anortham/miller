@@ -5,7 +5,8 @@ namespace Miller.Tests.Conventions;
 public sealed class ReferenceEvidenceOwnershipConventionTests
 {
     [Theory]
-    [InlineData("src/Miller.Server/Tools/ContextTool.cs")]
+    [InlineData("src/Miller.Server/Tools/Context/ContextBundleBuilder.cs")]
+    [InlineData("src/Miller.Server/Tools/Context/ContextQueryService.cs")]
     [InlineData("src/Miller.Server/Tools/TraceTool.cs")]
     public void ReferenceToolsDoNotFabricateLegacyProducerEvidence(string relativePath)
     {

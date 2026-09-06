@@ -26,7 +26,7 @@ public sealed class SignatureMaxLengthConventionTests
     private const string SharedHome = "ToolRenderLimits.cs";
     private const string SharedReference = "ToolRenderLimits." + ConstName;
 
-    private static readonly string[] Renderers = ["SearchTool.cs", "InspectTool.cs", "ContextTool.cs"];
+    private static readonly string[] Renderers = ["SearchTool.cs", "InspectTool.cs", "ContextBundleRenderer.cs"];
 
     [Fact]
     public void SignatureMaxLength_IsDeclaredExactlyOnce_SoTheThreeRenderersCannotDrift()
@@ -42,7 +42,7 @@ public sealed class SignatureMaxLengthConventionTests
     [Theory]
     [InlineData("SearchTool.cs")]
     [InlineData("InspectTool.cs")]
-    [InlineData("ContextTool.cs")]
+    [InlineData("ContextBundleRenderer.cs")]
     public void EachCompactRenderer_ReferencesTheSharedConst(string renderer)
     {
         string code = CodeOf(Assert.Single(ServerSources(), p => Path.GetFileName(p) == renderer));
