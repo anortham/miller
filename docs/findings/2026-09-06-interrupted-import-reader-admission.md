@@ -26,8 +26,8 @@ in julie-extract 2.40.2. It occurred with that released binary.
 
 ### Producer: recover durable watermark lag during admission
 
-The Julie correction is on `fix/store-admission-crash-recovery`, commit
-`ddf66d4c`. After existing snapshot, generation, manifest, writer, and maintenance
+The Julie correction is commit `ddf66d4c`, merged and released in 2.40.3.
+After existing snapshot, generation, manifest, writer, and maintenance
 validation, admission monotonically advances an existing log watermark to the
 durable sequence it observed. The update and reader registration commit in the
 same coordinator transaction.
@@ -69,9 +69,8 @@ reported fresh, with current search/content sidecars and ready vectors.
 
 Recovery used normal producer and Miller operations. No database rows were
 manually edited, no WAL/database files were deleted, no reader was bypassed, and
-no resident process was killed. The automatic producer correction is not in the
-running 2.40.2 binary; it needs release and pin adoption before preventing this
-specific admission outage in installed clients.
+no resident process was killed. Miller now pins the published 2.40.3 correction.
+Existing processes using 2.40.2 still need a rebuild and restart to use it.
 
 Regression coverage includes the previously missed state where a real producer
 schema contains a view row but no published generation, as well as the absent-row
@@ -85,3 +84,25 @@ alone; its synchronous start barrier could block a thread-pool worker needed by
 the background load. The barrier now awaits a `TaskCompletionSource` with the
 same timeout and unchanged ownership assertions. No production timing was
 changed.
+
+## Release adoption
+
+Julie 2.40.3 was published from `e8118a11` after source CI, local release gates,
+and 130 Windows NTFS contract tests passed. All four downloaded archives matched
+their public SHA-256 digests and packaged executable checksums. Miller's public
+Linux restore reported 2.40.3; no source binary override was used.
+
+Fresh stores use their creator version as their reader floor. The existing
+2.40.2 capability ceiling correctly refused a new 2.40.3 fixture before the
+Miller capability update. The explicit ceiling now accepts 2.40.3 and still
+refuses 2.40.4 and 2.41.0. The 53-test focused qualification, including real
+producer retention and both unpublished-view bootstrap cases, passed.
+
+Final public-package qualification passed: Release build with zero warnings and
+errors, 9,923 fast tests with nine skips, and 218 Scale tests with 24 skips.
+The merged plugin suite previously passed all 82 tests. The notice-file version
+check caught an outdated pin label during qualification; that label was corrected
+before the final green run.
+
+Published package evidence is in
+[Julie's release record](https://github.com/anortham/julie-extractors/blob/main/docs/release-evidence/2026-09-06-v2-40-3-release.md).

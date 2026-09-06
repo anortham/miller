@@ -860,7 +860,8 @@ public sealed class FamilyStoreReadSessionRetentionTests
     [InlineData("2.40.0", true)]
     [InlineData("2.40.1", true)]
     [InlineData("2.40.2", true)]
-    [InlineData("2.40.3", false)]
+    [InlineData("2.40.3", true)]
+    [InlineData("2.40.4", false)]
     [InlineData("2.41.0", false)]
     public void ReaderCapabilityAcceptsImplementedFloorAndRefusesFutureFloor(string floor, bool accepted)
     {
