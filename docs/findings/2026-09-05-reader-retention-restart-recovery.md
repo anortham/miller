@@ -182,6 +182,25 @@ the capability change; all five cases then passed. Normal Linux restore verified
 the public archive and executable; the installed reader/retention/all-language
 focused scope passed 67 tests with zero skips/failures.
 
+Final adoption candidate `eb93670fca852a7d86b30a8cf9e21545a92aa631` passed:
+
+- Linux fast: 9,868 passed, nine expected skips, zero failures, 42 seconds.
+- Linux full Scale: 217 passed, 24 expected skips, zero failures, 75 seconds.
+- Release solution build: zero warnings/errors, 23.99 seconds.
+- Windows NTFS after normal public-package restore: 99 passed, two Unix-only
+  restore-script skips, zero failures, 95 seconds. Scope included real producer
+  reader retention, all-language projection, session retention, pin/schema and
+  CLI capability tests. The unrelated Windows full suite was not repeated for
+  this pin/capability-only consumer change.
+- Windows executable SHA-256:
+  `b16c9697b351a7039c8da5e05c19066495f6f71e9f06e1be8a7dbd2e9ef7142c`.
+- Linux executable SHA-256:
+  `7fa9be4456a84571c1fd0c5451a415b3df3b254ee78e74a8267c1cfd33be7d01`.
+
+Only finding/program/checkpoint documentation follows the tested candidate before
+the approved local fast-forward. No production behavior beyond explicit reader
+capability qualification changes in Miller.
+
 Full resident verification remains a post-rebuild/restart gate: observe completion
 of the owed full extraction, discharge of the failure journal, and no recurring
 import lock failure. No semantic runtime or Miller marketplace release is needed
