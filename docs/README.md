@@ -7,6 +7,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 - [v1.28.0 release notes](release-notes/v1.28.0.md) - shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
 - [v1.28.0 release verification](findings/2026-09-06-v1.28.0-release-verification.md) - dogfood repairs, Linux and Windows gates, cursor-cost measurements, and package verification status.
+- [v1.28.0 performance review](findings/2026-09-06-v1.28.0-performance-review.md) - same-index CLI comparison, live MCP timings, reader-registration overhead, and cache/sidecar measurements.
 
 - [Agent-outcomes harness qualification](findings/2026-09-04-agent-outcomes-harness-qualification.md) - qualified 36-task dry replay and separate frozen 24-task development-pilot proposal with zero paid execution; the prepared image passed 24 probes, all 36 offline verifier states, paired Chi same-CID CT, and the final branch gate, while the empirical campaign remains unapproved and unrun, with no efficacy or S1 claim.
 - [M2/M4 integration verification](findings/2026-09-06-m2-m4-integration-verification.md) - published 2.40.4 cursor ordering and recovery, SQLite sidecar parity/cost evidence, 40-language Content/Search/Context projection, byte-stable Context boundaries, and combined build/fast/Scale gates.
