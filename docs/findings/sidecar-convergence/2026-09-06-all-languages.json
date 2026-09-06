@@ -1,0 +1,1634 @@
+{
+  "schema_version": 1,
+  "extractor": {
+    "version": "2.40.4",
+    "sha256": "acfb332fe2795b4b60283c178fab9835ceaa5a650317bc387b623cf6818a5bc3"
+  },
+  "fixture_provenance": {
+    "source": "ReaderRetentionLanguageScaleTests embedded copies",
+    "julie_extractors_commit": "3b3e5b6f03b724448df9012bb75224e99ca68f5d",
+    "samples": {
+      "rust": "bcdbcb7de56e0d17850f138fe6ecb73836b3f55ffdc8f3560618b0eedf9487bc",
+      "c": "973e1a6c6753144e2aba0c03048a7f36b08611c6614db42340f9a4e4f4093a31",
+      "cpp": "5cbca77a1ae494fca0febe1972032c7ab3b5a232ce3ab2479e7929f64d0aff8b",
+      "go": "4e7f600180d8e697a5d24846d0f40ee0e8d55ea4f7ac056ecd2be3690598aa73",
+      "zig": "26146d92dda2ef7ad4fee9d602b2d5064b131520a6f09045c41322628fdc9b6b",
+      "typescript": "6d398ebb35a82a72067d52bca558c9bcf6117a819958a259bb3670e41ffde6b2",
+      "tsx": "ca46f77ace427490011f35775509e1f32bf846c78eb0376e34b98e5c7a1fa0ab",
+      "javascript": "481c7da4010098e271cd47a0ff01dff1c786ffa50567de85b9ec6ca16f4a3c3c",
+      "jsx": "f725340df2a0dfa480e3a84a7f0fbe81839478932ae85830471ad3e9297527c8",
+      "html": "045c2be5804e13503c021a65e710ad9c9cdd78f88a99f0b7cceddbea1ad70513",
+      "css": "ad94cad895bd71779a96ed4cb89e592a4098089fe03b223aa161aeba28c2e970",
+      "vue": "9291e32e92519836f6c60ad18923d0cd339747b5bf756cd40ca8898b8ce7060e",
+      "python": "7a1fad1bb6ba5fde288eea446211ac2134c5db04e03cc6efb1a220470e7c417c",
+      "java": "e6430450d9d99450563078e0dbf82dfa52777a1d8c751d104b90f95107424ea5",
+      "csharp": "8fb5e5fa9d43f11b4a23052930e3f5d50316eee0a031b8334ea26a41f4a8d0c6",
+      "vbnet": "2111beb106503a96f210a46e63ab48400f6abea2c2b32d2cc4aed33fb17c3314",
+      "php": "7272239d17e3b023e919c10ec1d3a6db3d627f687fd33f7557b8f19be1a9d131",
+      "ruby": "8761b97687191a9543fe11257e513c590bd95b63bed35928f36a0bb64c382929",
+      "swift": "75bb4c9859d13920512df264b3a5b01cd7c4830bbb74d4a336d76a4613b11b18",
+      "kotlin": "08127c0dc354ac377f3e8ca001ba4b16d73e0a72c07a89160fce09955be64838",
+      "scala": "ef98e90202494a696d1f6e70c21c4cb22eb41d6d3f08690783ad6bf62d67ecf0",
+      "dart": "075fec2512f71dbee5ebe6b1cac25d642906764000f73e67b4c9601fdd2c586d",
+      "elixir": "eed796fa0b99c682188cfe9098c6696960f81efa434b2e75fc8f841d191e4ab8",
+      "fsharp": "8bc3fecd3df73e581ff766b333bf92d4ba638dc3f3b6cc0c6d9f9b1580baedc1",
+      "erlang": "04b1866b83d47581299f66706a773ceb92add0516171e0eb4b5d3c738a515166",
+      "lua": "e70807afa558e01f22d5a33ae5ad1039c4ad7bc5b5a63045c2963a86bf13374b",
+      "qml": "bdd3e5699df0549fb848de9671b76c3e802ab3ad3534e0fb9ce61950e72d4b60",
+      "qmldir": "5847a76883699475c32aed62f9656335c371985dda3c308a279f8b92711a2cf3",
+      "r": "a2477e6ad54c3525ab61a6a4f3580020c65a35270e3cd983f6294c6c520a3399",
+      "bash": "114cd5d00aa237450b620010000ead0bc0f995b2647f9184eb6707ad8da60317",
+      "powershell": "552470599ca66cd0888c6186be9cb25a03c5dec4c7892f1bf92442f93310ae53",
+      "gdscript": "b7c0fd47cb4721c32851c36e3255e5cccba518d93b4f512ac907eb35c8d4b44a",
+      "razor": "e41b0bb48133dc8975831583323366fe710bfac5a43a8f6b32e490cc8d2bee2e",
+      "sql": "557a90085a4397e416f395b1e81224791093d8fac0742eddf6517487b49b1101",
+      "regex": "c792d51d8a0531790f509af0bc48e726f6f4558fbf5a6c9bcd2083849eb9097e",
+      "markdown": "86c1e11b048d176a39d73edde668585def4538740384820b295b4cb36c0c3bfb",
+      "json": "7b0f598065728e0e2fd329db8e84489fe0a9b58fa034c5df1e6157fa1dc3921a",
+      "toml": "ac3f8355e0d6c9bc2a647844961f02db332d620e57620962ef8cb2a9e18f7da3",
+      "yaml": "c8e0f2e8911e1d9efa39203d6f2c323bfcc4b523a95140946317989c120f5689",
+      "xml": "3e69bc74d6cda4595811b7601e1d0d3adf6c354093c44aa48bf3554a7396c412"
+    }
+  },
+  "supported_languages": [
+    "bash",
+    "c",
+    "cpp",
+    "csharp",
+    "css",
+    "dart",
+    "elixir",
+    "erlang",
+    "fsharp",
+    "gdscript",
+    "go",
+    "html",
+    "java",
+    "javascript",
+    "json",
+    "jsx",
+    "kotlin",
+    "lua",
+    "markdown",
+    "php",
+    "powershell",
+    "python",
+    "qml",
+    "qmldir",
+    "r",
+    "razor",
+    "regex",
+    "ruby",
+    "rust",
+    "scala",
+    "sql",
+    "swift",
+    "toml",
+    "tsx",
+    "typescript",
+    "vbnet",
+    "vue",
+    "xml",
+    "yaml",
+    "zig"
+  ],
+  "symbol_inventory": [
+    {
+      "language": "bash",
+      "kind": "constant",
+      "count": 1
+    },
+    {
+      "language": "bash",
+      "kind": "function",
+      "count": 3
+    },
+    {
+      "language": "bash",
+      "kind": "variable",
+      "count": 12
+    },
+    {
+      "language": "c",
+      "kind": "field",
+      "count": 2
+    },
+    {
+      "language": "c",
+      "kind": "function",
+      "count": 7
+    },
+    {
+      "language": "c",
+      "kind": "struct",
+      "count": 7
+    },
+    {
+      "language": "c",
+      "kind": "variable",
+      "count": 12
+    },
+    {
+      "language": "cpp",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "cpp",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "cpp",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "cpp",
+      "kind": "function",
+      "count": 5
+    },
+    {
+      "language": "cpp",
+      "kind": "method",
+      "count": 4
+    },
+    {
+      "language": "cpp",
+      "kind": "struct",
+      "count": 3
+    },
+    {
+      "language": "cpp",
+      "kind": "variable",
+      "count": 17
+    },
+    {
+      "language": "csharp",
+      "kind": "class",
+      "count": 7
+    },
+    {
+      "language": "csharp",
+      "kind": "constant",
+      "count": 2
+    },
+    {
+      "language": "csharp",
+      "kind": "constructor",
+      "count": 2
+    },
+    {
+      "language": "csharp",
+      "kind": "field",
+      "count": 6
+    },
+    {
+      "language": "csharp",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "csharp",
+      "kind": "method",
+      "count": 10
+    },
+    {
+      "language": "csharp",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "csharp",
+      "kind": "property",
+      "count": 5
+    },
+    {
+      "language": "csharp",
+      "kind": "variable",
+      "count": 13
+    },
+    {
+      "language": "css",
+      "kind": "function",
+      "count": 1
+    },
+    {
+      "language": "css",
+      "kind": "property",
+      "count": 8
+    },
+    {
+      "language": "css",
+      "kind": "variable",
+      "count": 7
+    },
+    {
+      "language": "dart",
+      "kind": "class",
+      "count": 5
+    },
+    {
+      "language": "dart",
+      "kind": "constructor",
+      "count": 3
+    },
+    {
+      "language": "dart",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "dart",
+      "kind": "function",
+      "count": 6
+    },
+    {
+      "language": "dart",
+      "kind": "method",
+      "count": 4
+    },
+    {
+      "language": "dart",
+      "kind": "variable",
+      "count": 21
+    },
+    {
+      "language": "elixir",
+      "kind": "function",
+      "count": 11
+    },
+    {
+      "language": "elixir",
+      "kind": "import",
+      "count": 3
+    },
+    {
+      "language": "elixir",
+      "kind": "module",
+      "count": 1
+    },
+    {
+      "language": "elixir",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "elixir",
+      "kind": "variable",
+      "count": 17
+    },
+    {
+      "language": "erlang",
+      "kind": "constant",
+      "count": 2
+    },
+    {
+      "language": "erlang",
+      "kind": "field",
+      "count": 4
+    },
+    {
+      "language": "erlang",
+      "kind": "function",
+      "count": 10
+    },
+    {
+      "language": "erlang",
+      "kind": "module",
+      "count": 1
+    },
+    {
+      "language": "erlang",
+      "kind": "struct",
+      "count": 3
+    },
+    {
+      "language": "erlang",
+      "kind": "type",
+      "count": 2
+    },
+    {
+      "language": "erlang",
+      "kind": "variable",
+      "count": 16
+    },
+    {
+      "language": "fsharp",
+      "kind": "class",
+      "count": 4
+    },
+    {
+      "language": "fsharp",
+      "kind": "enum_member",
+      "count": 2
+    },
+    {
+      "language": "fsharp",
+      "kind": "field",
+      "count": 3
+    },
+    {
+      "language": "fsharp",
+      "kind": "function",
+      "count": 5
+    },
+    {
+      "language": "fsharp",
+      "kind": "method",
+      "count": 6
+    },
+    {
+      "language": "fsharp",
+      "kind": "module",
+      "count": 1
+    },
+    {
+      "language": "fsharp",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "fsharp",
+      "kind": "struct",
+      "count": 1
+    },
+    {
+      "language": "fsharp",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "fsharp",
+      "kind": "union",
+      "count": 1
+    },
+    {
+      "language": "fsharp",
+      "kind": "variable",
+      "count": 18
+    },
+    {
+      "language": "gdscript",
+      "kind": "class",
+      "count": 4
+    },
+    {
+      "language": "gdscript",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "gdscript",
+      "kind": "event",
+      "count": 1
+    },
+    {
+      "language": "gdscript",
+      "kind": "field",
+      "count": 2
+    },
+    {
+      "language": "gdscript",
+      "kind": "method",
+      "count": 9
+    },
+    {
+      "language": "gdscript",
+      "kind": "variable",
+      "count": 18
+    },
+    {
+      "language": "go",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "go",
+      "kind": "function",
+      "count": 6
+    },
+    {
+      "language": "go",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "go",
+      "kind": "method",
+      "count": 2
+    },
+    {
+      "language": "go",
+      "kind": "module",
+      "count": 1
+    },
+    {
+      "language": "go",
+      "kind": "struct",
+      "count": 3
+    },
+    {
+      "language": "go",
+      "kind": "variable",
+      "count": 15
+    },
+    {
+      "language": "html",
+      "kind": "class",
+      "count": 7
+    },
+    {
+      "language": "html",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "html",
+      "kind": "function",
+      "count": 1
+    },
+    {
+      "language": "html",
+      "kind": "namespace",
+      "count": 2
+    },
+    {
+      "language": "html",
+      "kind": "variable",
+      "count": 1
+    },
+    {
+      "language": "java",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "java",
+      "kind": "constant",
+      "count": 1
+    },
+    {
+      "language": "java",
+      "kind": "constructor",
+      "count": 2
+    },
+    {
+      "language": "java",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "java",
+      "kind": "method",
+      "count": 16
+    },
+    {
+      "language": "java",
+      "kind": "property",
+      "count": 2
+    },
+    {
+      "language": "java",
+      "kind": "variable",
+      "count": 23
+    },
+    {
+      "language": "javascript",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "javascript",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "javascript",
+      "kind": "export",
+      "count": 1
+    },
+    {
+      "language": "javascript",
+      "kind": "function",
+      "count": 2
+    },
+    {
+      "language": "javascript",
+      "kind": "method",
+      "count": 1
+    },
+    {
+      "language": "javascript",
+      "kind": "variable",
+      "count": 6
+    },
+    {
+      "language": "json",
+      "kind": "module",
+      "count": 2
+    },
+    {
+      "language": "json",
+      "kind": "variable",
+      "count": 4
+    },
+    {
+      "language": "jsx",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "jsx",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "jsx",
+      "kind": "export",
+      "count": 2
+    },
+    {
+      "language": "jsx",
+      "kind": "function",
+      "count": 4
+    },
+    {
+      "language": "jsx",
+      "kind": "variable",
+      "count": 6
+    },
+    {
+      "language": "kotlin",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "kotlin",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "kotlin",
+      "kind": "function",
+      "count": 1
+    },
+    {
+      "language": "kotlin",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "kotlin",
+      "kind": "method",
+      "count": 9
+    },
+    {
+      "language": "kotlin",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "kotlin",
+      "kind": "property",
+      "count": 4
+    },
+    {
+      "language": "kotlin",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "kotlin",
+      "kind": "variable",
+      "count": 10
+    },
+    {
+      "language": "lua",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "lua",
+      "kind": "field",
+      "count": 2
+    },
+    {
+      "language": "lua",
+      "kind": "function",
+      "count": 3
+    },
+    {
+      "language": "lua",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "lua",
+      "kind": "method",
+      "count": 3
+    },
+    {
+      "language": "lua",
+      "kind": "variable",
+      "count": 13
+    },
+    {
+      "language": "markdown",
+      "kind": "import",
+      "count": 2
+    },
+    {
+      "language": "markdown",
+      "kind": "module",
+      "count": 2
+    },
+    {
+      "language": "markdown",
+      "kind": "property",
+      "count": 2
+    },
+    {
+      "language": "php",
+      "kind": "class",
+      "count": 4
+    },
+    {
+      "language": "php",
+      "kind": "constant",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "constructor",
+      "count": 2
+    },
+    {
+      "language": "php",
+      "kind": "function",
+      "count": 7
+    },
+    {
+      "language": "php",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "method",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "trait",
+      "count": 1
+    },
+    {
+      "language": "php",
+      "kind": "variable",
+      "count": 15
+    },
+    {
+      "language": "powershell",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "powershell",
+      "kind": "constructor",
+      "count": 2
+    },
+    {
+      "language": "powershell",
+      "kind": "function",
+      "count": 7
+    },
+    {
+      "language": "powershell",
+      "kind": "method",
+      "count": 2
+    },
+    {
+      "language": "powershell",
+      "kind": "property",
+      "count": 2
+    },
+    {
+      "language": "powershell",
+      "kind": "variable",
+      "count": 19
+    },
+    {
+      "language": "python",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "python",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "python",
+      "kind": "function",
+      "count": 6
+    },
+    {
+      "language": "python",
+      "kind": "import",
+      "count": 2
+    },
+    {
+      "language": "python",
+      "kind": "method",
+      "count": 2
+    },
+    {
+      "language": "python",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "python",
+      "kind": "variable",
+      "count": 12
+    },
+    {
+      "language": "qml",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "qml",
+      "kind": "event",
+      "count": 1
+    },
+    {
+      "language": "qml",
+      "kind": "function",
+      "count": 10
+    },
+    {
+      "language": "qml",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "qml",
+      "kind": "property",
+      "count": 8
+    },
+    {
+      "language": "qml",
+      "kind": "variable",
+      "count": 16
+    },
+    {
+      "language": "qmldir",
+      "kind": "class",
+      "count": 3
+    },
+    {
+      "language": "qmldir",
+      "kind": "module",
+      "count": 1
+    },
+    {
+      "language": "r",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "r",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "r",
+      "kind": "function",
+      "count": 3
+    },
+    {
+      "language": "r",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "r",
+      "kind": "method",
+      "count": 2
+    },
+    {
+      "language": "r",
+      "kind": "variable",
+      "count": 12
+    },
+    {
+      "language": "razor",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "razor",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "razor",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "razor",
+      "kind": "method",
+      "count": 8
+    },
+    {
+      "language": "razor",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "razor",
+      "kind": "variable",
+      "count": 11
+    },
+    {
+      "language": "regex",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "regex",
+      "kind": "function",
+      "count": 3
+    },
+    {
+      "language": "regex",
+      "kind": "variable",
+      "count": 1
+    },
+    {
+      "language": "ruby",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "ruby",
+      "kind": "constant",
+      "count": 2
+    },
+    {
+      "language": "ruby",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "ruby",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "ruby",
+      "kind": "import",
+      "count": 2
+    },
+    {
+      "language": "ruby",
+      "kind": "method",
+      "count": 6
+    },
+    {
+      "language": "ruby",
+      "kind": "variable",
+      "count": 16
+    },
+    {
+      "language": "rust",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "rust",
+      "kind": "function",
+      "count": 8
+    },
+    {
+      "language": "rust",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "rust",
+      "kind": "method",
+      "count": 1
+    },
+    {
+      "language": "rust",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "rust",
+      "kind": "struct",
+      "count": 1
+    },
+    {
+      "language": "rust",
+      "kind": "variable",
+      "count": 10
+    },
+    {
+      "language": "scala",
+      "kind": "class",
+      "count": 6
+    },
+    {
+      "language": "scala",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "scala",
+      "kind": "function",
+      "count": 3
+    },
+    {
+      "language": "scala",
+      "kind": "method",
+      "count": 13
+    },
+    {
+      "language": "scala",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "scala",
+      "kind": "property",
+      "count": 4
+    },
+    {
+      "language": "scala",
+      "kind": "trait",
+      "count": 1
+    },
+    {
+      "language": "scala",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "scala",
+      "kind": "variable",
+      "count": 19
+    },
+    {
+      "language": "sql",
+      "kind": "class",
+      "count": 2
+    },
+    {
+      "language": "sql",
+      "kind": "field",
+      "count": 4
+    },
+    {
+      "language": "sql",
+      "kind": "interface",
+      "count": 4
+    },
+    {
+      "language": "sql",
+      "kind": "method",
+      "count": 1
+    },
+    {
+      "language": "sql",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "class",
+      "count": 4
+    },
+    {
+      "language": "swift",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "enum",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "enum_member",
+      "count": 2
+    },
+    {
+      "language": "swift",
+      "kind": "function",
+      "count": 7
+    },
+    {
+      "language": "swift",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "method",
+      "count": 6
+    },
+    {
+      "language": "swift",
+      "kind": "module",
+      "count": 2
+    },
+    {
+      "language": "swift",
+      "kind": "property",
+      "count": 4
+    },
+    {
+      "language": "swift",
+      "kind": "struct",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "swift",
+      "kind": "variable",
+      "count": 18
+    },
+    {
+      "language": "toml",
+      "kind": "module",
+      "count": 2
+    },
+    {
+      "language": "toml",
+      "kind": "property",
+      "count": 8
+    },
+    {
+      "language": "tsx",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "tsx",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "tsx",
+      "kind": "export",
+      "count": 2
+    },
+    {
+      "language": "tsx",
+      "kind": "function",
+      "count": 5
+    },
+    {
+      "language": "tsx",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "tsx",
+      "kind": "type",
+      "count": 1
+    },
+    {
+      "language": "tsx",
+      "kind": "variable",
+      "count": 9
+    },
+    {
+      "language": "typescript",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "typescript",
+      "kind": "constructor",
+      "count": 1
+    },
+    {
+      "language": "typescript",
+      "kind": "export",
+      "count": 2
+    },
+    {
+      "language": "typescript",
+      "kind": "function",
+      "count": 2
+    },
+    {
+      "language": "typescript",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "typescript",
+      "kind": "method",
+      "count": 2
+    },
+    {
+      "language": "typescript",
+      "kind": "variable",
+      "count": 6
+    },
+    {
+      "language": "vbnet",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "event",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "field",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "interface",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "method",
+      "count": 11
+    },
+    {
+      "language": "vbnet",
+      "kind": "namespace",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "property",
+      "count": 1
+    },
+    {
+      "language": "vbnet",
+      "kind": "variable",
+      "count": 20
+    },
+    {
+      "language": "vue",
+      "kind": "class",
+      "count": 1
+    },
+    {
+      "language": "vue",
+      "kind": "function",
+      "count": 5
+    },
+    {
+      "language": "vue",
+      "kind": "import",
+      "count": 2
+    },
+    {
+      "language": "vue",
+      "kind": "property",
+      "count": 7
+    },
+    {
+      "language": "vue",
+      "kind": "variable",
+      "count": 12
+    },
+    {
+      "language": "xml",
+      "kind": "module",
+      "count": 3
+    },
+    {
+      "language": "xml",
+      "kind": "variable",
+      "count": 3
+    },
+    {
+      "language": "yaml",
+      "kind": "module",
+      "count": 2
+    },
+    {
+      "language": "yaml",
+      "kind": "variable",
+      "count": 5
+    },
+    {
+      "language": "zig",
+      "kind": "constant",
+      "count": 1
+    },
+    {
+      "language": "zig",
+      "kind": "field",
+      "count": 2
+    },
+    {
+      "language": "zig",
+      "kind": "function",
+      "count": 13
+    },
+    {
+      "language": "zig",
+      "kind": "import",
+      "count": 1
+    },
+    {
+      "language": "zig",
+      "kind": "method",
+      "count": 3
+    },
+    {
+      "language": "zig",
+      "kind": "struct",
+      "count": 2
+    },
+    {
+      "language": "zig",
+      "kind": "variable",
+      "count": 28
+    }
+  ],
+  "projections": {
+    "content": {
+      "counters": {
+        "DeltaRowsRead": 40,
+        "ChangedPaths": 40,
+        "DeletedPaths": 0,
+        "RowsInserted": 0,
+        "RowsUpdated": 40,
+        "RowsDeleted": 0,
+        "FullFiles": 0,
+        "FullDocuments": 0,
+        "Elapsed": "00:00:00.0518435"
+      },
+      "languages": 40,
+      "canonical_rows": 80
+    },
+    "search": {
+      "counters": {
+        "DeltaRowsRead": 40,
+        "ChangedPaths": 40,
+        "DeletedPaths": 0,
+        "RowsInserted": 6,
+        "RowsUpdated": 1020,
+        "RowsDeleted": 6,
+        "FullFiles": 0,
+        "FullDocuments": 0,
+        "Elapsed": "00:00:00.1580826"
+      },
+      "languages": 40,
+      "canonical_rows": 3078
+    },
+    "context:bash": {
+      "symbol_id": "13dc181444c168234ca87c9fa9d55c4e",
+      "name": "$1",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:c": {
+      "symbol_id": "6417508c822ba60e9809b86d41cbb26e",
+      "name": "Worker",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:cpp": {
+      "symbol_id": "f0b5431e31896e38f62a3753ed43775c",
+      "name": "Base",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:csharp": {
+      "symbol_id": "d560e09a00b443506dbeeb1dd09213dc",
+      "name": "Capacity",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:css": {
+      "symbol_id": "118d6594b404296e71acbf55ff80b31f",
+      "name": "--accent",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:dart": {
+      "symbol_id": "44fbb2753c8f393882f02e0f88faf9a6",
+      "name": "Foo",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:elixir": {
+      "symbol_id": "e184811fb35604b42b1ba4b9db9ea988",
+      "name": "Fixture.Helper",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:erlang": {
+      "symbol_id": "c93a5c80ec2991d90c4e05c0988739d8",
+      "name": "Acct",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:fsharp": {
+      "symbol_id": "e73189dc8213b7697d18d3dd9c2264d7",
+      "name": "Bar",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:gdscript": {
+      "symbol_id": "a7c5137f7d32faf235e65a69044dcd12",
+      "name": "Bar",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:go": {
+      "symbol_id": "946cd76ae0fff9f8fc774bc1403c1207",
+      "name": "Evaluate",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:html": {
+      "symbol_id": "e4d6433721bc06279c94c27f7647b82b",
+      "name": "DOCTYPE",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:java": {
+      "symbol_id": "5c669b0025c8775e9c826618b97e546d",
+      "name": "Job",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:javascript": {
+      "symbol_id": "197609b2fad85dcb5ac8139a09fd6223",
+      "name": "Worker",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:json": {
+      "symbol_id": "fbb745c15082766b4a70ed3797197520",
+      "name": "active",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:jsx": {
+      "symbol_id": "bea0277daee909b6fe0d7c978348e07a",
+      "name": "Badge",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:kotlin": {
+      "symbol_id": "4993499d6c66044050dd72f490279cda",
+      "name": "Job",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:lua": {
+      "symbol_id": "c0dbac8df3513508ef42e0ea21a01b73",
+      "name": "Worker",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:markdown": {
+      "symbol_id": "a212dbf05e2133ab82b68e025e1ca24f",
+      "name": "Usage",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:php": {
+      "symbol_id": "762962b3ec6977704cef522ecf7f56e2",
+      "name": "Entity",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:powershell": {
+      "symbol_id": "4052011159068cad308aeabde0df4b96",
+      "name": "Count",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:python": {
+      "symbol_id": "d47a9a38bcbb85920eb3bb54cc27b37f",
+      "name": "Dict",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:qml": {
+      "symbol_id": "d0635b52d0cb2f4c82cd31b4763c55e2",
+      "name": "QtQuick",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:qmldir": {
+      "symbol_id": "ba56d48cec8d48954d22561308fb4397",
+      "name": "Button",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:r": {
+      "symbol_id": "674bf895578afb6fd8a186022a573037",
+      "name": "Worker",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:razor": {
+      "symbol_id": "c508a0268bdb0d7213ad80572a0dd7a3",
+      "name": "@page",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:regex": {
+      "symbol_id": "e33cdca0a70bc5911e5e1865144041e5",
+      "name": "(?\u003Cid\u003E\\d\u002B)",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:ruby": {
+      "symbol_id": "fd5ef8b3cdec410e209ec63736674c6d",
+      "name": "@id",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:rust": {
+      "symbol_id": "a264853dd1a5c114accacbebad99c342",
+      "name": "HashMap",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:scala": {
+      "symbol_id": "63f57ddea143bf315124ae97317f8b84",
+      "name": "\u003Canonymous\u003E",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:sql": {
+      "symbol_id": "32710560eef1d38c84ca0b21f837e0f3",
+      "name": "active_workers",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:swift": {
+      "symbol_id": "bb03d71019f2cfc6bbd8233a8947bf2f",
+      "name": "Counter",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:toml": {
+      "symbol_id": "caa2da0d90fca9f255ecf8040e60bdf3",
+      "name": "active",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:tsx": {
+      "symbol_id": "3e8d882622123bd67cddd794a86e9dfc",
+      "name": "Badge",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:typescript": {
+      "symbol_id": "95a160f4eac4dc194a2ec4cfbfba1bf8",
+      "name": "Job",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:vbnet": {
+      "symbol_id": "a8f3bab4e8c6ebfba862497a686afc99",
+      "name": "Completed",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:vue": {
+      "symbol_id": "93853354f4b53d3fee0f2e47662af024",
+      "name": "--accent",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:xml": {
+      "symbol_id": "e7c4c3b191a57aef8f461e83e8cc3ba6",
+      "name": "ConnectionTimeout",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:yaml": {
+      "symbol_id": "b21cea2933136799c5f996ae40317d79",
+      "name": "active",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    },
+    "context:zig": {
+      "symbol_id": "307982a98aba54e3b0cdae7669b1d106",
+      "name": "Self",
+      "item_type": "symbol",
+      "role": "pivot",
+      "error": false,
+      "diagnostic": false
+    }
+  }
+}

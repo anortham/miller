@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "extractor": {
+    "version": "2.40.4",
+    "sha256": "acfb332fe2795b4b60283c178fab9835ceaa5a650317bc387b623cf6818a5bc3"
+  },
+  "family_id": "fc9c2996-a723-41e5-85d6-4f94c78b09d5",
+  "view_id": "view-scale",
+  "protected_baseline_sequences": {
+    "Content": 6,
+    "Search": 6
+  },
+  "retired_generation": "gen-001",
+  "retained_sequence": 12,
+  "recovered_sequence": 18,
+  "consumers": {
+    "content": {
+      "GenerationName": "gen-002",
+      "ConsumerId": "miller-sc-v1:21DAB409E18C90A07835C23CD0BDAD52C3C2BC0A7F457C9427E4E9E453FA7F4C"
+    },
+    "search": {
+      "GenerationName": "gen-002",
+      "ConsumerId": "miller-sc-v1:1063036A10A46522950F8E28DE78EA7E9D67E51F1746C79CF24E1FA8C5A4C046"
+    }
+  },
+  "verified": {
+    "baseline_advance_before_delta": true,
+    "reader_registrations_during_gc": 0,
+    "complete_delta_after_producer_gc": true,
+    "sidecar_commit_before_target_advance": true,
+    "lost_reply_recovered_without_rebuild": true,
+    "exact_content_release_preserved_search": true,
+    "generation_rollover_released_each_obsolete_kind_after_its_new_commit": true,
+    "exact_view_retirement": "Retired"
+  }
+}

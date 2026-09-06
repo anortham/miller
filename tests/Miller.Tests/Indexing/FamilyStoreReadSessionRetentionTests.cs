@@ -808,7 +808,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
         Assert.Equal(new[] { "acquire", "open:1", "open:2", "close:2", "close:1", "release" }, events);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task BackgroundWarmKeepsTheSamePinUntilItsConnectionCloses()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -816,6 +816,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var finish = new ManualResetEventSlim();
         using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         int opens = 0;
         using IDisposable scope = StoreReaderRegistrationContext.Use(fixture.Binding.StoreRoot,
             new(new StoreReaderRegistrationRunner((args, _) =>
@@ -828,7 +829,7 @@ public sealed class FamilyStoreReadSessionRetentionTests
                 if (ordinal == 2)
                 {
                     entered.SetResult();
-                    if (!finish.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+                    finish.Wait(cancellationToken);
                 }
                 return RecordingOpen(path, events, ordinal);
             }));
@@ -836,9 +837,10 @@ public sealed class FamilyStoreReadSessionRetentionTests
         Task warm = session.WarmResolutionFactsInBackground();
         try
         {
-            // Yield the test worker while the background warm is queued. Blocking it here can
-            // starve the same thread pool under the full suite, before the load even starts.
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Task first = await Task.WhenAny(entered.Task, warm)
+                .WaitAsync(cancellationToken);
+            if (ReferenceEquals(first, warm)) await warm;
+            Assert.Same(entered.Task, first);
             Task shared = session.WarmResolutionFactsInBackground();
             Assert.Same(warm, shared);
             session.Dispose();
@@ -849,8 +851,8 @@ public sealed class FamilyStoreReadSessionRetentionTests
         finally
         {
             finish.Set();
-            await warm.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            session.Dispose();
+            try { await warm.WaitAsync(cancellationToken); }
+            finally { session.Dispose(); }
         }
         Assert.Equal(new[] { "acquire", "open:1", "close:1", "open:2", "close:2", "release" }, events);
         Assert.Equal(0, registry.Count);
