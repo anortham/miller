@@ -196,6 +196,15 @@ public static class StoreWalCheckpoint
             }.ToString());
             connection.Open();
             using var command = connection.CreateCommand();
+            // An empty TRUNCATE can change other connections' data_version. A WAL
+            // header is 32 bytes; without frames there is no checkpoint work.
+            if (WalBytes(databasePath) is >= 0 and <= 32)
+            {
+                // Preserve corruption/lock reporting even on the no-work path.
+                command.CommandText = "PRAGMA schema_version;";
+                command.ExecuteScalar();
+                return StoreWalCheckpointStatus.Ok;
+            }
             command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
             using SqliteDataReader reader = command.ExecuteReader();
             if (!reader.Read())

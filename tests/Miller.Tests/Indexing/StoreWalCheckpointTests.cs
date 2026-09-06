@@ -7,6 +7,37 @@ namespace Miller.Tests.Indexing;
 
 public sealed class StoreWalCheckpointTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmptyStoreCheckpointDoesNotInvalidateAnObserver(bool headerOnly)
+    {
+        using var dir = new TempDir();
+        string database = Path.Combine(dir.Root, "store.db");
+        byte[] header;
+        using (var setup = new SqliteConnection($"Data Source={database};Pooling=False"))
+        {
+            setup.Open();
+            using var command = setup.CreateCommand();
+            command.CommandText = "PRAGMA journal_mode=WAL; CREATE TABLE facts(x); INSERT INTO facts VALUES(1);";
+            command.ExecuteNonQuery();
+            header = File.ReadAllBytes(database + "-wal")[..32];
+        }
+        if (headerOnly)
+            File.WriteAllBytes(database + "-wal", header);
+        using var observer = new SqliteConnection($"Data Source={database};Mode=ReadOnly;Pooling=False");
+        observer.Open();
+        using var probe = observer.CreateCommand();
+        probe.CommandText = "PRAGMA data_version";
+        long before = (long)probe.ExecuteScalar()!;
+
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(StoreWalCheckpointStatus.Ok, StoreWalCheckpoint.TryTruncate(database));
+            Assert.Equal(before, (long)probe.ExecuteScalar()!);
+        }
+    }
+
     [Fact]
     public async Task FamilyCheckpointDoesNotWaitForALongCoordinatorLock()
     {
