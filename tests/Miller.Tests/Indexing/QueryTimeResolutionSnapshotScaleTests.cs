@@ -47,11 +47,13 @@ public sealed class QueryTimeResolutionSnapshotScaleTests(ITestOutputHelper outp
         using (SqliteConnection miller = QueryTimeResolutionParity.OpenRead(millerStore))
         {
             StoreVisibility visibility = QueryTimeResolutionParity.ReadExactVisibility(miller, millerStore);
-            _ = store.GetOrAdvance(
+            using (var lease = store.Acquire(
                 "miller",
                 visibility.ManifestHash + ":" + visibility.ManifestGeneration,
                 () => QueryTimeResolutionParity.OpenRead(millerStore),
-                visibility);
+                visibility))
+            {
+            }
         }
 
         int afterFirst = store.ScopeCount;
@@ -59,11 +61,13 @@ public sealed class QueryTimeResolutionSnapshotScaleTests(ITestOutputHelper outp
         using (SqliteConnection aspnet = QueryTimeResolutionParity.OpenRead(aspnetStore))
         {
             StoreVisibility visibility = QueryTimeResolutionParity.ReadExactVisibility(aspnet, aspnetStore);
-            _ = store.GetOrAdvance(
+            using (var lease = store.Acquire(
                 "aspnet",
                 visibility.ManifestHash + ":" + visibility.ManifestGeneration,
                 () => QueryTimeResolutionParity.OpenRead(aspnetStore),
-                visibility);
+                visibility))
+            {
+            }
         }
 
         output.WriteLine(

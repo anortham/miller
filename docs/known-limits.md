@@ -91,3 +91,9 @@
 - Swift, Dart, Elixir, Erlang, native C/C++/CTest, Zig, Lua, R, and Bash have no CT provider yet.
   `.fsproj` test projects can be discovered and run through the .NET provider, but F# source
   changes do not have extractor-backed CT impact mapping.
+- Revision fact cache operates under a 256 MiB soft retained budget. Active readers hold leases
+  (`RevisionFactCacheLease`) ensuring evicted cache objects remain valid and accounted for as
+  evicted-held entries until the reading session disposes. Cache size estimates reflect internal
+  memory models, not process RSS; process RSS is measured separately by platform samplers and is
+  not guaranteed to stay within the 256 MiB soft retained budget.
+

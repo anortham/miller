@@ -9,7 +9,7 @@ namespace Miller.Tests.Indexing.Resolution;
 public sealed class RevisionFactCacheStoreTests
 {
     [Fact]
-    public void GetOrAdvance_KeepsOneRevisionPerScopeAndAdvances()
+    public void Acquire_KeepsOneRevisionPerScopeAndAdvances()
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
         fixture.AddFile(1, "keep.cs");
@@ -18,16 +18,19 @@ public sealed class RevisionFactCacheStoreTests
         fixture.AddSymbol(2, "old", "Old", "class", "change.cs");
 
         var store = new RevisionFactCacheStore();
-        RevisionFactCache first = store.GetOrAdvance("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        using RevisionFactCacheLease firstLease = store.Acquire("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        RevisionFactCache first = firstLease.Cache;
         FactSymbol[] kept = first.SymbolsOfVersion(1);
-        RevisionFactCache same = store.GetOrAdvance("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        using RevisionFactCacheLease sameLease = store.Acquire("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        RevisionFactCache same = sameLease.Cache;
         Assert.Same(first, same);
         Assert.Equal(1, store.ScopeCount);
 
         fixture.AddSymbol(3, "neu", "New", "class", "change.cs");
         fixture.FlipManifest(2, [("keep.cs", 1, "csharp", "indexed"), ("change.cs", 3, "csharp", "indexed")]);
 
-        RevisionFactCache second = store.GetOrAdvance("ws-a", "rev-2", fixture.OpenRead, fixture.Visibility());
+        using RevisionFactCacheLease secondLease = store.Acquire("ws-a", "rev-2", fixture.OpenRead, fixture.Visibility());
+        RevisionFactCache second = secondLease.Cache;
         Assert.NotSame(first, second);
         Assert.Same(kept, second.SymbolsOfVersion(1));
         Assert.Equal("New", System.Linq.Enumerable.Single(second.SymbolsNamed("New")).Name);
@@ -35,7 +38,7 @@ public sealed class RevisionFactCacheStoreTests
     }
 
     [Fact]
-    public void GetOrAdvance_EvictsLeastRecentlyUsedScopeWhenOverBudget()
+    public void Acquire_EvictsLeastRecentlyUsedScopeWhenOverBudget()
     {
         using ResolutionStoreFixture firstFixture = ResolutionStoreFixture.Create();
         firstFixture.AddFile(1, "a.cs");
@@ -48,17 +51,23 @@ public sealed class RevisionFactCacheStoreTests
         thirdFixture.AddSymbol(1, "c", "Gamma", "class", "c.cs");
 
         var store = new RevisionFactCacheStore(byteBudget: 1);
-        RevisionFactCache first = store.GetOrAdvance("ws-a", "r1", firstFixture.OpenRead, firstFixture.Visibility());
-        _ = store.GetOrAdvance("ws-b", "r1", secondFixture.OpenRead, secondFixture.Visibility());
-        Assert.Equal(1, store.ScopeCount);
-        RevisionFactCache again = store.GetOrAdvance("ws-a", "r1", firstFixture.OpenRead, firstFixture.Visibility());
-        Assert.NotSame(first, again);
-        Assert.Equal("Alpha", System.Linq.Enumerable.Single(again.SymbolsNamed("Alpha")).Name);
+        using (RevisionFactCacheLease first = store.Acquire("ws-a", "r1", firstFixture.OpenRead, firstFixture.Visibility()))
+        {
+            using (RevisionFactCacheLease second = store.Acquire("ws-b", "r1", secondFixture.OpenRead, secondFixture.Visibility()))
+            {
+                Assert.Equal(1, store.ScopeCount);
+            }
+            using RevisionFactCacheLease again = store.Acquire("ws-a", "r1", firstFixture.OpenRead, firstFixture.Visibility());
+            Assert.NotSame(first.Cache, again.Cache);
+            Assert.Equal("Alpha", System.Linq.Enumerable.Single(again.Cache.SymbolsNamed("Alpha")).Name);
+        }
 
-        store.GetOrAdvance("ws-c", "r1", thirdFixture.OpenRead, thirdFixture.Visibility());
-        Assert.Equal(1, store.ScopeCount);
-        Assert.Equal("Gamma", System.Linq.Enumerable.Single(
-            store.GetOrAdvance("ws-c", "r1", thirdFixture.OpenRead, thirdFixture.Visibility()).SymbolsNamed("Gamma")).Name);
+        using (RevisionFactCacheLease third = store.Acquire("ws-c", "r1", thirdFixture.OpenRead, thirdFixture.Visibility()))
+        {
+            Assert.Equal(1, store.ScopeCount);
+            using RevisionFactCacheLease thirdAgain = store.Acquire("ws-c", "r1", thirdFixture.OpenRead, thirdFixture.Visibility());
+            Assert.Equal("Gamma", System.Linq.Enumerable.Single(thirdAgain.Cache.SymbolsNamed("Gamma")).Name);
+        }
     }
 
     [Fact]
@@ -71,7 +80,9 @@ public sealed class RevisionFactCacheStoreTests
         var store = new RevisionFactCacheStore();
         Assert.False(store.IsWarm("ws-a", "rev-1"));
 
-        _ = store.GetOrAdvance("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        using (RevisionFactCacheLease lease = store.Acquire("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility()))
+        {
+        }
         Assert.True(store.IsWarm("ws-a", "rev-1"));
         Assert.True(store.IsWarm("ws-a", "rev-2"));
         Assert.False(store.IsWarm("ws-b", "rev-1"));
@@ -151,11 +162,12 @@ public sealed class RevisionFactCacheStoreTests
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
         QmlVisibilityFixtureSupport.Populate(fixture);
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         QmlVisibleType[] candidates = facts.QmlTypesVisibleTo(1).ToArray();
 
@@ -194,11 +206,12 @@ public sealed class RevisionFactCacheStoreTests
         using ResolutionStoreFixture malformedFixture = ResolutionStoreFixture.Create();
         QmlVisibilityFixtureSupport.Populate(malformedFixture);
         malformedFixture.ExecuteWrite("UPDATE structural_facts SET metadata_json='not-json' WHERE structural_fact_id='fact-remote';");
-        IResolutionFacts malformed = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease malformedLease = new RevisionFactCacheStore().Acquire(
             "qml-store-malformed",
             "qml-rev-1",
             malformedFixture.OpenRead,
             malformedFixture.Visibility());
+        IResolutionFacts malformed = malformedLease.Cache;
 
         Assert.Equal(
             ["LocalCard", "Theme", "Theme", "source"],
@@ -207,11 +220,12 @@ public sealed class RevisionFactCacheStoreTests
         using ResolutionStoreFixture futureFixture = ResolutionStoreFixture.Create();
         QmlVisibilityFixtureSupport.Populate(futureFixture);
         futureFixture.ExecuteWrite("UPDATE structural_facts SET pattern_id='qmldir.object_type.v2' WHERE structural_fact_id='fact-remote';");
-        IResolutionFacts future = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease futureLease = new RevisionFactCacheStore().Acquire(
             "qml-store-future",
             "qml-rev-1",
             futureFixture.OpenRead,
             futureFixture.Visibility());
+        IResolutionFacts future = futureLease.Cache;
 
         Assert.Equal(
             ["LocalCard", "Theme", "Theme", "source"],
@@ -230,11 +244,12 @@ public sealed class RevisionFactCacheStoreTests
             WHERE structural_fact_id='fact-typeinfo';
             """);
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-missing-typeinfo",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         QmlVisibleType remote = Assert.Single(
             facts.QmlTypesVisibleTo(1),
@@ -257,11 +272,12 @@ public sealed class RevisionFactCacheStoreTests
             WHERE structural_fact_id='fact-remote';
             """);
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-export-alias",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         QmlVisibleType remote = Assert.Single(
             facts.QmlTypesVisibleTo(1),
@@ -286,11 +302,12 @@ public sealed class RevisionFactCacheStoreTests
             language: "qml",
             metadataJson: """{"import_kind":"directory","source":"."}""");
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-dot-import",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         ResolutionOutcome outcome = new QueryTimeResolver(facts).Resolve(new ResolutionInput(
             ResolutionOrigin.Pending,
@@ -320,11 +337,12 @@ public sealed class RevisionFactCacheStoreTests
             UPDATE symbols SET path='components\RemoteCard.qml' WHERE version_id=3;
             """);
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-paths",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
         QmlVisibleType remote = Assert.Single(
             facts.QmlTypesVisibleTo(1),
             candidate => candidate.Target.SymbolId == "remote" && candidate.ImportAlias == "Components");
@@ -337,11 +355,12 @@ public sealed class RevisionFactCacheStoreTests
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
         QmlVisibilityFixtureSupport.Populate(fixture);
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-same-file",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         QmlVisibleType sameFile = Assert.Single(
             facts.QmlTypesVisibleTo(1),
@@ -365,11 +384,12 @@ public sealed class RevisionFactCacheStoreTests
             WHERE structural_fact_id='fact-theme';
             """);
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-unversioned-entry",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
 
         Assert.Contains(
             facts.QmlTypesVisibleTo(1),
@@ -392,11 +412,12 @@ public sealed class RevisionFactCacheStoreTests
             language: "qml",
             metadataJson: """{"import_kind":"directory","source":"loose","alias":"Loose","local_name":"Loose","is_namespace":true}""");
 
-        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+        using RevisionFactCacheLease lease = new RevisionFactCacheStore().Acquire(
             "qml-store-loose-dir",
             "qml-rev-1",
             fixture.OpenRead,
             fixture.Visibility());
+        IResolutionFacts facts = lease.Cache;
         QmlVisibleType loose = Assert.Single(
             facts.QmlTypesVisibleTo(1),
             candidate => candidate.Target.SymbolId == "loose-card");
@@ -405,5 +426,154 @@ public sealed class RevisionFactCacheStoreTests
         Assert.Equal("qml.import", loose.Evidence.Provenance);
         Assert.Equal(0, loose.Evidence.StartByte);
         Assert.Equal(1, loose.Evidence.EndByte);
+    }
+
+    [Fact]
+    public void CacheResourceState_TwoRetainedScopes_ReportsBothInRetainedAndLiveUnion()
+    {
+        var obj1 = new object();
+        var obj2 = new object();
+        var retained = new HashSet<object> { obj1, obj2 };
+        var active = new HashSet<object>();
+        var bytes = new Dictionary<object, long> { [obj1] = 100L, [obj2] = 200L };
+
+        var state = new CacheResourceState(retained, active, bytes);
+        CacheResourceSnapshot snapshot = state.ToSnapshot();
+
+        Assert.Equal(2, snapshot.RetainedEntryCount);
+        Assert.Equal(300L, snapshot.RetainedBytes);
+        Assert.Equal(0, snapshot.ActiveLeaseCount);
+        Assert.Equal(0L, snapshot.ActiveBytes);
+        Assert.Equal(0, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(0L, snapshot.EvictedHeldBytes);
+        Assert.Equal(2, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(300L, snapshot.UniqueLiveBytes);
+        Assert.Equal(0, snapshot.OversizedEntryCount);
+    }
+
+    [Fact]
+    public void CacheResourceState_TwoIdentities_ReportsEvictedHeldAndRetainedSeparately()
+    {
+        var oldRev = new object();
+        var newRev = new object();
+        var retained = new HashSet<object> { newRev };
+        var active = new HashSet<object> { oldRev };
+        var bytes = new Dictionary<object, long> { [oldRev] = 100L, [newRev] = 150L };
+
+        var state = new CacheResourceState(retained, active, bytes);
+        CacheResourceSnapshot snapshot = state.ToSnapshot(activeLeaseCount: 1);
+
+        Assert.Equal(1, snapshot.RetainedEntryCount);
+        Assert.Equal(150L, snapshot.RetainedBytes);
+        Assert.Equal(1, snapshot.ActiveLeaseCount);
+        Assert.Equal(100L, snapshot.ActiveBytes);
+        Assert.Equal(1, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(100L, snapshot.EvictedHeldBytes);
+        Assert.Equal(2, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(250L, snapshot.UniqueLiveBytes);
+        Assert.Equal(0, snapshot.OversizedEntryCount);
+    }
+
+    [Fact]
+    public void CacheResourceState_OverlappingRetainedAndActive_UnionAvoidsDoubleCounting()
+    {
+        var sharedObj = new object();
+        var retained = new HashSet<object> { sharedObj };
+        var active = new HashSet<object> { sharedObj };
+        var bytes = new Dictionary<object, long> { [sharedObj] = 500L };
+
+        var state = new CacheResourceState(retained, active, bytes);
+        CacheResourceSnapshot snapshot = state.ToSnapshot(activeLeaseCount: 3);
+
+        Assert.Equal(1, snapshot.RetainedEntryCount);
+        Assert.Equal(500L, snapshot.RetainedBytes);
+        Assert.Equal(3, snapshot.ActiveLeaseCount);
+        Assert.Equal(500L, snapshot.ActiveBytes);
+        Assert.Equal(0, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(0L, snapshot.EvictedHeldBytes);
+        Assert.Equal(1, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(500L, snapshot.UniqueLiveBytes);
+    }
+
+    [Fact]
+    public void CacheResourceState_OversizedEntry_ReportsOversizedCountWithoutFailing()
+    {
+        var bigObj = new object();
+        long budget = 256L * 1024 * 1024;
+        long bigBytes = budget + 1024;
+        var retained = new HashSet<object> { bigObj };
+        var active = new HashSet<object>();
+        var bytes = new Dictionary<object, long> { [bigObj] = bigBytes };
+
+        var state = new CacheResourceState(retained, active, bytes);
+        CacheResourceSnapshot snapshot = state.ToSnapshot(byteBudget: budget);
+
+        Assert.Equal(1, snapshot.RetainedEntryCount);
+        Assert.Equal(bigBytes, snapshot.RetainedBytes);
+        Assert.Equal(1, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(bigBytes, snapshot.UniqueLiveBytes);
+        Assert.Equal(1, snapshot.OversizedEntryCount);
+    }
+
+    [Fact]
+    public void GetResourceSnapshot_RetainedSqliteFixture_MatchesResidentBytesEstimate()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "source.cs");
+        fixture.AddSymbol(1, "sym", "Sym", "class", "source.cs");
+
+        var store = new RevisionFactCacheStore();
+        using (var lease = store.Acquire("ws-1", "rev-1", fixture.OpenRead, fixture.Visibility()))
+        {
+        }
+
+        CacheResourceSnapshot snapshot = store.GetResourceSnapshot();
+        Assert.Equal(1, snapshot.RetainedEntryCount);
+        Assert.True(snapshot.RetainedBytes > 0);
+        Assert.Equal(store.ResidentBytes, snapshot.RetainedBytes);
+        Assert.Equal(0, snapshot.ActiveLeaseCount);
+        Assert.Equal(0L, snapshot.ActiveBytes);
+        Assert.Equal(0, snapshot.EvictedHeldEntryCount);
+        Assert.Equal(0L, snapshot.EvictedHeldBytes);
+        Assert.Equal(1, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(snapshot.RetainedBytes, snapshot.UniqueLiveBytes);
+        Assert.Equal(0, snapshot.OversizedEntryCount);
+    }
+
+    [Fact]
+    public async Task GetResourceSnapshot_DoesNotForceLazyLoadUnderGate()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "source.cs");
+        fixture.AddSymbol(1, "sym", "Sym", "class", "source.cs");
+
+        var store = new RevisionFactCacheStore();
+        using var blocker = new ManualResetEventSlim(initialState: false);
+        int opens = 0;
+
+        Task warm = store.WarmInBackground(
+            "ws-1",
+            "rev-1",
+            () =>
+            {
+                Interlocked.Increment(ref opens);
+                blocker.Wait(TimeSpan.FromSeconds(5));
+                return fixture.OpenRead();
+            },
+            fixture.Visibility());
+
+        // Snapshot while warm is in-flight:
+        CacheResourceSnapshot snapshot = store.GetResourceSnapshot();
+        Assert.Equal(0, snapshot.RetainedEntryCount);
+        Assert.Equal(0L, snapshot.RetainedBytes);
+        Assert.Equal(0, snapshot.UniqueLiveEntryCount);
+        Assert.Equal(0L, snapshot.UniqueLiveBytes);
+
+        blocker.Set();
+        await warm;
+
+        CacheResourceSnapshot after = store.GetResourceSnapshot();
+        Assert.Equal(1, after.RetainedEntryCount);
+        Assert.True(after.RetainedBytes > 0);
     }
 }
