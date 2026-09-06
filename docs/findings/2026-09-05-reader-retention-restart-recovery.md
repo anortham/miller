@@ -147,3 +147,42 @@ The running resident process still uses the earlier build and needs the user's
 rebuild/restart after integration. Stored-data recovery alone is not proof of a
 healthy resident restart. M3 remains unstarted. No semantic runtime or Miller
 marketplace release is included.
+
+## 2.40.2 writer-transaction follow-up
+
+The subsequent resident restart did bootstrap successfully, but its forced
+extractor-upgrade imports failed at Julie's `store_import_ensure_view` with
+`database is locked`. During imports, reader admission also reported Busy. Idle
+samples had no writer lease or queued/claimed request, so this was not established
+as another abandoned-request incident. Serving a readable view did not discharge
+the owed full-level upgrade.
+
+The user supplied a producer fix, reviewed and published as
+[julie-extract 2.40.2](https://github.com/anortham/julie-extractors/releases/tag/v2.40.2)
+at 2026-09-06T00:24:47Z. Tagged source is
+`2bf79f26b79e9bef597b0909b374614514a1ac3a`; source CI `33999763883` and release
+workflow `34000602133` passed. `StoreWriterConnection.transaction()` now reserves
+the writer with `Immediate` before a quantum reads. Previously method resolution
+through `DerefMut` selected rusqlite's deferred transaction. The regression fails
+on the old implementation because a competing write succeeds, and passes on the
+fix because the quantum retains writer ownership and completes.
+
+Two preliminary explanatory claims were corrected during review. Pinned rusqlite
+0.40.0 already sets a five-second busy timeout; the explicit timeout stabilizes
+policy rather than changing a zero default. The final regression uses a competing
+writer, not a checkpoint. The exact live competing connection remains unproven.
+Neither the release nor passing fixture tests alone certify live upgrade recovery.
+The producer's [release evidence](../../../julie-extractors/docs/release-evidence/2026-09-06-v2-40-2-release.md)
+records the review boundaries and source/native gates.
+
+Miller adopts all four actual release archive hashes and explicitly qualifies its
+reader capability at 2.40.2. Reader-floor tests retain 2.40.0/2.40.1 acceptance,
+add 2.40.2 acceptance, and reject 2.40.3/2.41.0. The new acceptance failed before
+the capability change; all five cases then passed. Normal Linux restore verified
+the public archive and executable; the installed reader/retention/all-language
+focused scope passed 67 tests with zero skips/failures.
+
+Full resident verification remains a post-rebuild/restart gate: observe completion
+of the owed full extraction, discharge of the failure journal, and no recurring
+import lock failure. No semantic runtime or Miller marketplace release is needed
+for this pin adoption; M2-M5 remain unstarted.

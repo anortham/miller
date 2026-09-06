@@ -43,9 +43,9 @@ public sealed class FamilyStoreReadSession :
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
-    // Explicitly qualified against producer 2.40.1, independent of package pins.
+    // Explicitly qualified against producer 2.40.2, independent of package pins.
     // Fresh stores use their creator version as the reader floor; qualify each pin bump.
-    private const string ReaderContractCapability = "2.40.1";
+    private const string ReaderContractCapability = "2.40.2";
     private static readonly Regex GenerationName = new(
         @"^gen-[0-9]{3,}$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
