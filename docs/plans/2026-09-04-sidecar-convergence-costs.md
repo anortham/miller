@@ -140,9 +140,9 @@ internal static StoreConsumerCursorOutcome Release(
 5. Parse `report_schema_version`, `action`, `mode`, `disposition`, `family_id`, `source_generation`, `consumer_id`, and `consumer_sequence`. Follow the existing `StoreMaintenanceReport.with_cursor` implementation in Julie `crates/julie-extract-cli/src/store/maintenance_report.rs:375`: an advance succeeds with `action=cursor_advance`, `mode=apply`, and `disposition=advanced` or `no_change`; a release succeeds with `action=cursor_release`, `mode=apply`, and `disposition=released` or `no_change`. The generic `applied` disposition is NOT the cursor success value. Require exit 0, schema v1, no failure, and matching family/consumer ID. Advance additionally requires `source_generation` equal to the session generation and `consumer_sequence` equal to the requested sequence. Release has no requested sequence and may report a different current `source_generation` when removing an old-generation cursor; its exact consumer ID is the delete target. Test idempotent no-change success and this old-generation release explicitly.
 6. Run focused tests green.
 
-- [ ] Exact existing cursor command/report behavior is tested.
-- [ ] Producer errors are typed and nonthrowing.
-- [ ] Source generation and cursor sequence cannot be silently trusted.
+- [x] Exact existing cursor command/report behavior is tested.
+- [x] Producer errors are typed and nonthrowing.
+- [x] Source generation and cursor sequence cannot be silently trusted.
 
 ### Task 3 — Integrate safe ordering and recovery
 
