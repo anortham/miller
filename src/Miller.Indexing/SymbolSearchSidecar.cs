@@ -323,13 +323,15 @@ public sealed class SymbolSearchSidecar
     internal SidecarConvergenceDetail EnsureStoreCurrentWithCursor(
         string storeRoot,
         IWorkspaceReadSession session,
-        IStoreSidecarCursorSession cursor) =>
-        EnsureStoreCurrentCore(storeRoot, session, cursor);
+        IStoreSidecarCursorSession cursor,
+        SidecarConvergenceMeasurement? measurement = null) =>
+        EnsureStoreCurrentCore(storeRoot, session, cursor, measurement);
 
     private SidecarConvergenceDetail EnsureStoreCurrentCore(
         string storeRoot,
         IWorkspaceReadSession session,
-        IStoreSidecarCursorSession? cursor)
+        IStoreSidecarCursorSession? cursor,
+        SidecarConvergenceMeasurement? measurement = null)
     {
         if (!Enabled)
             return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
@@ -346,7 +348,7 @@ public sealed class SymbolSearchSidecar
             {
                 cursor.PrepareTarget(expected.StoreLogSequence);
                 SidecarConvergenceReason fallbackReason = ClassifyBaseline(previous, expected);
-                SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
+                SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions, measurement);
                 return new(SidecarConvergencePath.Full, fallbackReason, true);
             }
             cursor.PrepareTarget(expected.StoreLogSequence);
@@ -359,17 +361,19 @@ public sealed class SymbolSearchSidecar
                 (connection, transaction, revision) =>
                     SearchIndexWriter.TryFastForwardStoreMetadata(
                         connection,
-                        transaction,
-                        revision,
-                        RegionOptions)))
+                            transaction,
+                            revision,
+                            RegionOptions),
+                measurement))
         {
             return new(SidecarConvergencePath.EmptyDelta, SidecarConvergenceReason.None, true);
         }
 
-        SidecarConvergenceReason reason = TryApplyStoreDelta(searchDbPath, expected, session, out bool applied);
+        SidecarConvergenceReason reason = TryApplyStoreDelta(
+            searchDbPath, expected, session, measurement, out bool applied);
         if (applied)
             return new(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true);
-        SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
+        SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions, measurement);
         return new(SidecarConvergencePath.Full, reason, true);
     }
 
@@ -398,6 +402,7 @@ public sealed class SymbolSearchSidecar
         string searchDbPath,
         StoreSidecarStamp expected,
         IWorkspaceReadSession session,
+        SidecarConvergenceMeasurement? measurement,
         out bool applied)
     {
         applied = false;
@@ -419,7 +424,8 @@ public sealed class SymbolSearchSidecar
         RevisionDeltaResult delta = RevisionDeltaReader.Read(
             session,
             previous.StoreLogSequence,
-            previous.FamilyId);
+            previous.FamilyId,
+            measurement);
         if (delta.Status != RevisionDeltaStatus.Complete ||
             delta.ToRevision != expected.StoreLogSequence)
         {
@@ -442,7 +448,8 @@ public sealed class SymbolSearchSidecar
                 session,
                 paths,
                 expected,
-                RegionOptions);
+                RegionOptions,
+                measurement);
             if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
                 return SidecarConvergenceReason.StampMismatch;
             applied = true;

@@ -21,4 +21,5 @@ internal enum SidecarConvergenceReason
 internal readonly record struct SidecarConvergenceDetail(
     SidecarConvergencePath Path,
     SidecarConvergenceReason Reason,
-    bool DidWork);
+    bool DidWork,
+    SidecarConvergenceCounters Counters = default);

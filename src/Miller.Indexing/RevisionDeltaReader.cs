@@ -58,17 +58,36 @@ public static class RevisionDeltaReader
     public static RevisionDeltaResult Read(
         IWorkspaceReadSession session,
         long fromRevision,
-        string? fromArtifactId = null)
+        string? fromArtifactId = null) =>
+        Read(session, fromRevision, fromArtifactId, measurement: null);
+
+    internal static RevisionDeltaResult Read(
+        IWorkspaceReadSession session,
+        long fromRevision,
+        string? fromArtifactId,
+        SidecarConvergenceMeasurement? measurement)
     {
         ArgumentNullException.ThrowIfNull(session);
         try
         {
-            return session.Read(connection => Read(connection, fromRevision, fromArtifactId));
+            RevisionDeltaResult result = session.Read(connection => Read(connection, fromRevision, fromArtifactId));
+            RecordMeasurement(result, measurement);
+            return result;
         }
         catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
         {
             return Unavailable(fromRevision, toRevision: 0, artifactId: null, "read_error");
         }
+    }
+
+    private static void RecordMeasurement(
+        RevisionDeltaResult result,
+        SidecarConvergenceMeasurement? measurement)
+    {
+        if (measurement is null || result.Status != RevisionDeltaStatus.Complete)
+            return;
+        int deleted = result.DeletedPaths?.Count ?? 0;
+        measurement.RecordDelta(result.ChangedPaths.Count + deleted, result.ChangedPaths.Count, deleted);
     }
 
     /// <summary>

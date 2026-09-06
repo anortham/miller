@@ -219,10 +219,10 @@ internal readonly record struct SidecarConvergenceCounters(
 5. Hard-gate full/incremental row and stamp equivalence. Treat timing/RSS as report-only baseline metrics.
 6. Run focused tests and the benchmark command; record the report.
 
-- [ ] Tests explicitly use SQLite I/O.
-- [ ] Counters are deterministic.
-- [ ] Equivalence is a hard gate.
-- [ ] Benchmark options are explicit and RSS is separate.
+- [x] Tests explicitly use SQLite I/O.
+- [x] Counters are deterministic.
+- [x] Equivalence is a hard gate.
+- [x] Benchmark options are explicit and RSS is separate.
 
 ### Task 5 — Close documentation honestly
 

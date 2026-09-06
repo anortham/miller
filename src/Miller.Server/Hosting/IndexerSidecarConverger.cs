@@ -82,7 +82,8 @@ internal sealed class IndexerSidecarConverger
     internal delegate SidecarConvergenceDetail StoreCursorConvergence(
         string storeRoot,
         IWorkspaceReadSession session,
-        IStoreSidecarCursorSession cursor);
+        IStoreSidecarCursorSession cursor,
+        SidecarConvergenceMeasurement measurement);
 
     internal delegate IStoreSidecarCursorSession StoreCursorSessionFactory(
         string storeRoot,
@@ -410,11 +411,16 @@ internal sealed class IndexerSidecarConverger
         StoreCursorConvergence converge)
     {
         IStoreSidecarCursorSession cursor = _cursorSessionFactory!(storeRoot, session, kind);
-        SidecarConvergenceDetail detail = converge(storeRoot, session, cursor);
+        var measurement = new SidecarConvergenceMeasurement();
+        SidecarConvergenceDetail detail = converge(storeRoot, session, cursor, measurement);
         StoreSidecarCursorCompletion completion = cursor.CompleteCommitted();
         if (!completion.Succeeded)
             throw new IOException(completion.Error ?? "Sidecar cursor convergence is incomplete.");
-        return detail with { DidWork = detail.DidWork || completion.DidWork };
+        return detail with
+        {
+            DidWork = detail.DidWork || completion.DidWork,
+            Counters = measurement.Complete(),
+        };
     }
 
     private static IStoreSidecarCursorSession CreateCursorSession(
@@ -449,11 +455,20 @@ internal sealed class IndexerSidecarConverger
         try
         {
             _logger.LogInformation(
-                "Family-store {SidecarKind} convergence used {ConvergencePath} because {ConvergenceReason}; did work: {DidWork}.",
+                "Family-store {SidecarKind} convergence used {ConvergencePath} because {ConvergenceReason}; did work: {DidWork}; delta rows: {DeltaRowsRead}; changed paths: {ChangedPaths}; deleted paths: {DeletedPaths}; inserted: {RowsInserted}; updated: {RowsUpdated}; deleted: {RowsDeleted}; full files: {FullFiles}; full documents: {FullDocuments}; elapsed ms: {ElapsedMilliseconds}.",
                 kind,
                 detail.Path,
                 detail.Reason,
-                detail.DidWork);
+                detail.DidWork,
+                detail.Counters.DeltaRowsRead,
+                detail.Counters.ChangedPaths,
+                detail.Counters.DeletedPaths,
+                detail.Counters.RowsInserted,
+                detail.Counters.RowsUpdated,
+                detail.Counters.RowsDeleted,
+                detail.Counters.FullFiles,
+                detail.Counters.FullDocuments,
+                detail.Counters.Elapsed.TotalMilliseconds);
         }
         catch
         {

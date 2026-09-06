@@ -58,13 +58,15 @@ public sealed class ContentCorpusSidecar
     internal SidecarConvergenceDetail EnsureStoreCurrentWithCursor(
         string storeRoot,
         IWorkspaceReadSession session,
-        IStoreSidecarCursorSession cursor) =>
-        EnsureStoreCurrentCore(storeRoot, session, cursor);
+        IStoreSidecarCursorSession cursor,
+        SidecarConvergenceMeasurement? measurement = null) =>
+        EnsureStoreCurrentCore(storeRoot, session, cursor, measurement);
 
     private static SidecarConvergenceDetail EnsureStoreCurrentCore(
         string storeRoot,
         IWorkspaceReadSession session,
-        IStoreSidecarCursorSession? cursor)
+        IStoreSidecarCursorSession? cursor,
+        SidecarConvergenceMeasurement? measurement = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, session.Snapshot);
@@ -79,7 +81,8 @@ public sealed class ContentCorpusSidecar
             {
                 cursor.PrepareTarget(expected.StoreLogSequence);
                 SidecarConvergenceReason fallbackReason = ClassifyBaseline(previous, expected);
-                ContentCorpusWriter.WriteStoreView(contentDbPath, session);
+                ContentCorpusWriter.WriteStoreView(
+                    contentDbPath, session, writeLockTimeout: null, measurement);
                 return new(SidecarConvergencePath.Full, fallbackReason, true);
             }
             cursor.PrepareTarget(expected.StoreLogSequence);
@@ -89,15 +92,23 @@ public sealed class ContentCorpusSidecar
                 contentDbPath,
                 expected,
                 session,
-                ContentCorpusWriter.TryFastForwardStoreMetadata))
+                (connection, transaction, revision) =>
+                    ContentCorpusWriter.TryFastForwardStoreMetadata(
+                        connection,
+                        transaction,
+                        revision,
+                        measurement),
+                measurement))
         {
             return new(SidecarConvergencePath.EmptyDelta, SidecarConvergenceReason.None, true);
         }
 
-        SidecarConvergenceReason reason = TryApplyStoreDelta(contentDbPath, expected, session, out bool applied);
+        SidecarConvergenceReason reason = TryApplyStoreDelta(
+            contentDbPath, expected, session, measurement, out bool applied);
         if (applied)
             return new(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true);
-        ContentCorpusWriter.WriteStoreView(contentDbPath, session);
+        ContentCorpusWriter.WriteStoreView(
+            contentDbPath, session, writeLockTimeout: null, measurement);
         return new(SidecarConvergencePath.Full, reason, true);
     }
 
@@ -126,6 +137,7 @@ public sealed class ContentCorpusSidecar
         string contentDbPath,
         StoreSidecarStamp expected,
         IWorkspaceReadSession session,
+        SidecarConvergenceMeasurement? measurement,
         out bool applied)
     {
         applied = false;
@@ -147,7 +159,8 @@ public sealed class ContentCorpusSidecar
         RevisionDeltaResult delta = RevisionDeltaReader.Read(
             session,
             previous.StoreLogSequence,
-            previous.FamilyId);
+            previous.FamilyId,
+            measurement);
         if (delta.Status != RevisionDeltaStatus.Complete ||
             delta.ToRevision != expected.StoreLogSequence)
         {
@@ -165,7 +178,7 @@ public sealed class ContentCorpusSidecar
 
         try
         {
-            ContentCorpusWriter.ApplyStoreFileChanges(contentDbPath, session, paths, expected);
+            ContentCorpusWriter.ApplyStoreFileChanges(contentDbPath, session, paths, expected, measurement);
             if (!StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
                 return SidecarConvergenceReason.StampMismatch;
             applied = true;

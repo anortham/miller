@@ -124,13 +124,21 @@ public static class SearchIndexWriter
             regionOptions,
             regionRows: null,
             TryReadArtifactId(symbolsDbPath),
-            storeStamp: null);
+            storeStamp: null,
+            measurement: null);
     }
 
     public static void WriteStoreView(
         string searchDbPath,
         IWorkspaceReadSession session,
-        RegionIndexOptions regionOptions)
+        RegionIndexOptions regionOptions) =>
+        WriteStoreView(searchDbPath, session, regionOptions, measurement: null);
+
+    internal static void WriteStoreView(
+        string searchDbPath,
+        IWorkspaceReadSession session,
+        RegionIndexOptions regionOptions,
+        SidecarConvergenceMeasurement? measurement)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
         ArgumentNullException.ThrowIfNull(session);
@@ -149,7 +157,8 @@ public static class SearchIndexWriter
             regionOptions,
             regions,
             artifactId: null,
-            stamp);
+            stamp,
+            measurement);
     }
 
     internal static bool TryFastForwardStoreMetadata(
@@ -181,7 +190,8 @@ public static class SearchIndexWriter
         RegionIndexOptions regionOptions,
         IReadOnlyList<SourceRegionRow>? regionRows,
         string? artifactId,
-        StoreSidecarStamp? storeStamp)
+        StoreSidecarStamp? storeStamp,
+        SidecarConvergenceMeasurement? measurement)
     {
         string fullPath = Path.GetFullPath(searchDbPath);
         string dir = Path.GetDirectoryName(fullPath)
@@ -194,7 +204,7 @@ public static class SearchIndexWriter
         {
             BuildInto(
                 tempPath, symbols, revision, symbolsDbPath, workspaceRoot, regionOptions,
-                regionRows, artifactId, storeStamp);
+                regionRows, artifactId, storeStamp, measurement);
             // Release the build connection's file handle from the pool before the move (Windows can't
             // replace/rename a file with an open handle).
             SqliteConnection.ClearAllPools();
@@ -285,7 +295,16 @@ public static class SearchIndexWriter
         IWorkspaceReadSession session,
         IReadOnlyCollection<string> paths,
         StoreSidecarStamp storeStamp,
-        RegionIndexOptions regionOptions)
+        RegionIndexOptions regionOptions) =>
+        ApplyStoreFileChanges(searchDbPath, session, paths, storeStamp, regionOptions, measurement: null);
+
+    internal static void ApplyStoreFileChanges(
+        string searchDbPath,
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths,
+        StoreSidecarStamp storeStamp,
+        RegionIndexOptions regionOptions,
+        SidecarConvergenceMeasurement? measurement)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
         ArgumentNullException.ThrowIfNull(session);
@@ -330,9 +349,16 @@ public static class SearchIndexWriter
                 : SqliteSymbolReader.ReadForSymbolIds(session, orderedAffectedIds);
             currentSymbols = SearchSymbolAliasCanonicalizer.Canonicalize(currentSymbols);
             IReadOnlyList<IndexedSymbol> stableSymbols = AssignStableDocIds(connection, currentSymbols, oldSymbols);
+            var oldIds = oldSymbols.Select(static symbol => symbol.SymbolId).ToHashSet(StringComparer.Ordinal);
+            var currentIds = stableSymbols.Select(static symbol => symbol.SymbolId).ToHashSet(StringComparer.Ordinal);
+            int deleted = oldIds.Count(id => !currentIds.Contains(id));
+            measurement?.RecordRows(
+                inserted: 0,
+                updated: 0,
+                deleted);
             Dictionary<string, IndexedSymbol> symbolsById =
                 BuildQualificationSymbolMap(connection, stableSymbols);
-            InsertSymbols(connection, stableSymbols, symbolsById);
+            InsertSymbols(connection, stableSymbols, symbolsById, measurement, oldIds);
 
             if (regionOptions.Enabled)
             {
@@ -363,9 +389,16 @@ public static class SearchIndexWriter
         RegionIndexOptions regionOptions,
         IReadOnlyList<SourceRegionRow>? regionRows,
         string? artifactId,
-        StoreSidecarStamp? storeStamp)
+        StoreSidecarStamp? storeStamp,
+        SidecarConvergenceMeasurement? measurement)
     {
         symbols = SearchSymbolAliasCanonicalizer.Canonicalize(symbols);
+        if (measurement is not null)
+        {
+            measurement.RecordFull(
+                symbols.Select(static symbol => symbol.FilePath).Distinct(StringComparer.Ordinal).Count(),
+                symbols.Count);
+        }
 
         var connectionString = new SqliteConnectionStringBuilder
         {
@@ -393,7 +426,7 @@ public static class SearchIndexWriter
         using var tx = connection.BeginTransaction();
 
         var symbolsById = symbols.ToDictionary(static s => s.SymbolId, StringComparer.Ordinal);
-        long totalLen = InsertSymbols(connection, symbols, symbolsById);
+        long totalLen = InsertSymbols(connection, symbols, symbolsById, measurement);
 
         (int regionCount, double regionAvgdl) = regionOptions.Enabled
             ? InsertRegions(connection, symbols, symbolsDbPath, workspaceRoot!, regionOptions, regionRows: regionRows)
@@ -428,7 +461,9 @@ public static class SearchIndexWriter
     private static long InsertSymbols(
         SqliteConnection connection,
         IReadOnlyList<IndexedSymbol> symbols,
-        IReadOnlyDictionary<string, IndexedSymbol> symbolsById)
+        IReadOnlyDictionary<string, IndexedSymbol> symbolsById,
+        SidecarConvergenceMeasurement? measurement = null,
+        IReadOnlySet<string>? updatedSymbolIds = null)
     {
         using var symCmd = connection.CreateCommand();
         symCmd.CommandText = """
@@ -502,6 +537,10 @@ public static class SearchIndexWriter
             pTestEvidenceReason.Value = (object?)s.TestEvidenceReason ?? DBNull.Value;
             pDl.Value = docLen;
             symCmd.ExecuteNonQuery();
+            if (updatedSymbolIds?.Contains(s.SymbolId) == true)
+                measurement?.RecordRows(inserted: 0, updated: 1, deleted: 0);
+            else
+                measurement?.RecordRows(inserted: 1, updated: 0, deleted: 0);
 
             fId.Value = s.SymbolId;
             fBody.Value = string.Join(' ', tokens);

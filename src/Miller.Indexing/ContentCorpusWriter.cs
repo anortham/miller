@@ -43,7 +43,8 @@ public static partial class ContentCorpusWriter
                 sourceRows: null,
                 symbolsByPath: null,
                 artifactId: TryReadArtifactId(symbolsDbPath),
-                storeStamp: null);
+                storeStamp: null,
+                measurement: null);
             using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
                 int preserved = PreserveExternalSources(tempPath, fullPath);
@@ -73,7 +74,14 @@ public static partial class ContentCorpusWriter
     public static ContentCorpusFacts WriteStoreView(
         string contentDbPath,
         IWorkspaceReadSession session,
-        TimeSpan? writeLockTimeout = null)
+        TimeSpan? writeLockTimeout = null) =>
+        WriteStoreView(contentDbPath, session, writeLockTimeout, measurement: null);
+
+    internal static ContentCorpusFacts WriteStoreView(
+        string contentDbPath,
+        IWorkspaceReadSession session,
+        TimeSpan? writeLockTimeout,
+        SidecarConvergenceMeasurement? measurement)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentNullException.ThrowIfNull(session);
@@ -102,7 +110,8 @@ public static partial class ContentCorpusWriter
                 sourceRows,
                 symbolsByPath,
                 artifactId: null,
-                stamp);
+                stamp,
+                measurement);
             using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
                 int preserved = PreserveExternalSources(tempPath, fullPath);
@@ -133,7 +142,15 @@ public static partial class ContentCorpusWriter
         string contentDbPath,
         IWorkspaceReadSession session,
         IReadOnlyCollection<string> paths,
-        StoreSidecarStamp storeStamp)
+        StoreSidecarStamp storeStamp) =>
+        ApplyStoreFileChanges(contentDbPath, session, paths, storeStamp, measurement: null);
+
+    internal static void ApplyStoreFileChanges(
+        string contentDbPath,
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths,
+        StoreSidecarStamp storeStamp,
+        SidecarConvergenceMeasurement? measurement)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentNullException.ThrowIfNull(session);
@@ -173,9 +190,34 @@ public static partial class ContentCorpusWriter
         }.ToString());
         connection.Open();
         using var tx = connection.BeginTransaction();
-        if (distinctPaths.Length > 0)
-            DeleteWorkspaceSourcesForPaths(connection, distinctPaths);
-        InsertSourcesAndChunks(connection, accepted, session.Snapshot.WorkspaceId, storeStamp.StoreLogSequence);
+        IReadOnlySet<string> oldSourceIds = distinctPaths.Length > 0
+            ? DeleteWorkspaceSourcesForPaths(connection, distinctPaths)
+            : new HashSet<string>(StringComparer.Ordinal);
+        var newSourceIds = accepted.Select(static source => source.SourceId).ToHashSet(StringComparer.Ordinal);
+        measurement?.RecordRows(
+            inserted: 0,
+            updated: 0,
+            deleted: oldSourceIds.Count(id => !newSourceIds.Contains(id)));
+        InsertSourcesAndChunks(
+            connection,
+            accepted,
+            session.Snapshot.WorkspaceId,
+            storeStamp.StoreLogSequence,
+            measurement,
+            oldSourceIds);
+        using (var sourceRevision = connection.CreateCommand())
+        {
+            sourceRevision.Transaction = tx;
+            sourceRevision.CommandText = """
+                UPDATE content_sources
+                SET workspace_revision=$revision
+                WHERE workspace_revision IS NOT NULL
+                  AND workspace_revision<>$revision;
+                """;
+            sourceRevision.Parameters.AddWithValue("$revision", storeStamp.StoreLogSequence);
+            int fastForwarded = sourceRevision.ExecuteNonQuery();
+            measurement?.RecordRows(inserted: 0, updated: fastForwarded, deleted: 0);
+        }
         UpdateMetaCounts(connection);
         using (var meta = connection.CreateCommand())
         {
@@ -202,14 +244,22 @@ public static partial class ContentCorpusWriter
     internal static bool TryFastForwardStoreMetadata(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        long revision)
+        long revision) =>
+        TryFastForwardStoreMetadata(connection, transaction, revision, measurement: null);
+
+    internal static bool TryFastForwardStoreMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long revision,
+        SidecarConvergenceMeasurement? measurement)
     {
         using (var sources = connection.CreateCommand())
         {
             sources.Transaction = transaction;
             sources.CommandText = "UPDATE content_sources SET workspace_revision=$revision WHERE workspace_revision IS NOT NULL;";
             sources.Parameters.AddWithValue("$revision", revision);
-            sources.ExecuteNonQuery();
+            int updated = sources.ExecuteNonQuery();
+            measurement?.RecordRows(inserted: 0, updated, deleted: 0);
         }
 
         using var metadata = connection.CreateCommand();
@@ -542,7 +592,8 @@ public static partial class ContentCorpusWriter
         IReadOnlyList<SourceRow>? sourceRows,
         IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>>? symbolsByPath,
         string? artifactId,
-        StoreSidecarStamp? storeStamp)
+        StoreSidecarStamp? storeStamp,
+        SidecarConvergenceMeasurement? measurement)
     {
         sourceRows ??= ReadSourceRows(symbolsDbPath
             ?? throw new ArgumentException("A legacy content build requires the source artifact path."));
@@ -562,6 +613,8 @@ public static partial class ContentCorpusWriter
         long indexedSourceBytes = accepted.Sum(static source => source.SourceBytes);
         long storedRawBytes = accepted.Sum(static source =>
             source.Chunks.Sum(static chunk => Encoding.UTF8.GetByteCount(chunk.Text)));
+        if (measurement is not null)
+            measurement.RecordFull(sourceRows.Count, accepted.Count);
 
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -582,7 +635,7 @@ public static partial class ContentCorpusWriter
         }
 
         using var tx = connection.BeginTransaction();
-        InsertSourcesAndChunks(connection, accepted, workspaceId, revision);
+        InsertSourcesAndChunks(connection, accepted, workspaceId, revision, measurement);
         using (var meta = connection.CreateCommand())
         {
             meta.CommandText = """
@@ -637,7 +690,9 @@ public static partial class ContentCorpusWriter
         SqliteConnection connection,
         IReadOnlyList<SourceBuildInput> sources,
         string? workspaceId,
-        long revision)
+        long revision,
+        SidecarConvergenceMeasurement? measurement = null,
+        IReadOnlySet<string>? updatedSourceIds = null)
     {
         using var sourceCmd = connection.CreateCommand();
         sourceCmd.CommandText = """
@@ -720,6 +775,10 @@ public static partial class ContentCorpusWriter
             psTest.Value = source.Chunks.Any(static c => c.IsTest) ? 1 : 0;
             psIndexed.Value = DateTimeOffset.UtcNow.ToString("O");
             sourceCmd.ExecuteNonQuery();
+            if (updatedSourceIds?.Contains(source.SourceId) == true)
+                measurement?.RecordRows(inserted: 0, updated: 1, deleted: 0);
+            else
+                measurement?.RecordRows(inserted: 1, updated: 0, deleted: 0);
 
             foreach (TextContentDocument chunk in source.Chunks)
             {
@@ -871,9 +930,12 @@ public static partial class ContentCorpusWriter
         return accepted;
     }
 
-    private static void DeleteWorkspaceSourcesForPaths(SqliteConnection connection, IReadOnlyList<string> paths)
+    private static IReadOnlySet<string> DeleteWorkspaceSourcesForPaths(
+        SqliteConnection connection,
+        IReadOnlyList<string> paths)
     {
         const int chunkSize = 500;
+        var deleted = new HashSet<string>(StringComparer.Ordinal);
         for (int offset = 0; offset < paths.Count; offset += chunkSize)
         {
             int count = Math.Min(chunkSize, paths.Count - offset);
@@ -914,11 +976,15 @@ public static partial class ContentCorpusWriter
             sources.CommandText = $"""
                 DELETE FROM content_sources
                 WHERE path IN ({placeholders})
-                  AND content_kind IN ($source, $docs, $config);
+                  AND content_kind IN ($source, $docs, $config)
+                RETURNING source_id;
                 """;
             AddWorkspaceKindParameters(sources);
-            sources.ExecuteNonQuery();
+            using SqliteDataReader reader = sources.ExecuteReader();
+            while (reader.Read())
+                deleted.Add(reader.GetString(0));
         }
+        return deleted;
     }
 
     private static string AddPathParameters(

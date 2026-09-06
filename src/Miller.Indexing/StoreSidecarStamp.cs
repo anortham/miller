@@ -352,7 +352,8 @@ public static class StoreSidecarCatalog
         string databasePath,
         StoreSidecarStamp expected,
         IWorkspaceReadSession session,
-        Func<SqliteConnection, SqliteTransaction, long, bool> updateMetadata)
+        Func<SqliteConnection, SqliteTransaction, long, bool> updateMetadata,
+        SidecarConvergenceMeasurement? measurement = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentNullException.ThrowIfNull(expected);
@@ -374,7 +375,8 @@ public static class StoreSidecarCatalog
         RevisionDeltaResult delta = RevisionDeltaReader.Read(
             session,
             previous.StoreLogSequence,
-            previous.FamilyId);
+            previous.FamilyId,
+            measurement);
         if (delta.Status != RevisionDeltaStatus.Complete ||
             delta.ToRevision != expected.StoreLogSequence ||
             delta.ChangedPaths.Count != 0 ||
