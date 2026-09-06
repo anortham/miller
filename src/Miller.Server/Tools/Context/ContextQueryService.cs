@@ -13,9 +13,6 @@ namespace Miller.Server.Tools.Context;
 
 internal sealed class ContextQueryService
 {
-    /// <summary>Rerank-only admission uses this narrow membership set; widening it admits additional semantic seeds.</summary>
-    private const int SemanticSeedGateLimit = 2;
-    private const int SearchSeedLimit = 10;
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -68,15 +65,17 @@ internal sealed class ContextQueryService
             var retrieval = new ContextQueryRetrieval(contextIndex);
 
             request.CancellationToken.ThrowIfCancellationRequested();
-            IReadOnlyList<ContextTool.ContextSemanticSeed> semanticSeeds = LoadSemanticSeeds(
-                context,
+            IReadOnlyList<ContextSemanticSeed> semanticSeeds = ContextBundleBuilder.LoadSemanticSeeds(
+                _semanticSidecar,
+                _semanticArm,
+                context.WorkspaceRoot,
                 contextIndex,
                 request.Query,
                 referenceMode == ContextReferenceMode.Usage && request.ExcludeTests,
                 retrieval);
             CompletePhase("semantic_seeds", telemetry, ref phaseStart);
             request.CancellationToken.ThrowIfCancellationRequested();
-            IReadOnlyList<ContextTool.ContextSourceSeed> sourceSeeds = LoadSourceRescueSeeds(
+            IReadOnlyList<ContextSourceSeed> sourceSeeds = LoadSourceRescueSeeds(
                 contextIndex,
                 TryResolveTextContentIndex(request.WorkspaceId, refresh),
                 request.Query,
@@ -88,7 +87,7 @@ internal sealed class ContextQueryService
                 readOutgoingMany = null;
             if (referenceMode == ContextReferenceMode.Off &&
                 !string.IsNullOrWhiteSpace(request.Query) &&
-                !HasTestOrDefIntent(request.Query))
+                !ContextBundleBuilder.HasTestOrDefIntent(request.Query))
             {
                 if (context.ReadSession.ResolutionFactsWarm)
                 {
@@ -221,7 +220,7 @@ internal sealed class ContextQueryService
     internal static ContextResolvedQueryResult ExecuteResolved(ContextResolvedQueryRequest request)
     {
         request.CancellationToken.ThrowIfCancellationRequested();
-        ContextTool.ContextReferenceReadCounts? referenceReadCounts = null;
+        ContextReferenceReadCounts? referenceReadCounts = null;
         int selectedCount;
         int candidatesExamined;
         string output;
@@ -299,65 +298,15 @@ internal sealed class ContextQueryService
             _ => throw new ArgumentException("reference_mode must be off or usage."),
         };
 
-    internal static IReadOnlyList<ContextTool.ContextSourceSeed> LoadSourceRescueSeeds(
+    internal static IReadOnlyList<ContextSourceSeed> LoadSourceRescueSeeds(
         ISymbolLookupIndex index,
         ITextContentSearchIndex? contentIndex,
         string query,
         bool excludeTests) =>
-        ContextTool.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
+        ContextBundleBuilder.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
 
     private static InvalidOperationException MissingReader(string name) =>
         new($"Reference mode usage requires {name}.");
-
-    private IReadOnlyList<ContextTool.ContextSemanticSeed> LoadSemanticSeeds(
-        WorkspaceReadContext context,
-        ISymbolLookupIndex index,
-        string query,
-        bool excludeTests,
-        ContextQueryRetrieval retrieval)
-    {
-        if (_semanticSidecar is not { Mode: SemanticMode.On } ||
-            _semanticArm is null ||
-            string.IsNullOrWhiteSpace(query) ||
-            !SemanticQueryPolicy.Route(query).IsHybrid)
-        {
-            return [];
-        }
-
-        SymbolCandidateSet lexical = retrieval.Collect(query, SemanticSeedGateLimit, excludeTests);
-        var evidence = new LexicalEvidence(
-            lexical.Candidates.Count,
-            lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
-            lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
-        SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
-        var lexicalIds = new HashSet<string>(
-            lexical.Candidates.Select(static candidate => candidate.SymbolId),
-            StringComparer.Ordinal);
-        SemanticQueryResult result = _semanticArm.QuerySymbols(
-            context.WorkspaceRoot,
-            query,
-            SearchSeedLimit,
-            allow: null);
-        if (!result.Served)
-            return [];
-
-        var seeds = new List<ContextTool.ContextSemanticSeed>(result.Hits.Count);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (SemanticHit hit in result.Hits.Take(SearchSeedLimit))
-        {
-            if (hit.SymbolId is not { } symbolId ||
-                !admission.AllowsExpansion && !lexicalIds.Contains(symbolId) ||
-                !seen.Add(symbolId) ||
-                index.FindBySymbolId(symbolId) is not { } symbol ||
-                excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)))
-            {
-                continue;
-            }
-
-            seeds.Add(new ContextTool.ContextSemanticSeed(symbol, hit.Rank, hit.Cosine));
-        }
-        return seeds;
-    }
 
     private ITextContentSearchIndex? TryResolveTextContentIndex(
         string? workspaceId,
@@ -381,7 +330,7 @@ internal sealed class ContextQueryService
         TelemetryScope? telemetry,
         ref long phaseStart,
         ReadPhaseTelemetry? readTelemetry = null,
-        ContextTool.ContextReferenceReadCounts? referenceReadCounts = null)
+        ContextReferenceReadCounts? referenceReadCounts = null)
     {
         long elapsedMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
         phaseStart = Stopwatch.GetTimestamp();
@@ -485,13 +434,6 @@ internal sealed class ContextQueryService
         readSession.LegacyArtifactPath
         ?? throw new InvalidOperationException("The content sidecar has not been migrated to family-store reads.");
 
-    private static bool HasTestOrDefIntent(string query) =>
-        query.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries).Any(static word =>
-            word.Equals("test", StringComparison.OrdinalIgnoreCase) ||
-            word.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
-            word.Equals("spec", StringComparison.OrdinalIgnoreCase) ||
-            word.Equals("specs", StringComparison.OrdinalIgnoreCase));
-
     private static string TokenBudgetBucket(int tokenBudget) => tokenBudget switch
     {
         <= 0 => "0",
@@ -541,8 +483,8 @@ internal sealed record ContextResolvedQueryRequest(
     int ReferenceDepth,
     bool ExcludeTests,
     bool Json,
-    IReadOnlyList<ContextTool.ContextSemanticSeed>? SemanticSeeds,
-    IReadOnlyList<ContextTool.ContextSourceSeed>? SourceSeeds,
+    IReadOnlyList<ContextSemanticSeed>? SemanticSeeds,
+    IReadOnlyList<ContextSourceSeed>? SourceSeeds,
     Func<IndexedSymbol, ExtractReader.BodyReadResult>? ReadBody,
     Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>>? ReadOutgoingMany,
     Func<IndexedSymbol, ReferenceEvidenceSet>? ReadReferenceEvidence,
@@ -550,7 +492,7 @@ internal sealed record ContextResolvedQueryRequest(
     Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>>? ReadContentChunks,
     Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? ReadMany,
     CancellationToken CancellationToken,
-    Action<string, ContextTool.ContextReferenceReadCounts?>? PhaseObserver,
+    Action<string, ContextReferenceReadCounts?>? PhaseObserver,
     ContextQueryRetrieval? Retrieval = null);
 
 internal sealed record ContextResolvedQueryResult(string Output, int SelectedCount, int CandidatesExamined);

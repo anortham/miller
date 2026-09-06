@@ -10,6 +10,7 @@ using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Tools.Context;
 using Miller.Server.Workspaces;
 using Miller.Tests;
 using Miller.Tests.Indexing;
@@ -1538,7 +1539,7 @@ public sealed partial class ContextToolTests
             editedFiles: null,
             failingTest: null,
             stackTrace: null,
-            semanticSeeds: [new ContextTool.ContextSemanticSeed(symbol, 1, 0.91)],
+            semanticSeeds: [new ContextSemanticSeed(symbol, 1, 0.91)],
             readBody: null,
             referenceDepth: 0,
             excludeTests: true,
@@ -2173,7 +2174,7 @@ public sealed partial class ContextToolTests
             editedFiles: null,
             failingTest: null,
             stackTrace: null,
-            semanticSeeds: [new ContextTool.ContextSemanticSeed(repo, 1, 0.91)],
+            semanticSeeds: [new ContextSemanticSeed(repo, 1, 0.91)],
             readBody: symbol => symbol.Name == "OrderRepo"
                 ? ExtractReader.BodyReadResult.Available("class OrderRepo { }")
                 : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
@@ -2735,7 +2736,7 @@ public sealed partial class ContextToolTests
             editedFiles: null,
             failingTest: null,
             stackTrace: null,
-            semanticSeeds: [new ContextTool.ContextSemanticSeed(trueSymbol, 1, 0.91)],
+            semanticSeeds: [new ContextSemanticSeed(trueSymbol, 1, 0.91)],
             readBody: symbol => symbol.SymbolId == trueId
                 ? ExtractReader.BodyReadResult.Available(
                     "class SymbolsArtifactIdentity { public static bool MatchesArtifact() => true; }")
@@ -3358,7 +3359,7 @@ public sealed partial class ContextToolTests
                 containingSymbolId: correctId,
                 containingSymbolName: "SymbolsArtifactIdentity"));
 
-        IReadOnlyList<ContextTool.ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+        IReadOnlyList<ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
             index, content, query, excludeTests: true);
         Assert.Contains(seeds, seed => seed.Symbol.SymbolId == correctId);
 
@@ -3473,7 +3474,7 @@ public sealed partial class ContextToolTests
             "src/RebuildPromotion.cs", 1, 50, null, false);
         var index = MillerRepositoryIndex.Build([symbol]);
         var resolver = new SmartTargetResolver(index);
-        var seeds = new ContextTool.ContextSourceSeed[]
+        var seeds = new ContextSourceSeed[]
         {
             new(symbol, Rank: 1),
         };
@@ -3541,7 +3542,7 @@ public sealed partial class ContextToolTests
             SourceHit("src/c.ts", 2, "gamma prose", "s4", "c5", fourthId, "Gamma"),
             SourceHit("tests/promote.test.ts", 2, "test prose", "s5", "c6", testId, "PromoteTests"));
 
-        IReadOnlyList<ContextTool.ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+        IReadOnlyList<ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
             index,
             content,
             "how does promotion prose work",
@@ -4197,7 +4198,7 @@ public sealed partial class ContextToolTests
         // Pick a symbol the wide window carries, the narrow window drops, and that the bundle does not already
         // hold: admitting it as a seed must CHANGE the rendered bundle, or asserting the bundle is unchanged
         // proves nothing.
-        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed>? seeds) => ContextTool.RunActionable(
+        string Render(IReadOnlyList<ContextSemanticSeed>? seeds) => ContextTool.RunActionable(
             index,
             index.Graph,
             resolver,
@@ -4227,7 +4228,7 @@ public sealed partial class ContextToolTests
                 continue;
             }
 
-            if (Render([new ContextTool.ContextSemanticSeed(candidate, 1, 0.91)]) != unseeded)
+            if (Render([new ContextSemanticSeed(candidate, 1, 0.91)]) != unseeded)
                 far = candidate;
         }
 
@@ -4406,6 +4407,90 @@ public sealed partial class ContextToolTests
                 "bounded_render",
             ],
             phases);
+    }
+
+    [Fact]
+    public void ExecuteResolved_ReportsReadCountsWithReferenceItemsPhase()
+    {
+        var (index, resolver) = BuildFixture();
+        ContextReferenceReadCounts? observedCounts = null;
+        var referencePhases = 0;
+
+        _ = ContextQueryService.ExecuteResolved(new ContextResolvedQueryRequest(
+            index,
+            index.Graph,
+            resolver,
+            Query: "zzz no lexical match zzz",
+            TokenBudget: 1200,
+            MaxHops: 1,
+            EntrySymbols: ["OrderRepo"],
+            EditedFiles: null,
+            FailingTest: null,
+            StackTrace: null,
+            ReferenceMode: ContextReferenceMode.Usage,
+            ReferenceDepth: 1,
+            ExcludeTests: false,
+            Json: false,
+            SemanticSeeds: null,
+            SourceSeeds: null,
+            ReadBody: null,
+            ReadOutgoingMany: null,
+            ReadReferenceEvidence: _ => InboundSet(),
+            ReadOutgoingEvidence: _ => OutgoingSet(),
+            ReadContentChunks: (_, _) => [],
+            ReadMany: null,
+            CancellationToken.None,
+            PhaseObserver: (phase, counts) =>
+            {
+                if (phase == "reference_items")
+                {
+                    referencePhases++;
+                    observedCounts = counts;
+                }
+            }));
+
+        Assert.Equal(new ContextReferenceReadCounts(2, 0), observedCounts);
+        Assert.Equal(1, referencePhases);
+    }
+
+    [Fact]
+    public void RunReferenceAwareActionableWithCancellation_DoesNotReportReferenceReadsForEmptyCandidates()
+    {
+        var index = EmptyIndex();
+        var resolver = new SmartTargetResolver(index);
+        var referencePhaseObservations = 0;
+        var countObservations = 0;
+
+        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: "zzz no lexical match zzz",
+            tokenBudget: 1200,
+            maxHops: 1,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: false,
+            readReferenceEvidence: _ => InboundSet(),
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            readMany: null,
+            out _,
+            out _,
+            CancellationToken.None,
+            phaseObserver: phase => referencePhaseObservations += phase == "reference_items" ? 1 : 0,
+            retrieval: null,
+            referenceReadObserver: _ => countObservations++);
+
+        Assert.Equal(0, referencePhaseObservations);
+        Assert.Equal(0, countObservations);
     }
 
     /// <summary>

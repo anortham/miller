@@ -232,10 +232,10 @@ This preserves the existing behavior already covered by `ContextToolTests.RunAct
 
 **Acceptance:**
 
-- [ ] Builder owns selection and evidence construction without workspace I/O orchestration or rendering.
-- [ ] Existing retrieval caches and all three load-bearing limits retain their values and behavior.
-- [ ] Ordinary, actionable, source-rescue, semantic, reference-aware, and cancellation cases match Task 1.
-- [ ] No I/O-dependent type moved into `Miller.Core`.
+- [x] Builder owns selection and evidence construction without workspace I/O orchestration or rendering.
+- [x] Existing retrieval caches and all three load-bearing limits retain their values and behavior.
+- [x] Ordinary, actionable, source-rescue, semantic, reference-aware, and cancellation cases match Task 1.
+- [x] No I/O-dependent type moved into `Miller.Core`.
 
 ## Task 4: Extract compact/JSON rendering and budgeting
 

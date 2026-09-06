@@ -2049,7 +2049,7 @@ public static class CliDispatch
         bool rescueExcludeTests = string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase)
             ? excludeTestsFlag
             : SearchTool.ResolveExcludeTests(null, o.Query, SearchToolMode.Symbol);
-        IReadOnlyList<ContextTool.ContextSourceSeed> sourceSeeds = LoadContextSourceRescueSeeds(
+        IReadOnlyList<ContextSourceSeed> sourceSeeds = LoadContextSourceRescueSeeds(
             index,
             ctx,
             o.Query,
@@ -2137,7 +2137,7 @@ public static class CliDispatch
     /// <summary>
     /// Open the content corpus for context source-rescue seeds when present; fail soft to empty seeds.
     /// </summary>
-    private static IReadOnlyList<ContextTool.ContextSourceSeed> LoadContextSourceRescueSeeds(
+    private static IReadOnlyList<ContextSourceSeed> LoadContextSourceRescueSeeds(
         ISymbolLookupIndex index,
         WorkspaceContext ctx,
         string query,
