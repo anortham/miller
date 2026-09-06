@@ -16,6 +16,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Tools.Context;
 using Miller.Server.Workspaces;
 using Miller.Testing;
 
@@ -2053,62 +2054,66 @@ public static class CliDispatch
             ctx,
             o.Query,
             rescueExcludeTests);
-        int selectedCount;
-        int candidatesExamined;
-        string output;
+        ContextReferenceMode parsedReferenceMode;
         if (string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase))
-        {
-            output = ContextTool.RunReferenceAwareActionable(
-                index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
-                    entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
-                    sourceSeeds: sourceSeeds,
-                    readBody: symbol => ContextTool.ReadPivotBody(
-                        readScope.Session,
-                        ctx.WorkspaceRoot,
-                        symbol),
-                    referenceDepth: o.Int("reference-depth", 1), excludeTests: excludeTestsFlag, json,
-                    readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
-                        readScope.Session,
-                        symbol.SymbolId,
-                        new ReferenceEvidenceBounds(
-                            ContextTool.ReferenceRowsPerSymbol,
-                            ContextTool.ReferenceRowsPerSymbol)),
-                    readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
-                        readScope.Session,
-                        symbol.SymbolId,
-                        new ReferenceEvidenceBounds(
-                            ContextTool.ReferenceRowsPerSymbol,
-                            ContextTool.ReferenceRowsPerSymbol)),
-                readContentChunks: (symbols, excludeTests) => ReadContextContentChunks(
-                    ctx,
-                    symbols,
-                    excludeTests),
-                out selectedCount, out candidatesExamined);
-        }
+            parsedReferenceMode = ContextReferenceMode.Usage;
         else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
-        {
-            output = ContextTool.RunActionable(
-                index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
-                entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
-                sourceSeeds: sourceSeeds,
-                readBody: symbol => ContextTool.ReadPivotBody(
-                    readScope.Session,
-                    ctx.WorkspaceRoot,
-                    symbol),
-                readOutgoingMany: symbolIds => ReadContextOutgoingEvidence(readScope.Session, symbolIds),
-                json, out selectedCount, out candidatesExamined);
-        }
+            parsedReferenceMode = ContextReferenceMode.Off;
         else
         {
             err.WriteLine("reference-mode must be off or usage.");
             return 2;
         }
-        if (selectedCount == 0)
+
+        ContextResolvedQueryResult result = ContextQueryService.ExecuteResolved(
+            new ContextResolvedQueryRequest(
+                Index: index,
+                Graph: graph,
+                Resolver: resolver,
+                Query: o.Query,
+                TokenBudget: tokenBudget,
+                MaxHops: o.Int("max-hops", 1),
+                EntrySymbols: entrySymbols,
+                EditedFiles: editedFiles,
+                FailingTest: failingTest,
+                StackTrace: stackTrace,
+                ReferenceMode: parsedReferenceMode,
+                ReferenceDepth: o.Int("reference-depth", 1),
+                ExcludeTests: excludeTestsFlag,
+                Json: json,
+                SemanticSeeds: null,
+                SourceSeeds: sourceSeeds,
+                ReadBody: symbol => ContextTool.ReadPivotBody(
+                    readScope.Session,
+                    ctx.WorkspaceRoot,
+                    symbol),
+                ReadOutgoingMany: symbolIds => ReadContextOutgoingEvidence(readScope.Session, symbolIds),
+                ReadReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
+                    readScope.Session,
+                    symbol.SymbolId,
+                    new ReferenceEvidenceBounds(
+                        ContextTool.ReferenceRowsPerSymbol,
+                        ContextTool.ReferenceRowsPerSymbol)),
+                ReadOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
+                    readScope.Session,
+                    symbol.SymbolId,
+                    new ReferenceEvidenceBounds(
+                        ContextTool.ReferenceRowsPerSymbol,
+                        ContextTool.ReferenceRowsPerSymbol)),
+                ReadContentChunks: (symbols, excludeTests) => ReadContextContentChunks(
+                    ctx,
+                    symbols,
+                    excludeTests),
+                ReadMany: null,
+                CancellationToken: CancellationToken.None,
+                PhaseObserver: null));
+        string output = result.Output;
+        if (result.SelectedCount == 0)
         {
             ToolDiagnostic diagnostic = ContextTool.EmptyDiagnostic(
                 o.Query,
                 tokenBudget,
-                candidatesExamined,
+                result.CandidatesExamined,
                 entrySymbols,
                 int.MaxValue);
             output = ToolDiagnosticRenderer.Attach("context", output, diagnostic, json);
@@ -2144,7 +2149,7 @@ public static class CliDispatch
             ctx.WorkspaceId);
         string contentDbPath = location.ContentDbPath;
         if (!File.Exists(contentDbPath))
-            return ContextTool.LoadSourceRescueSeeds(index, contentIndex: null, query, excludeTests);
+            return ContextQueryService.LoadSourceRescueSeeds(index, contentIndex: null, query, excludeTests);
 
         try
         {
@@ -2160,7 +2165,7 @@ public static class CliDispatch
                     ctx.ExtractDbPath,
                     freshness.LatestRevision());
             }
-            return ContextTool.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
+            return ContextQueryService.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or InvalidOperationException or IOException

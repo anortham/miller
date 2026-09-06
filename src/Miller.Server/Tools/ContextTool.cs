@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -14,6 +13,7 @@ using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools.Context;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
@@ -30,20 +30,7 @@ public sealed partial class ContextTool
     private const int TermRescuePromotionReadLimit = 8;
     private const int TermRescueRetrievalLimit = 6;
 
-    /// <summary>
-    /// The lexical window the semantic-seed gate judges. It is NOT the pivot ranker's window, and widening it to
-    /// share one retrieval is NOT free: the gate keeps the retrieved ids as the membership set that admits a
-    /// semantic hit under <c>RerankOnly</c> admission, and <c>CollectSymbolCandidates</c> returns everything the
-    /// over-fetch window scored rather than truncating to the limit. A wider window therefore admits semantic
-    /// seeds the narrow one drops and changes the rendered bundle. Any change here is a ranking change and needs
-    /// its own approval and baseline.
-    /// </summary>
-    private const int SemanticSeedGateLimit = 2;
-    private readonly IWorkspaceIndexProvider _workspaceProvider;
-    private readonly ISemanticTextArm? _semanticArm;
-    private readonly VectorSidecar? _semanticSidecar;
-    private readonly Action<string>? _phaseObserver;
-    private readonly Action<ContextLookupPhaseObservation>? _lookupPhaseObserver;
+    private readonly ContextQueryService _queryService;
 
     /// <summary>Construct a lexical-only context tool over the freshness-aware workspace provider.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
@@ -71,11 +58,12 @@ public sealed partial class ContextTool
         Action<ContextLookupPhaseObservation>? lookupPhaseObserver = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
-        _workspaceProvider = workspaceProvider;
-        _semanticArm = semanticArm;
-        _semanticSidecar = semanticSidecar;
-        _phaseObserver = phaseObserver;
-        _lookupPhaseObserver = lookupPhaseObserver;
+        _queryService = new ContextQueryService(
+            workspaceProvider,
+            semanticArm,
+            semanticSidecar,
+            phaseObserver,
+            lookupPhaseObserver);
     }
 
     public string Context(
@@ -142,363 +130,22 @@ public sealed partial class ContextTool
         [Description("Framework request cancellation token.")]
         CancellationToken cancellationToken = default)
     {
-        var telemetry = TelemetryContext.Current;
-        long phaseStart = Stopwatch.GetTimestamp();
-        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (token_budget <= 0)
-                return string.Empty;
-
-            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
-            int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
-            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, refresh);
-            using IDisposable? searchTelemetry = context.ReadTelemetry?.ActivateSearchTelemetry();
-            ISymbolLookupIndex contextIndex = new ContextSearchCacheLookupIndex(context.Index);
-            var contextResolver = new SmartTargetResolver(contextIndex);
-            CompletePhase("resolve", telemetry, ref phaseStart);
-            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            int bundleTokenBudget = Math.Max(
-                0,
-                effectiveTokenBudget -
-                (compactBanner is null ? 0 : (int)TokenEstimator.Count(compactBanner + '\n')));
-            int selectedCount;
-            int candidatesExamined;
-            string output;
-            // Written by the usage branch's read window, read by the reference_items phase stamp below.
-            ContextReferenceReadCounts? referenceReadCounts = null;
-            ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
-            bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
-                ? exclude_tests
-                : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
-            var queryRetrieval = new ContextQueryRetrieval(contextIndex);
-            IReadOnlyList<ContextSemanticSeed> semanticSeeds = [];
-            IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
-            cancellationToken.ThrowIfCancellationRequested();
-                semanticSeeds = LoadSemanticSeeds(
-                    context,
-                    contextIndex,
-                    query,
-                    parsedReferenceMode == ReferenceMode.Usage && exclude_tests,
-                    queryRetrieval);
-                CompletePhase("semantic_seeds", telemetry, ref phaseStart);
-                cancellationToken.ThrowIfCancellationRequested();
-                sourceSeeds = LoadSourceRescueSeeds(
-                    contextIndex,
-                    TryResolveTextContentIndex(workspace_id, refresh),
-                    query,
-                    rescueExcludeTests);
-                CompletePhase("source_rescue", telemetry, ref phaseStart, context.ReadTelemetry);
-                cancellationToken.ThrowIfCancellationRequested();
-                switch (parsedReferenceMode)
-                {
-                    case ReferenceMode.Off:
-                        // Term-rescue promotion is a ranking refinement, and its outgoing-reference read is the
-                        // one thing on this path that can force the whole-generation fact-cache load (~5s on a
-                        // 1.8k-file repo, measured 2026-08-27). When the shared store is cold, skip the
-                        // refinement for THIS call and start the load in the background so the next call has it.
-                        // A call whose promotion never runs (blank query, test/def intent) neither probes nor
-                        // warms — warming there spends a whole-generation load nothing on this path will read.
-                        // reference_mode=usage is untouched: there the caller asked for references by name.
-                        bool termRescueCanRun = !string.IsNullOrWhiteSpace(query) && !HasTestOrDefIntent(query);
-                        bool termRescueFactsWarm = termRescueCanRun && context.ReadSession.ResolutionFactsWarm;
-                        if (termRescueCanRun && !termRescueFactsWarm)
-                        {
-                            telemetry?.SetMetadata("term_rescue", "skipped_cold_facts");
-                            context.ReadSession.WarmResolutionFactsInBackground().ContinueWith(
-                                static warm => Serilog.Log.Warning(
-                                    warm.Exception?.GetBaseException(),
-                                    "Background fact-cache warm for context term-rescue failed."),
-                                CancellationToken.None,
-                                TaskContinuationOptions.OnlyOnFaulted,
-                                TaskScheduler.Default);
-                        }
-
-                        output = RunActionableWithCancellation(
-                            contextIndex,
-                            context.Graph,
-                            contextResolver,
-                            query,
-                            bundleTokenBudget,
-                            max_hops,
-                            entry_symbols,
-                            edited_files,
-                            failing_test,
-                            stack_trace,
-                            semanticSeeds,
-                            sourceSeeds,
-                            readBody: symbol => ReadPivotBody(
-                                context.ReadSession,
-                                context.WorkspaceRoot,
-                                symbol),
-                            readOutgoingMany: termRescueFactsWarm
-                                ? symbolIds => ReadOutgoingBatch(context.ReadSession, symbolIds)
-                                : null,
-                            json,
-                            out selectedCount, out candidatesExamined,
-                            cancellationToken,
-                            phase => CompletePhase(
-                                phase,
-                                telemetry,
-                                ref phaseStart,
-                                context.ReadTelemetry),
-                            queryRetrieval);
-                        break;
-                    case ReferenceMode.Usage:
-                        output = RunReferenceAwareActionableWithCancellation(
-                            contextIndex,
-                            context.Graph,
-                            contextResolver,
-                            query,
-                            bundleTokenBudget,
-                            max_hops,
-                            entry_symbols,
-                            edited_files,
-                            failing_test,
-                            stack_trace,
-                            semanticSeeds,
-                            sourceSeeds,
-                            readBody: symbol => ReadPivotBody(
-                                context.ReadSession,
-                                context.WorkspaceRoot,
-                                symbol),
-                            reference_depth, exclude_tests, json,
-                            readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
-                                context.ReadSession,
-                                symbol.SymbolId,
-                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                            readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
-                                context.ReadSession,
-                                symbol.SymbolId,
-                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                            readContentChunks: (symbols, excludeTests) => ReadContentChunks(
-                                context.ReadSession,
-                                symbols,
-                                excludeTests),
-                            readMany: symbols => ReferenceEvidenceReader.ReadMany(
-                                context.ReadSession,
-                                symbols.Select(static symbol => symbol.SymbolId).ToArray(),
-                                new ReferenceEvidenceQuery(
-                                    new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol))),
-                            out selectedCount, out candidatesExamined,
-                            cancellationToken,
-                            phase => CompletePhase(
-                                phase,
-                                telemetry,
-                                ref phaseStart,
-                                context.ReadTelemetry,
-                                phase == "reference_items" ? referenceReadCounts : null),
-                            queryRetrieval,
-                            referenceReadObserver: counts => referenceReadCounts = counts);
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(reference_mode));
-                }
-            // The usage branch used to report its WHOLE cost under "bundle" because it had no inner phases. Now
-            // that it reports them, this stamp measures only what is left after its last inner phase — a
-            // different quantity under the same name, which a trend across the instrumentation boundary would
-            // read as a collapse. So the usage branch's remainder gets its own key; the off branch has always
-            // reported the remainder here, so its key does not move.
-            CompletePhase(
-                parsedReferenceMode == ReferenceMode.Usage ? "bundle_remainder" : "bundle",
-                telemetry,
-                ref phaseStart);
-            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
-            ToolDiagnostic? diagnostic = null;
-            if (selectedCount == 0)
-            {
-                diagnostic = EmptyDiagnostic(
-                    query,
-                    effectiveTokenBudget,
-                    candidatesExamined,
-                    entry_symbols,
-                    ToolOutputBudget.ContextMcpMaxTokens);
-            }
-            else if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
-            {
-                // Both reference modes read reference evidence — usage enrichment for usage, outgoing evidence
-                // for off — so at symbols level the bundle silently drops it and reads as "nothing uses this".
-                IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
-                diagnostic = IndexLevelGuard.Converging(
-                    "the bundle carries no usage or outgoing-reference evidence pending identifier extraction.");
-            }
-
-            if (telemetry is not null)
-            {
-                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-                telemetry.Op = parsedReferenceMode == ReferenceMode.Usage ? "usage" : "off";
-                telemetry.SetTarget(query);
-                telemetry.ResultCount = selectedCount;
-                telemetry.BytesExamined = candidatesExamined;
-                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
-                telemetry.SetMetadata("format", json ? "json" : "compact");
-                telemetry.SetMetadata("token_budget_bucket", TokenBudgetBucket(effectiveTokenBudget));
-                telemetry.SetMetadata("max_hops_bucket", HopsBucket(max_hops));
-                telemetry.SetMetadata("has_entry_symbols", entry_symbols is { Length: > 0 });
-                telemetry.SetMetadata("has_failing_test", !string.IsNullOrWhiteSpace(failing_test));
-                telemetry.SetMetadata("has_stack_trace", !string.IsNullOrWhiteSpace(stack_trace));
-                telemetry.SetMetadata("has_edited_files", edited_files is { Length: > 0 });
-                telemetry.SetMetadata("semantic_seed_count", semanticSeeds.Count);
-                telemetry.SetMetadata("source_rescue_seed_count", sourceSeeds.Count);
-                telemetry.SetMetadata("reference_depth_bucket", HopsBucket(reference_depth));
-                telemetry.SetMetadata("exclude_tests", exclude_tests);
-            }
-            if (diagnostic is not null)
-            {
-                output = ToolDiagnosticRenderer.Attach(
-                    "context",
-                    output,
-                    diagnostic,
-                    json,
-                    telemetry);
-            }
-            string finalOutput = BoundFinalOutput(output, effectiveTokenBudget, json);
-            CompletePhase("final_render", telemetry, ref phaseStart);
-            return finalOutput;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
-            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
-                telemetry?.SetError(ex);
-            string output = ToolDiagnosticRenderer.Render(
-                "context",
-                diagnostic,
-                json,
-                telemetry);
-            return BoundFinalOutput(
-                output,
-                Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens),
-                json);
-        }
+        return _queryService.Execute(new ContextQueryRequest(
+            query,
+            token_budget,
+            max_hops,
+            entry_symbols,
+            failing_test,
+            stack_trace,
+            format,
+            reference_mode,
+            reference_depth,
+            exclude_tests,
+            workspace_id,
+            ensure_fresh,
+            edited_files,
+            cancellationToken));
     }
-
-    private void CompletePhase(
-        string phase,
-        TelemetryScope? telemetry,
-        ref long phaseStart,
-        ReadPhaseTelemetry? readTelemetry = null,
-        ContextReferenceReadCounts? referenceReadCounts = null)
-    {
-        long elapsedMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
-        phaseStart = Stopwatch.GetTimestamp();
-        telemetry?.SetMetadata("context_phase", phase);
-        telemetry?.SetMetadata("context_phase_elapsed_ms", elapsedMs);
-        if (referenceReadCounts is { } counts)
-        {
-            telemetry?.SetMetadata("reference_candidates_read", counts.CandidatesRead);
-            telemetry?.SetMetadata("reference_candidates_skipped", counts.CandidatesSkipped);
-        }
-        _phaseObserver?.Invoke(phase);
-        ContextLookupPhase? lookupPhase = phase switch
-        {
-            "source_rescue" => ContextLookupPhase.SourceRescue,
-            "query_retrieval" => ContextLookupPhase.QueryRetrieval,
-            "term_retrieval" => ContextLookupPhase.TermRetrieval,
-            "anchor_resolution" => ContextLookupPhase.AnchorResolution,
-            "graph_reach" => ContextLookupPhase.GraphReach,
-            "symbol_hydration" => ContextLookupPhase.SymbolHydration,
-            "file_neighbours" => ContextLookupPhase.FileNeighbours,
-            "candidate_ordering" => ContextLookupPhase.CandidateOrdering,
-            _ => null,
-        };
-        if (lookupPhase is { } completedLookupPhase && readTelemetry is not null)
-        {
-            ContextLookupPhaseObservation observation =
-                readTelemetry.CompleteLookupPhase(completedLookupPhase);
-            _lookupPhaseObserver?.Invoke(observation);
-            Serilog.Log.Information(
-                "Context lookup phase {ContextLookupPhase} on lookup backend {ContextLookupBackend} " +
-                "completed with delta {@ContextLookupDelta} " +
-                "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
-                "search total {@ContextSearchTotal}, FTS search delta {@ContextFtsSearchDelta}, " +
-                "FTS search total {@ContextFtsSearchTotal}, content FTS search delta {@ContextFtsTextSearchDelta}, " +
-                "content FTS search total {@ContextFtsTextSearchTotal}, content index resolve delta " +
-                "{@ContextTextContentIndexResolveDelta}, and content index resolve total " +
-                "{@ContextTextContentIndexResolveTotal} for cid {CorrelationId}",
-                completedLookupPhase,
-                SymbolLookupBackends.Name(observation.LookupBackend),
-                observation.Delta,
-                observation.Total,
-                observation.SearchDelta,
-                observation.SearchTotal,
-                observation.FtsSearchDelta,
-                observation.FtsSearchTotal,
-                observation.FtsTextSearchDelta,
-                observation.FtsTextSearchTotal,
-                observation.TextContentIndexResolveDelta,
-                observation.TextContentIndexResolveTotal,
-                telemetry?.CorrelationId ?? "unmeasured");
-        }
-        if (referenceReadCounts is { } readCounts)
-        {
-            // The reference phase reports the read window it used, so the budget's effect on WORK is
-            // measurable next to the phase time instead of only in the rendered output.
-            Serilog.Log.Information(
-                "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms " +
-                "after reading evidence for {ContextReferenceCandidatesRead} candidates and skipping " +
-                "{ContextReferenceCandidatesSkipped} beyond the token budget for cid {CorrelationId}",
-                phase,
-                elapsedMs,
-                readCounts.CandidatesRead,
-                readCounts.CandidatesSkipped,
-                telemetry?.CorrelationId ?? "unmeasured");
-            return;
-        }
-
-        Serilog.Log.Information(
-            "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms for cid {CorrelationId}",
-            phase,
-            elapsedMs,
-            telemetry?.CorrelationId ?? "unmeasured");
-    }
-
-    /// <summary>
-    /// Read outgoing evidence for a whole set of symbols in one round trip. Term-rescue promotion asks for up
-    /// to eight test symbols at once; one read per symbol paid the resolution load eight times over.
-    /// </summary>
-    /// <remarks>
-    /// It reads the OUTGOING batch, not the full bundle: this path keeps only <c>Outgoing</c>, and the bundle
-    /// read adds an inbound resolution pass plus a name lookup and a same-name definition count per symbol — on
-    /// the default <c>reference_mode=off</c> path, which the batch exists to make cheaper. That entry point also
-    /// skips an id the read session cannot resolve instead of throwing, so one symbol the search sidecar names
-    /// and the served view no longer has cannot deny the whole promotion set.
-    /// <para>
-    /// There is no off-switch here, and <c>MILLER_CONTEXT_REFERENCE_BATCH</c> does not reach it. That switch
-    /// picks between two live implementations on the usage path; here the batch replaced its only caller, so a
-    /// switch would have nothing to switch to and could only restore the N+1 this fix removed.
-    /// </para>
-    /// </remarks>
-    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingBatch(
-        WorkspaceReadHandle readSession,
-        IReadOnlyList<string> symbolIds) =>
-        ReferenceEvidenceReader.ReadOutgoingMany(
-            readSession,
-            symbolIds,
-            new ReferenceEvidenceQuery(
-                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)));
-
-    private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
-        WorkspaceReadHandle readSession,
-        IReadOnlyList<IndexedSymbol> symbols,
-        bool excludeTests) => readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
-        ? ContentCorpusContextReader.ReadContainingSymbolChunks(
-            readSession.FamilyStoreRoot!,
-            readSession.Snapshot,
-            symbols,
-            excludeTests,
-            ContentChunksPerSymbol)
-        : ContentCorpusContextReader.ReadContainingSymbolChunks(
-            ContentCorpusSidecar.ContentDbPathFor(RequiredLegacyArtifactPath(readSession)),
-            RequiredLegacyArtifactPath(readSession),
-            symbols,
-            excludeTests,
-            ContentChunksPerSymbol);
 
     internal static ToolDiagnostic EmptyDiagnostic(
         string query,
@@ -592,12 +239,6 @@ public sealed partial class ContextTool
         ],
         StringComparer.OrdinalIgnoreCase);
 
-    private enum ReferenceMode
-    {
-        Off,
-        Usage,
-    }
-
     private static bool ReferenceEvidenceBatchEnabled
     {
         get
@@ -606,110 +247,6 @@ public sealed partial class ContextTool
             return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(value, "on", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-        }
-    }
-
-    private static ReferenceMode ParseReferenceMode(string? mode) =>
-        mode?.ToLowerInvariant() switch
-        {
-            null or "" or "off" => ReferenceMode.Off,
-            "usage" => ReferenceMode.Usage,
-            _ => throw new ArgumentException("reference_mode must be off or usage."),
-        };
-
-    private static string TokenBudgetBucket(int tokenBudget) => tokenBudget switch
-    {
-        <= 0 => "0",
-        <= 1000 => "1-1000",
-        <= 4000 => "1001-4000",
-        <= 8000 => "4001-8000",
-        _ => "8001+",
-    };
-
-    private static string HopsBucket(int hops) => hops switch
-    {
-        <= 0 => "0",
-        1 => "1",
-        2 => "2",
-        _ => "3+",
-    };
-
-    /// <param name="excludeTests">
-    /// Whether a test symbol may be admitted as a seed, and the test policy of the gate's own retrieval. It is
-    /// NOT the pivot ranker's policy: the two differ for an ordinary phrase query, and computing this gate's
-    /// evidence over the ranker's test-hidden population changes which semantic seeds are admitted.
-    /// </param>
-    /// <param name="retrieval">This call's shared lexical retrieval.</param>
-    private IReadOnlyList<ContextSemanticSeed> LoadSemanticSeeds(
-        WorkspaceReadContext context,
-        ISymbolLookupIndex index,
-        string query,
-        bool excludeTests,
-        ContextQueryRetrieval retrieval)
-    {
-        if (_semanticSidecar is not { Mode: SemanticMode.On } ||
-            _semanticArm is null ||
-            string.IsNullOrWhiteSpace(query))
-        {
-            return [];
-        }
-
-        // Route first. A lexical route discards everything below, so nothing below may run: the retrieval it
-        // used to run ahead of this check could not reach the output.
-        if (!SemanticQueryPolicy.Route(query).IsHybrid)
-            return [];
-
-        // The gate's OWN narrow window and its OWN test policy. See SemanticSeedGateLimit: the retrieved ids
-        // gate semantic admission, so this limit is a ranking input, not a performance knob.
-        SymbolCandidateSet lexical = retrieval.Collect(query, SemanticSeedGateLimit, excludeTests);
-        var evidence = new LexicalEvidence(
-            lexical.Candidates.Count,
-            lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
-            lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
-        SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
-        var lexicalIds = new HashSet<string>(
-            lexical.Candidates.Select(static candidate => candidate.SymbolId),
-            StringComparer.Ordinal);
-
-        SemanticQueryResult result = _semanticArm.QuerySymbols(
-            context.WorkspaceRoot,
-            query,
-            SearchSeedLimit,
-            allow: null);
-        if (!result.Served)
-            return [];
-
-        var seeds = new List<ContextSemanticSeed>(result.Hits.Count);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (SemanticHit hit in result.Hits.Take(SearchSeedLimit))
-        {
-            if (hit.SymbolId is not { } symbolId ||
-                !admission.AllowsExpansion && !lexicalIds.Contains(symbolId) ||
-                !seen.Add(symbolId) ||
-                index.FindBySymbolId(symbolId) is not { } symbol ||
-                excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)))
-            {
-                continue;
-            }
-
-            seeds.Add(new ContextSemanticSeed(symbol, hit.Rank, hit.Cosine));
-        }
-        return seeds;
-    }
-
-    private ITextContentSearchIndex? TryResolveTextContentIndex(string? workspaceId, WorkspaceRefreshMode refresh)
-    {
-        if (_workspaceProvider is not IWorkspaceTextContentSearchProvider textProvider)
-            return null;
-
-        try
-        {
-            return textProvider.ResolveTextContentSearch(workspaceId, refresh).Index;
-        }
-        catch (Exception)
-        {
-            // Fail-soft: missing/unconfigured content corpus must not break context.
-            return null;
         }
     }
 
@@ -1493,7 +1030,7 @@ public sealed partial class ContextTool
         return bestOutput;
     }
 
-    private static string BoundFinalOutput(string output, int tokenBudget, bool json)
+    internal static string BoundFinalOutput(string output, int tokenBudget, bool json)
     {
         if (tokenBudget <= 0)
             return string.Empty;

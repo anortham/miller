@@ -181,10 +181,10 @@ Add the test before delegation and observe the current result; after extraction 
 
 **Acceptance:**
 
-- [ ] `ContextTool` remains the public adapter with unchanged constructors, metadata, and public methods.
-- [ ] MCP, CLI, and evaluator callers share one internal resolved-query route.
-- [ ] Freshness, cancellation, telemetry, semantic-off, and budget behavior match the baseline.
-- [ ] No temporary forwarder is used as the final shared implementation boundary.
+- [x] `ContextTool` remains the public adapter with unchanged constructors, metadata, and public methods.
+- [x] MCP, CLI, and evaluator callers share one internal resolved-query route.
+- [x] Freshness, cancellation, telemetry, semantic-off, and budget behavior match the baseline.
+- [x] No temporary forwarder is used as the final shared implementation boundary.
 
 ## Task 3: Extract bundle construction
 

@@ -1239,6 +1239,30 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void FamilyStoreContext_BoundedFactsRenderWhatTheWholeGenerationLoadRenders()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create(includeCrossFileReferences: true);
+        string[] args =
+        [
+            "context",
+            "VisibleType",
+            "--reference-mode",
+            "usage",
+            "--max-hops",
+            "1",
+            "--json",
+        ];
+
+        var bounded = RunFamilyStore(fx, args);
+        var whole = RunFamilyStore(fx, args, boundedFacts: false);
+
+        Assert.True(bounded.Code == 0, bounded.Err);
+        Assert.Equal(whole.Code, bounded.Code);
+        Assert.Equal(whole.Out, bounded.Out);
+        Assert.Equal(whole.Err, bounded.Err);
+    }
+
+    [Fact]
     public void FamilyStoreBridgeTrace_UsesLeanGraphForJsonRouteAndScopedTargets()
     {
         using var fx = MinimalFamilyStoreFixture.Create(

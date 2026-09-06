@@ -1757,6 +1757,7 @@ public sealed partial class ContextToolTests
         Assert.Throws<OperationCanceledException>(() => tool.ContextWithCancellation(
             "OrderService",
             cancellationToken: cancellation.Token));
+        Assert.Equal(0, provider.ResolveCount);
     }
 
     [Fact]
