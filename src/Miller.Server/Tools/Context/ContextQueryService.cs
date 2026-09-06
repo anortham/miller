@@ -196,7 +196,7 @@ internal sealed class ContextQueryService
             if (diagnostic is not null)
                 output = ToolDiagnosticRenderer.Attach("context", output, diagnostic, json, telemetry);
 
-            string finalOutput = ContextTool.BoundFinalOutput(output, effectiveTokenBudget, json);
+            string finalOutput = ContextBundleRenderer.BoundFinalOutput(output, effectiveTokenBudget, json);
             CompletePhase("final_render", telemetry, ref phaseStart);
             return finalOutput;
         }
@@ -210,7 +210,7 @@ internal sealed class ContextQueryService
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
                 telemetry?.SetError(ex);
             string output = ToolDiagnosticRenderer.Render("context", diagnostic, json, telemetry);
-            return ContextTool.BoundFinalOutput(
+            return ContextBundleRenderer.BoundFinalOutput(
                 output,
                 Math.Min(request.TokenBudget, ToolOutputBudget.ContextMcpMaxTokens),
                 json);

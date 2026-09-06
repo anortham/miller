@@ -7,6 +7,7 @@ using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using Miller.Server.Tools.Context;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -37,6 +38,45 @@ public sealed partial class ContextToolTests
             Assert.Equal(golden.Sha256, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(actual))));
             if (golden.Format == "json")
                 AssertJsonCharacterization(golden.Case, actual);
+        }
+    }
+
+    [Fact]
+    public void Renderer_matches_pre_move_ordinary_goldens_from_independent_facts()
+    {
+        var (index, _) = BuildFixture();
+        IndexedSymbol symbol = Assert.Single(index.FindByName("OrderService"));
+        var facts = new ContextBundleBuildResult(
+            [new Candidate(
+                symbol,
+                Hop: 0,
+                Reason: "entry_symbol",
+                IsPivot: true,
+                BodyUnavailableReason: "FileHashUnavailable")],
+            [],
+            CandidatesExamined: 1);
+        ContextGoldenSet goldens = LoadContextGoldens();
+
+        foreach (string format in new[] { "compact", "json" })
+        {
+            IReadOnlyList<Candidate> selected = ContextBundleRenderer.SelectOrdinary(
+                facts.Candidates,
+                tokenBudget: 700,
+                CancellationToken.None);
+            string actual = ContextBundleRenderer.RenderOrdinary(
+                selected,
+                facts.AnchorDiagnostics,
+                query: string.Empty,
+                tokenBudget: 700,
+                json: format == "json",
+                out int selectedCount,
+                CancellationToken.None);
+            ContextGolden expected = Assert.Single(
+                goldens.Cases,
+                golden => golden.Case == "ordinary" && golden.Format == format);
+
+            Assert.Equal(expected.Output, actual);
+            Assert.Equal(1, selectedCount);
         }
     }
 

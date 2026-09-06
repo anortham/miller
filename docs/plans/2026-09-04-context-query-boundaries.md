@@ -281,10 +281,10 @@ Use the existing expected disposition and fixture; the example proves field pres
 
 **Acceptance:**
 
-- [ ] Renderer has no index, graph, source, semantic, workspace, or telemetry dependency.
-- [ ] Compact and JSON outputs match Task 1 exact output hashes for all stable cases; compact uses `evidence=<status>  reason=<reason>` while JSON uses the disposition object.
-- [ ] Existing schema, budget, disposition, and next-action tests pass.
-- [ ] No duplicate renderer remains in `ContextTool` except a deleted/temporary forwarder awaiting Task 5 cleanup.
+- [x] Renderer has no index, graph, source, semantic, workspace, or telemetry dependency.
+- [x] Compact and JSON outputs match Task 1 exact output hashes for all stable cases; compact uses `evidence=<status>  reason=<reason>` while JSON uses the disposition object.
+- [x] Existing schema, budget, disposition, and next-action tests pass.
+- [x] No duplicate renderer remains in `ContextTool` except a deleted/temporary forwarder awaiting Task 5 cleanup.
 
 ## Task 5: Remove forwarders and complete integration verification
 
