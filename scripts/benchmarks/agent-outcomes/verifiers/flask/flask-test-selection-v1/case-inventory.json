@@ -1,0 +1,1987 @@
+{
+  "inventory_scope": "complete case inventory from the repository native test runner",
+  "native_test_argv": [
+    "python",
+    "-m",
+    "pytest",
+    "-q"
+  ],
+  "cases": [
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_context_provides_current_app"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_ctx_globals_methods"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_tearing_down"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_tearing_down_with_handled_exception_by_app_handler"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_tearing_down_with_handled_exception_by_except_block"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_tearing_down_with_previous_exception"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_app_tearing_down_with_unhandled_exception"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_basic_url_generation"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_clean_pop"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_context_refcounts"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_custom_app_ctx_globals_class"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_request_context_means_app_context"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_robust_teardown"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_url_generation_requires_server_name"
+    },
+    {
+      "path": "tests/test_appctx.py",
+      "test_id": "tests/test_appctx.py::test_url_generation_without_context_fails"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_before_after_request"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_error_handler[/bp/error]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_error_handler[/error]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_route[/]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_route[/bp/]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_route[/home]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_route[/methodview]"
+    },
+    {
+      "path": "tests/test_async.py",
+      "test_id": "tests/test_async.py::test_async_route[/view]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_after_request_processing"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_app_freed_on_zero_refcount"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_baseexception_error_handling"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_before_after_request_order"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_before_request_and_routing_errors"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_build_error_handler"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_build_error_handler_reraise"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_disallow_string_for_allowed_methods"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_enctype_debug_helper"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_endpoint_decorator"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_error_handler_after_processor_error"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_error_handling"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_error_handling_processing"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_errorhandler_precedence"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_exception_propagation[DEBUG]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_exception_propagation[None]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_exception_propagation[PROPAGATE_EXCEPTIONS]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_exception_propagation[TESTING]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_extended_flashing"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_flashes"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_g_iteration_protocol"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_get_method_on_g"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_http_error_subclass_handling"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_inject_blueprint_url_defaults"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_json_dump_dataclass"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_jsonify_args_and_kwargs_check"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_jsonify_mimetype"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_jsonify_no_prettyprint[False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_jsonify_no_prettyprint[True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_make_response"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_make_response_with_response_instance"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_max_cookie_size"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[delete]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[get]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[patch]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[post]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[put]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route[query]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_method_route_no_methods"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_missing_session"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_multi_route_class_views"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_multi_route_rules"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_no_setup_after_first_request"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_nonascii_pathinfo"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_options_on_multiple_rules"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_options_work"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_provide_automatic_options_arg_disable"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_provide_automatic_options_attr_disable"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_provide_automatic_options_attr_enable"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_provide_automatic_options_method_disable"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_request_dispatching"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_request_locals"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_request_preprocessing_early_return"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_request_processing"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_response_type_errors"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_response_types"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_route_decorator_custom_endpoint"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_routing_redirect_debugging"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_defaults"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[None-80-pocoo.org:8080-pocoo.org-80]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[None-None-[::1]:8080-::1-8080]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[None-None-localhost:0-localhost-0]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[None-None-localhost:8080-localhost-8080]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[None-None-pocoo.org:8080-pocoo.org-8080]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[localhost-0-localhost:8080-localhost-0]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[localhost-80-pocoo.org:8080-localhost-80]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_from_config[localhost-None-pocoo.org:8080-localhost-8080]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_run_server_port"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_server_name_matching[False-False-default-default]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_server_name_matching[False-True-abc-default]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_server_name_matching[True-False-abc-<invalid>]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_server_name_subdomain"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_accessed"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_cookie_setting"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_expiration"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_path"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_refresh_vary"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_secret_key_fallbacks"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_special_types"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_stored_last"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_using_application_root"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_using_samesite_attribute"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_using_session_settings"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_session_vary_cookie"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_files"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_folder_with_ending_slash"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_folder_with_pathlib_path"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_route_with_host_matching"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_url_empty_path"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_url_empty_path_default"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_url_path"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_static_url_path_with_ending_slash"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_subdomain_basic_support"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_subdomain_matching"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_subdomain_matching_other_name[False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_subdomain_matching_other_name[True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_subdomain_matching_with_ports"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_teardown_request_handler"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_teardown_request_handler_debug_mode"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_teardown_request_handler_error"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_trap_bad_request_key_error[False-None-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_trap_bad_request_key_error[False-True-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_trap_bad_request_key_error[True-None-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_trapping_of_all_http_exceptions"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_url_for_passes_special_values_to_build_error_handler"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_url_generation"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_url_mapping"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_url_processors"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_user_error_handling"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-False-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-False-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-False-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-False-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-True-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-True-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-True-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[False-True-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-False-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-False-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-False-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-False-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-True-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-True-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-True-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[None-True-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-False-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-False-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-False-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-False-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-True-False-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-True-False-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-True-True-False]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_passthrough_errors[True-True-True-True]"
+    },
+    {
+      "path": "tests/test_basic.py",
+      "test_id": "tests/test_basic.py::test_werkzeug_routing"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_filter"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_filter_with_name"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_filter_with_name_and_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_filter_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_test"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_test_with_name"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_test_with_name_and_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_add_template_test_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_app_request_processing"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_app_url_processors"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_app_error_handling"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[-/-/]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[-/bar-/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/--/]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/-/-/]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo--/foo]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo-/bar-/foo/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo/--/foo/]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo/-//bar-/foo/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo/-/bar-/foo/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo/-bar-/foo/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_prefix_slash[/foo//-/bar-/foo/bar]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_renaming"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_specific_error_handling"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_specific_user_error_handling"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_url_defaults"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_blueprint_url_processors"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_child_and_parent_subdomain"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_context_processing"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_default_static_max_age"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_dotted_name_not_allowed"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_dotted_names_from_app"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_empty_name_not_allowed"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_empty_url_defaults"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_endpoint_decorator"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nested_blueprint"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nested_callback_order"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nesting_subdomains"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nesting_url_prefixes[/other-/something-/parent-/child]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nesting_url_prefixes[/parent-/child-None-None]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nesting_url_prefixes[/parent-None-None-/child]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_nesting_url_prefixes[None-None-/parent-/child]"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_request_processing"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_route_decorator_custom_endpoint"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_self_registration"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_filter"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_filter_after_route_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_filter_with_name"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_filter_with_name_and_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_filter_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_global"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_test"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_test_after_route_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_test_with_name"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_test_with_name_and_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_template_test_with_template"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_templates_and_static"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_templates_list"
+    },
+    {
+      "path": "tests/test_blueprints.py",
+      "test_id": "tests/test_blueprints.py::test_unique_blueprint_names"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_all_methods"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_host"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_no_routes"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_simple"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_sort"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::TestRoutes::test_subdomain"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_app_cli_has_app_context"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_appgroup_app_context"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_cli_blueprints"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_cli_empty"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_cli_name"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_disable_dotenv_from_env"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_dotenv_optional"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_dotenv_path"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_find_best_app"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_flaskgroup_app_context"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_flaskgroup_debug[False]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_flaskgroup_debug[True]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_flaskgroup_nested"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_get_version"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_help_echo_exception"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_help_echo_loading_error"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_load_dotenv"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.app-None-testapp]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.app-testapp-testapp]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory- create_app () -app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory-None-app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory-create_app()-app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory-create_app-app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory-create_app2(\"foo\", \"bar\")-app2_foo_bar]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app[cliapp.factory-create_app2(\"foo\", \"bar\", )-app2_foo_bar]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.app-notanapp]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.factory-create_app(]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.factory-create_app2(\"foo\")]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.factory-no_app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.importerrorapp-None]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp.message.txt-None]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[cliapp/app-None]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_raises[notanapp.py-None]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_locate_app_suppress_raise"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_no_command_echo_loading_error"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[a/test-path2-test]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[test-path0-test]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[test.a.b-path7-test.a.b]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[test.py-path1-test]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[test/__init__-path4-test]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[test/__init__.py-path3-test]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[value5-path5-cliapp.inner1]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[value6-path6-cliapp.inner1.inner2]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[value8-path8-cliapp.app]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_prepare_import[value9-path9-cliapp.message.txt]"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_run_cert_adhoc"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_run_cert_import"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_run_cert_no_ssl"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_run_cert_path"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_run_exclude_patterns"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_scriptinfo"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "test_id": "tests/test_cli.py::test_with_appcontext"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_class"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_envvar"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_envvar_missing"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_file_json"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_file_toml"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_mapping"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_object"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_from_pyfile"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_missing"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_config_missing_file"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_custom_config_class"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_prefixed_env"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_prefixed_env_custom_prefix"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_prefixed_env_nested"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_pyfile_weird_encoding[iso-8859-15]"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_pyfile_weird_encoding[latin-1]"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_from_pyfile_weird_encoding[utf-8]"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_get_namespace"
+    },
+    {
+      "path": "tests/test_config.py",
+      "test_id": "tests/test_config.py::test_session_lifetime"
+    },
+    {
+      "path": "tests/test_converters.py",
+      "test_id": "tests/test_converters.py::test_context_available"
+    },
+    {
+      "path": "tests/test_converters.py",
+      "test_id": "tests/test_converters.py::test_custom_converters"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[-False]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[0-False]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[False-False]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[No-False]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[True-True]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_make_response"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestNoImports::test_name_with_import_error"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestSendfile::test_send_file"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestSendfile::test_send_from_directory"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestSendfile::test_static_file"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestStreaming::test_async_view"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestStreaming::test_stream_keeps_session"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestStreaming::test_streaming_with_context"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestStreaming::test_streaming_with_context_and_custom_close"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestStreaming::test_streaming_with_context_as_decorator"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_for_with_alternating_schemes"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_for_with_anchor"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_for_with_scheme"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_for_with_scheme_not_external"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_for_with_self"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestUrlFor::test_url_with_method"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_abort_no_app"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_abort_with_app"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_app_aborter_class"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource[r]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource[rb]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource[rt]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_exceptions[a]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_exceptions[r+]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_exceptions[w]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_exceptions[x]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_with_encoding[utf-16-le]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_open_resource_with_encoding[utf-8]"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_redirect_no_app"
+    },
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::test_redirect_with_app"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_explicit_instance_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_installed_module_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_installed_package_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_prefix_package_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_uninstalled_module_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_uninstalled_namespace_paths"
+    },
+    {
+      "path": "tests/test_instance_config.py",
+      "test_id": "tests/test_instance_config.py::test_uninstalled_package_paths"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_bad_request_debug_message[False]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_bad_request_debug_message[True]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_html_method"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_as_unicode[False-\"\\u2603\"]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_as_unicode[True-\"\\\\u2603\"]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_attr"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_bad_requests"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_custom_mimetypes"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_customization"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_decimal"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_dump_to_file"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_json_key_sorting"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_arrays"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_aware_datetimes[tz0]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_aware_datetimes[tz1]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_aware_datetimes[tz2]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[-1]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[0]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[1]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[23]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[3.14]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[False]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[None]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[True]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[longer string]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_basic_types[s]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_datetime[value0]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_datetime[value1]"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_dicts"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_jsonify_uuid_types"
+    },
+    {
+      "path": "tests/test_json.py",
+      "test_id": "tests/test_json.py::test_tojson_filter"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_custom_tag"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[<html>]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[\\xff]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data0]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data1]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data2]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data3]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data4]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data5]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data8]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_dump_load_unchanged[data9]"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_duplicate_tag"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_tag_interface"
+    },
+    {
+      "path": "tests/test_json_tag.py",
+      "test_id": "tests/test_json_tag.py::test_tag_order"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_existing_handler"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_has_level_handler"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_log_view_exception"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_logger"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_logger_debug"
+    },
+    {
+      "path": "tests/test_logging.py",
+      "test_id": "tests/test_logging.py::test_wsgi_errors_stream"
+    },
+    {
+      "path": "tests/test_regression.py",
+      "test_id": "tests/test_regression.py::test_aborting"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_context_binding"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_context_test"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_copy_context_thread"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_manual_context_binding"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_proper_test_request_context"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_session_dynamic_cookie_name"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_session_error_pops_context"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_teardown_on_pop"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_teardown_with_handled_exception"
+    },
+    {
+      "path": "tests/test_reqctx.py",
+      "test_id": "tests/test_reqctx.py::test_teardown_with_previous_exception"
+    },
+    {
+      "path": "tests/test_request.py",
+      "test_id": "tests/test_request.py::test_limit_config"
+    },
+    {
+      "path": "tests/test_request.py",
+      "test_id": "tests/test_request.py::test_max_content_length"
+    },
+    {
+      "path": "tests/test_request.py",
+      "test_id": "tests/test_request.py::test_trusted_hosts_config"
+    },
+    {
+      "path": "tests/test_session_interface.py",
+      "test_id": "tests/test_session_interface.py::test_open_session_with_endpoint"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_appcontext_signals"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_appcontext_tearing_down_signal"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_before_render_template"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_flash_signal"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_request_exception_signal"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_request_signals"
+    },
+    {
+      "path": "tests/test_signals.py",
+      "test_id": "tests/test_signals.py::test_template_rendered"
+    },
+    {
+      "path": "tests/test_subclassing.py",
+      "test_id": "tests/test_subclassing.py::test_suppressed_exception_logging"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_filter"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_filter_with_name"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_filter_with_name_and_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_filter_with_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_global"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_test"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_test_with_name"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_test_with_name_and_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_add_template_test_with_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_context_processing"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_custom_jinja_env"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_custom_template_loader"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_escaping"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_escaping_without_template_filename"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_iterable_loader"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_macros"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_no_escaping"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_original_win"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_request_less_rendering"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_simple_stream"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_standard_context"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_filter"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_filter_with_name"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_filter_with_name_and_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_filter_with_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_loader_debugging"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_test"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_test_with_name"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_test_with_name_and_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_template_test_with_template"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_templates_auto_reload"
+    },
+    {
+      "path": "tests/test_templating.py",
+      "test_id": "tests/test_templating.py::test_templates_auto_reload_debug_run"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_blueprint_with_subdomain"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_cli_custom_obj"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_cli_invoke"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_cli_runner_class"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_client_json_no_app_context"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_client_open_environ"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_client_pop_all_preserved"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_environ_base_default"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_environ_base_modified"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_environ_defaults"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_environ_defaults_from_config"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_environbuilder_json_dumps"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_full_url_request"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_json_request_and_response"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_nosubdomain"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_path_is_url"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_redirect_session"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_reuse_client"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_session_transaction_ipv6"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_session_transaction_needs_cookies"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_session_transactions"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_session_transactions_keep_context"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_session_transactions_no_null_sessions"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_specify_url_scheme"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_subdomain"
+    },
+    {
+      "path": "tests/test_testing.py",
+      "test_id": "tests/test_testing.py::test_test_client_context_binding"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::TestGenericHandlers::test_handle_class_or_code[500]"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::TestGenericHandlers::test_handle_class_or_code[InternalServerError]"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::TestGenericHandlers::test_handle_generic"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::TestGenericHandlers::test_handle_generic_http"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::test_default_error_handler"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::test_error_handler_blueprint"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::test_error_handler_http_subclass"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::test_error_handler_no_match"
+    },
+    {
+      "path": "tests/test_user_error_handler.py",
+      "test_id": "tests/test_user_error_handler.py::test_error_handler_subclass"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_basic_view"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_endpoint_override"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_explicit_head"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_implicit_head"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_init_once"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_method_based_view"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_methods_var_inheritance"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_multiple_inheritance"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_provide_automatic_options_method_disable"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_remove_method_from_parent"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_view_decorators"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_view_inheritance"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_view_patching"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_view_provide_automatic_options_attr_disable"
+    },
+    {
+      "path": "tests/test_views.py",
+      "test_id": "tests/test_views.py::test_view_provide_automatic_options_attr_enable"
+    }
+  ]
+}

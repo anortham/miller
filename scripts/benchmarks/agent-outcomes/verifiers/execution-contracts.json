@@ -1,0 +1,38 @@
+{
+  "flask-safe-edit-v1": {
+    "executed_patterns": {"baseline": "AssertionError", "reference": "AGENT_OUTCOMES_ASSERTIONS=10", "plausible_wrong": "AssertionError"}
+  },
+  "flask-repair-v1": {
+    "executed_patterns": {"baseline": "test_get_debug_flag", "reference": "5 passed", "plausible_wrong": "test_get_debug_flag"}
+  },
+  "express-safe-edit-v1": {
+    "executed_patterns": {"baseline": "Error: json boundary", "reference": "AGENT_OUTCOMES_ASSERTIONS=15", "plausible_wrong": "Error: json boundary"}
+  },
+  "express-repair-v1": {
+    "executed_patterns": {"baseline": "failing", "reference": "passing", "plausible_wrong": "failing"}
+  },
+  "chi-safe-edit-v1": {
+    "executed_patterns": {"baseline": "=== RUN   TestAgentOutcomeTrimKey", "reference": "--- PASS: TestAgentOutcomeTrimKey", "plausible_wrong": "--- FAIL: TestAgentOutcomeTrimKey"}
+  },
+  "chi-repair-v1": {
+    "executed_patterns": {"baseline": "--- FAIL: TestContext_Clone", "reference": "--- PASS: TestContext_Clone", "plausible_wrong": "--- FAIL: TestContext_Clone"}
+  },
+  "ripgrep-safe-edit-v1": {
+    "executed_patterns": {"baseline": "human::tests::agent_lowercase_suffixes", "reference": "human::tests::agent_lowercase_suffixes ... ok", "plausible_wrong": "human::tests::agent_lowercase_suffixes"}
+  },
+  "ripgrep-repair-v1": {
+    "executed_patterns": {"baseline": "human::tests::suffix_k", "reference": "human::tests::suffix_k ... ok", "plausible_wrong": "human::tests::suffix_k"}
+  },
+  "command-line-api-safe-edit-v1": {
+    "executed_patterns": {"baseline": "AgentOutcomeQuoteTests.PreservesExistingBoundaries", "reference": "Total tests: 1", "plausible_wrong": "AgentOutcomeQuoteTests.PreservesExistingBoundaries"}
+  },
+  "command-line-api-repair-v1": {
+    "executed_patterns": {"baseline": "SplitCommandLineTests.It_splits_strings_based_on_whitespace", "reference": "Total tests: 1", "plausible_wrong": "SplitCommandLineTests.It_splits_strings_based_on_whitespace"}
+  },
+  "rake-safe-edit-v1": {
+    "executed_patterns": {"baseline": "actions|AGENT_OUTCOMES", "reference": "AGENT_OUTCOMES_ASSERTIONS=2", "plausible_wrong": "actions"}
+  },
+  "rake-repair-v1": {
+    "executed_patterns": {"baseline": "test_invoke", "reference": "test_invoke", "plausible_wrong": "test_invoke"}
+  }
+}

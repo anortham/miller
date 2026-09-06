@@ -1,0 +1,59 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 0,
+    "case_count": 1228,
+    "runner_execution_count": 1228,
+    "preexisting_nonpass": [
+      {
+        "path": "crates/core/main.rs",
+        "test_id": "crates/cli/src/lib.rs - (line 51)",
+        "outcome": "skipped"
+      },
+      {
+        "path": "crates/core/main.rs",
+        "test_id": "crates/cli/src/lib.rs - (line 59)",
+        "outcome": "skipped"
+      },
+      {
+        "path": "crates/regex/src/matcher.rs",
+        "test_id": "matcher::tests::candidate_lines",
+        "outcome": "skipped"
+      }
+    ]
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 101,
+    "transition_count": 2
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_k"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_filesize"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_k",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_filesize",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [],
+  "unchanged_case_count": 1226,
+  "known_change_sha256": "5790e73a66d87c4e5cad8e7f4219085a3daed68c312f09b89465361e085394a3",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

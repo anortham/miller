@@ -1,0 +1,5 @@
+--- a/lib/rake/task.rb
++++ b/lib/rake/task.rb
+@@ -117 +117 @@
+-      @actions << block if block_given?
++      @actions << block if block_given? && !@actions.include?(block)

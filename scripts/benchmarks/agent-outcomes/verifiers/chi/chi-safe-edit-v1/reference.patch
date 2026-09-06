@@ -1,0 +1,5 @@
+--- a/context.go
++++ b/context.go
+@@ -18 +18 @@
+-		return rctx.URLParam(key)
++		return rctx.URLParam(strings.Trim(key, " \t\r\n\v\f"))

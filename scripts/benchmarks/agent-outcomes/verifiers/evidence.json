@@ -1,0 +1,1841 @@
+{
+  "flask-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "2d079814c0d0fee9fed9e729473d8f8d15f0a2de21c0058c94b87975db374488"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "3d459d3d56456a2d5fd31d0258232bc4e0d3724742ecbfdd654f7b2b58c41c53"
+    },
+    "positive_result": {
+      "path": "src/flask/helpers.py",
+      "name": "get_debug_flag",
+      "line": 28
+    },
+    "negative_result": {
+      "path": "tests/test_helpers.py",
+      "name": "get_debug_flag",
+      "line": 1
+    }
+  },
+  "flask-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "22ecf86f3be4f6ab39c6eddecea576142bacb3dcbf57b24f67f0659a3d085e67"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "216a292cd99a204876c82f0e01065909d74a6b823811f02d0208c27558813777"
+    },
+    "positive_result": {
+      "facts": {
+        "missing-value-enables-debug": false,
+        "recognized-false-values": [
+          "0",
+          "false",
+          "no"
+        ],
+        "comparison-is-case-sensitive": false,
+        "other-nonempty-value-enables-debug": true
+      },
+      "evidence": [
+        {
+          "path": "src/flask/helpers.py",
+          "name": "get_debug_flag",
+          "line": 28
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "missing-value-enables-debug": true,
+        "recognized-false-values": [
+          "0",
+          "false",
+          "no"
+        ],
+        "comparison-is-case-sensitive": false,
+        "other-nonempty-value-enables-debug": true
+      },
+      "evidence": [
+        {
+          "path": "src/flask/helpers.py",
+          "name": "get_debug_flag",
+          "line": 28
+        }
+      ]
+    }
+  },
+  "flask-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "5ca865276736c2823f737d3d657b3102bf41408f3b7502089c5d33fe127ede09"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "71170b4d60481b4d3d12da5641c18bbf2cba19027856e7768a7e695bbaf7313d"
+    },
+    "positive_result": {
+      "status": "empty",
+      "references": []
+    },
+    "negative_result": {
+      "references": [
+        {
+          "path": "src/flask/helpers.py",
+          "name": "get_debug_flag",
+          "line": 28
+        }
+      ]
+    }
+  },
+  "flask-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "a6268c633ce9ef38a1da5399191f4b28726e2b33aa18fa2600ddfaded50f3abf"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "58be65729d9e07c6f213a72ca3f42726a54aecc63fd922acdeb9129690899f84"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "python",
+        "-c",
+        "import os; from flask.helpers import get_debug_flag; false_values=['0','False','No',' false ','\\tno\\n']; true_values=['1','True','yes','falsex']; os.environ.pop('FLASK_DEBUG',None); assert get_debug_flag() is False; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not False else None) for v in false_values]; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not True else None) for v in true_values]; print('AGENT_OUTCOMES_ASSERTIONS=10')"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.248,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "38361a3afac9e0229b419793ab3bc2ba8fd4d4939d77fec4436b255e2fcb6008",
+      "outcome": "failed",
+      "snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "python",
+        "-c",
+        "import os; from flask.helpers import get_debug_flag; false_values=['0','False','No',' false ','\\tno\\n']; true_values=['1','True','yes','falsex']; os.environ.pop('FLASK_DEBUG',None); assert get_debug_flag() is False; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not False else None) for v in false_values]; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not True else None) for v in true_values]; print('AGENT_OUTCOMES_ASSERTIONS=10')"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.109,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "de16d1fd1f6fc1845127813ebc88f352a7b6ac080d6fd86ea3ba989834d6ef11",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "python",
+        "-c",
+        "import os; from flask.helpers import get_debug_flag; false_values=['0','False','No',' false ','\\tno\\n']; true_values=['1','True','yes','falsex']; os.environ.pop('FLASK_DEBUG',None); assert get_debug_flag() is False; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not False else None) for v in false_values]; [(os.environ.__setitem__('FLASK_DEBUG',v), (_ for _ in ()).throw(AssertionError(v)) if get_debug_flag() is not True else None) for v in true_values]; print('AGENT_OUTCOMES_ASSERTIONS=10')"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.115,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "38361a3afac9e0229b419793ab3bc2ba8fd4d4939d77fec4436b255e2fcb6008",
+      "outcome": "failed",
+      "snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "flask-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "60180097b70e6cab9a402a19481873c0f93e48122a1b36f6610cf8d9fe9fd42e"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "c1e79a840f778bb9ac30df649179c1f3b1675115a6dd19b70a32f1282c8ae843"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_helpers.py::TestHelpers::test_get_debug_flag"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.385,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "00704f4457c9f641c3bc98956f8449146c40065bd10bfb89924b674b9a15b82a",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "7b8567ddc4fc45556a84e9bed28ed57c4ea503aae33de12e5be23902fc93397f",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_helpers.py::TestHelpers::test_get_debug_flag"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.202,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "7b8567ddc4fc45556a84e9bed28ed57c4ea503aae33de12e5be23902fc93397f",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_helpers.py::TestHelpers::test_get_debug_flag"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.219,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "a918c1eaf574ba0c9fd482c1d1c723d6afeedf0916b254d42bfbcf85ba9ba3a6",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/flask-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "7b8567ddc4fc45556a84e9bed28ed57c4ea503aae33de12e5be23902fc93397f",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "flask-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "639b1ea68dbf8e381edf41babec85c6c3d40e25ed1d17fbdb83aa526272d111d"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "47b3bbf29db8d19154099add146e425ab40cc6219f41e6b936568ef3218692ce"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "tests/test_helpers.py",
+          "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[No-False]"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "tests/test_appctx.py",
+          "test_id": "tests/test_appctx.py::test_app_context_provides_current_app"
+        }
+      ]
+    }
+  },
+  "express-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "b3ae6c111ff10b4300209eec4bdf0ba6fcba5c97d48a5a888a308cc5b6d0e123"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "de4aba4cd273c5fd499a6819ed652e176f1b79478051d3ea2aad92fabad767ed"
+    },
+    "positive_result": {
+      "path": "lib/response.js",
+      "name": "json",
+      "line": 234
+    },
+    "negative_result": {
+      "path": "test/res.json.js",
+      "name": "json",
+      "line": 1
+    }
+  },
+  "express-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "01de2af096bf9a39996c535261f691f5d6c32af5b49bdf624e936bcc6c02378c"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "36972fec69588231890627f63940ece43103eaf5e6dae55f8d987bdc49c26559"
+    },
+    "positive_result": {
+      "facts": {
+        "uses-configured-json-escape": true,
+        "preserves-existing-content-type": true,
+        "default-content-type": "application/json",
+        "uses-jsonp-path": false
+      },
+      "evidence": [
+        {
+          "path": "lib/response.js",
+          "name": "json",
+          "line": 234
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "uses-configured-json-escape": false,
+        "preserves-existing-content-type": true,
+        "default-content-type": "application/json",
+        "uses-jsonp-path": false
+      },
+      "evidence": [
+        {
+          "path": "lib/response.js",
+          "name": "json",
+          "line": 234
+        }
+      ]
+    }
+  },
+  "express-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "8f9774e8c4185898cf21d06bf37e43ec007d0959fedf6197368fc993f0191bd5"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "e60093d5a26510d4b8fcb6ae37331ee166d4db4f33882b0a7109c808f7c4fed8"
+    },
+    "positive_result": {
+      "references": [
+        {
+          "path": "lib/response.js",
+          "name": "stringify",
+          "line": 1023
+        },
+        {
+          "path": "lib/response.js",
+          "name": "send",
+          "line": 126
+        }
+      ]
+    },
+    "negative_result": {
+      "references": [
+        {
+          "path": "lib/response.js",
+          "name": "jsonp",
+          "line": 253
+        }
+      ]
+    }
+  },
+  "express-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "e968984ea11401a470bd56c48532ad0aec2fe00df2bbdb1335a7e9f3b6130da3"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "56f2c597d04fc0f13fcde5ad3031f316687d07ec8bf37520b4bd1711fc29e974"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo Y29uc3QgZXhwcmVzcz1yZXF1aXJlKCcuLycpOyBjb25zdCByZXF1ZXN0PXJlcXVpcmUoJ3N1cGVydGVzdCcpOwooYXN5bmMoKT0+e2xldCBuPTA7IGZvcihjb25zdCBbdmFsdWUsYm9keV0gb2YgW1tudWxsLCdudWxsJ10sWzMsJzMnXSxbJ3gnLCcieCInXSxbe30sJ3t9J11dKSB7IGNvbnN0IHI9YXdhaXQgcmVxdWVzdChleHByZXNzKCkudXNlKChxLHMpPT5zLmpzb24odmFsdWUpKSkuZ2V0KCcvJyk7IGlmKHIuaGVhZGVyc1sneC1jb250ZW50LXR5cGUtb3B0aW9ucyddIT09J25vc25pZmYnfHxyLnRleHQhPT1ib2R5fHwhci5oZWFkZXJzWydjb250ZW50LXR5cGUnXS5zdGFydHNXaXRoKCdhcHBsaWNhdGlvbi9qc29uJykpIHRocm93IEVycm9yKCdqc29uIGJvdW5kYXJ5Jyk7IG4rPTM7IH0gY29uc3QgY3VzdG9tPWF3YWl0IHJlcXVlc3QoZXhwcmVzcygpLnVzZSgocSxzKT0+e3MudHlwZSgnYXBwbGljYXRpb24vdm5kLmV4YW1wbGUranNvbicpO3MuanNvbih7b2s6dHJ1ZX0pfSkpLmdldCgnLycpOyBpZighY3VzdG9tLmhlYWRlcnNbJ2NvbnRlbnQtdHlwZSddLnN0YXJ0c1dpdGgoJ2FwcGxpY2F0aW9uL3ZuZC5leGFtcGxlK2pzb24nKXx8Y3VzdG9tLmhlYWRlcnNbJ3gtY29udGVudC10eXBlLW9wdGlvbnMnXSE9PSdub3NuaWZmJ3x8Y3VzdG9tLnRleHQhPT0neyJvayI6dHJ1ZX0nKSB0aHJvdyBFcnJvcignY3VzdG9tIHR5cGUnKTsgbis9MzsgY29uc29sZS5sb2coJ0FHRU5UX09VVENPTUVTX0FTU0VSVElPTlM9JytuKX0pKCkuY2F0Y2goZT0+e2NvbnNvbGUuZXJyb3IoZSk7cHJvY2Vzcy5leGl0KDEpfSkK | base64 -d > agent_outcome.js && node agent_outcome.js"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.123,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "4856782e81526ed41d54aab0bd68e30f97b7bb65419934eaa0a8cac9843864df",
+      "outcome": "failed",
+      "snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo Y29uc3QgZXhwcmVzcz1yZXF1aXJlKCcuLycpOyBjb25zdCByZXF1ZXN0PXJlcXVpcmUoJ3N1cGVydGVzdCcpOwooYXN5bmMoKT0+e2xldCBuPTA7IGZvcihjb25zdCBbdmFsdWUsYm9keV0gb2YgW1tudWxsLCdudWxsJ10sWzMsJzMnXSxbJ3gnLCcieCInXSxbe30sJ3t9J11dKSB7IGNvbnN0IHI9YXdhaXQgcmVxdWVzdChleHByZXNzKCkudXNlKChxLHMpPT5zLmpzb24odmFsdWUpKSkuZ2V0KCcvJyk7IGlmKHIuaGVhZGVyc1sneC1jb250ZW50LXR5cGUtb3B0aW9ucyddIT09J25vc25pZmYnfHxyLnRleHQhPT1ib2R5fHwhci5oZWFkZXJzWydjb250ZW50LXR5cGUnXS5zdGFydHNXaXRoKCdhcHBsaWNhdGlvbi9qc29uJykpIHRocm93IEVycm9yKCdqc29uIGJvdW5kYXJ5Jyk7IG4rPTM7IH0gY29uc3QgY3VzdG9tPWF3YWl0IHJlcXVlc3QoZXhwcmVzcygpLnVzZSgocSxzKT0+e3MudHlwZSgnYXBwbGljYXRpb24vdm5kLmV4YW1wbGUranNvbicpO3MuanNvbih7b2s6dHJ1ZX0pfSkpLmdldCgnLycpOyBpZighY3VzdG9tLmhlYWRlcnNbJ2NvbnRlbnQtdHlwZSddLnN0YXJ0c1dpdGgoJ2FwcGxpY2F0aW9uL3ZuZC5leGFtcGxlK2pzb24nKXx8Y3VzdG9tLmhlYWRlcnNbJ3gtY29udGVudC10eXBlLW9wdGlvbnMnXSE9PSdub3NuaWZmJ3x8Y3VzdG9tLnRleHQhPT0neyJvayI6dHJ1ZX0nKSB0aHJvdyBFcnJvcignY3VzdG9tIHR5cGUnKTsgbis9MzsgY29uc29sZS5sb2coJ0FHRU5UX09VVENPTUVTX0FTU0VSVElPTlM9JytuKX0pKCkuY2F0Y2goZT0+e2NvbnNvbGUuZXJyb3IoZSk7cHJvY2Vzcy5leGl0KDEpfSkK | base64 -d > agent_outcome.js && node agent_outcome.js"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.111,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "0cc6d39c92911be827fb1c8744cdbeca22949a97f36714496b6ccdc93deebfdf",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo Y29uc3QgZXhwcmVzcz1yZXF1aXJlKCcuLycpOyBjb25zdCByZXF1ZXN0PXJlcXVpcmUoJ3N1cGVydGVzdCcpOwooYXN5bmMoKT0+e2xldCBuPTA7IGZvcihjb25zdCBbdmFsdWUsYm9keV0gb2YgW1tudWxsLCdudWxsJ10sWzMsJzMnXSxbJ3gnLCcieCInXSxbe30sJ3t9J11dKSB7IGNvbnN0IHI9YXdhaXQgcmVxdWVzdChleHByZXNzKCkudXNlKChxLHMpPT5zLmpzb24odmFsdWUpKSkuZ2V0KCcvJyk7IGlmKHIuaGVhZGVyc1sneC1jb250ZW50LXR5cGUtb3B0aW9ucyddIT09J25vc25pZmYnfHxyLnRleHQhPT1ib2R5fHwhci5oZWFkZXJzWydjb250ZW50LXR5cGUnXS5zdGFydHNXaXRoKCdhcHBsaWNhdGlvbi9qc29uJykpIHRocm93IEVycm9yKCdqc29uIGJvdW5kYXJ5Jyk7IG4rPTM7IH0gY29uc3QgY3VzdG9tPWF3YWl0IHJlcXVlc3QoZXhwcmVzcygpLnVzZSgocSxzKT0+e3MudHlwZSgnYXBwbGljYXRpb24vdm5kLmV4YW1wbGUranNvbicpO3MuanNvbih7b2s6dHJ1ZX0pfSkpLmdldCgnLycpOyBpZighY3VzdG9tLmhlYWRlcnNbJ2NvbnRlbnQtdHlwZSddLnN0YXJ0c1dpdGgoJ2FwcGxpY2F0aW9uL3ZuZC5leGFtcGxlK2pzb24nKXx8Y3VzdG9tLmhlYWRlcnNbJ3gtY29udGVudC10eXBlLW9wdGlvbnMnXSE9PSdub3NuaWZmJ3x8Y3VzdG9tLnRleHQhPT0neyJvayI6dHJ1ZX0nKSB0aHJvdyBFcnJvcignY3VzdG9tIHR5cGUnKTsgbis9MzsgY29uc29sZS5sb2coJ0FHRU5UX09VVENPTUVTX0FTU0VSVElPTlM9JytuKX0pKCkuY2F0Y2goZT0+e2NvbnNvbGUuZXJyb3IoZSk7cHJvY2Vzcy5leGl0KDEpfSkK | base64 -d > agent_outcome.js && node agent_outcome.js"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.112,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "4032f3efac2daa3102ecfadc9424d9714865699942acb4382ba92947e9683b72",
+      "outcome": "failed",
+      "snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "express-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "af96ad93749db373147382f5e4ac89bbdb31f4e72533a7f9b62e296663be71dc"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "fc3ca6c50170726d7f2920eccc407bde04b506ce2a6e7f4636b84df1d4e1d877"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "mocha",
+        "--reporter",
+        "dot",
+        "test/res.json.js"
+      ],
+      "returncode": 9,
+      "wall_seconds": 0.262,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "c9450cea91712dcb865f4753b53a0854b909123f6d6604bac7c3271a55262fb0",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "530fbe56b525bcee4b45c650cb497f83d3794a5f3ee2f81e596a1c40084182cd",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "mocha",
+        "--reporter",
+        "dot",
+        "test/res.json.js"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.216,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "304e0cfdf8e6a4251a62d7a01be5d4988cb7012a9700d8a752c1f87477ba8e0d",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "530fbe56b525bcee4b45c650cb497f83d3794a5f3ee2f81e596a1c40084182cd",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "mocha",
+        "--reporter",
+        "dot",
+        "test/res.json.js"
+      ],
+      "returncode": 9,
+      "wall_seconds": 0.199,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "321f190d956da11d75c8a608c5bcc7d47d9f49fb7c204b53ef3ed43f4f2b6717",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/express-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "530fbe56b525bcee4b45c650cb497f83d3794a5f3ee2f81e596a1c40084182cd",
+      "verification_failures": [
+        "frozen test command failed with exit 9"
+      ]
+    }
+  },
+  "express-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "f1cdc3edfd48b3dee9930ee2bc6d08ae82979ab75cb1bca7eaee80be3eab4c85"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "6054fbf4b5fc18305f30d1d213345e39c12e8a5bd0bad706cb56b4bddef9a122"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "test/acceptance/web-service.js",
+          "test_id": "web-service GET /api/repos with a valid api key should respond repos json"
+        },
+        {
+          "path": "test/acceptance/web-service.js",
+          "test_id": "web-service GET /api/user/:name/repos with a valid api key should respond user repos json"
+        },
+        {
+          "path": "test/acceptance/web-service.js",
+          "test_id": "web-service GET /api/users with a valid api key should respond users json"
+        },
+        {
+          "path": "test/app.router.js",
+          "test_id": "app.router should be .use()able"
+        },
+        {
+          "path": "test/app.router.js",
+          "test_id": "app.router when next() is called should continue lookup"
+        },
+        {
+          "path": "test/app.router.js",
+          "test_id": "app.router when next(err) is called should break out of app.router"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() async local storage should persist store"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() async local storage should persist store when inflated"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() charset should ignore charset"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() encoding should be case-insensitive"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() encoding should parse without encoding"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() encoding should support deflate encoding"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() encoding should support gzip encoding"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() encoding should support identity encoding"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() should handle Content-Length: 0"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() should handle duplicated middleware"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() should handle empty message-body"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() should parse application/octet-stream"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with inflate option when true should accept content-encoding"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with type option when \"application/vnd+octets\" should parse for custom type"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/octet-stream\""
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/vnd+octets\""
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with type option when a function should parse when truthy value returned"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with type option when a function should work without content-type"
+        },
+        {
+          "path": "test/express.raw.js",
+          "test_id": "express.raw() with verify option should allow pass-through"
+        },
+        {
+          "path": "test/req.acceptsEncodings.js",
+          "test_id": "req .acceptsEncodings should be false if encoding not accepted"
+        },
+        {
+          "path": "test/req.acceptsEncodings.js",
+          "test_id": "req .acceptsEncodings should return encoding if accepted"
+        },
+        {
+          "path": "test/req.acceptsLanguages.js",
+          "test_id": "req .acceptsLanguages should be false if language not accepted"
+        },
+        {
+          "path": "test/req.acceptsLanguages.js",
+          "test_id": "req .acceptsLanguages should return language if accepted"
+        },
+        {
+          "path": "test/req.acceptsLanguages.js",
+          "test_id": "req .acceptsLanguages when Accept-Language is not present should always return language"
+        },
+        {
+          "path": "test/req.signedCookies.js",
+          "test_id": "req .signedCookies should return a signed JSON cookie"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains otherwise should return an empty array"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when present should return an array"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when present should work with IPv4 address"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when present should work with IPv6 address"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when subdomain offset is set otherwise should return an empty array"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when subdomain offset is set when present should return an array"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv4"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv6"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole domain"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains with no host should return an empty array"
+        },
+        {
+          "path": "test/req.subdomains.js",
+          "test_id": "req .subdomains with trusted X-Forwarded-Host should return an array"
+        },
+        {
+          "path": "test/res.cookie.js",
+          "test_id": "res .cookie(name, string, options) maxAge should not mutate the options object"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) \"json escape\" setting should not break undefined escape"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) \"json escape\" setting should unicode escape HTML-sniffing characters"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) \"json replacer\" setting should be passed to JSON.stringify()"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) \"json spaces\" setting should be passed to JSON.stringify()"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) when given an array should respond with json"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) when given an object should respond with json"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) when given primitives should respond with json for Number"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) when given primitives should respond with json for String"
+        },
+        {
+          "path": "test/res.json.js",
+          "test_id": "res .json(object) when given primitives should respond with json for null"
+        },
+        {
+          "path": "test/res.locals.js",
+          "test_id": "res should work when mounted"
+        },
+        {
+          "path": "test/res.send.js",
+          "test_id": "res .send(Number) should send as application/json"
+        },
+        {
+          "path": "test/res.send.js",
+          "test_id": "res .send(Object) should send as application/json"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "test/Route.js",
+          "test_id": "Route .VERB should allow fallthrough"
+        }
+      ]
+    }
+  },
+  "chi-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "9d252102bb57d5c82692cfc010992724094ed2df333403641edb12611d5f7875"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "f7a101e385cb0991280258521022ac74c34d5ece95f38514e77be639e055eb29"
+    },
+    "positive_result": {
+      "path": "context.go",
+      "name": "URLParamFromCtx",
+      "line": 16
+    },
+    "negative_result": {
+      "path": "context_test.go",
+      "name": "URLParamFromCtx",
+      "line": 1
+    }
+  },
+  "chi-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "7669bf9fa26ae69871fe39f08f77fbc5965c48d31403ce50f7a96d79af21cfb4"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "a296abee51084f1c66c14f726449c28988d189455520d6309d9290b879cdc8c6"
+    },
+    "positive_result": {
+      "facts": {
+        "absent-context-returns-empty": true,
+        "delegates-to-routing-context": true,
+        "latest-captured-key-wins": true
+      },
+      "evidence": [
+        {
+          "path": "context.go",
+          "name": "URLParamFromCtx",
+          "line": 16
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "absent-context-returns-empty": false,
+        "delegates-to-routing-context": true,
+        "latest-captured-key-wins": true
+      },
+      "evidence": [
+        {
+          "path": "context.go",
+          "name": "URLParamFromCtx",
+          "line": 16
+        }
+      ]
+    }
+  },
+  "chi-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "adc07f73c132d7702704330df6a66ee557800c469a5ca6ceed1c9cca3cdcbf27"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "868b288591ea5f390481d2b0645fc19cc678cff9d9c97b4cd18405ea4aada7c1"
+    },
+    "positive_result": {
+      "references": [
+        {
+          "path": "context.go",
+          "name": "RouteContext",
+          "line": 25
+        },
+        {
+          "path": "context.go",
+          "name": "URLParam",
+          "line": 124
+        }
+      ]
+    },
+    "negative_result": {
+      "references": [
+        {
+          "path": "context.go",
+          "name": "RoutePattern",
+          "line": 145
+        }
+      ]
+    }
+  },
+  "chi-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "11f99cbadf135f9d9603790ea60b552559abcc81410fdf79aaa5936a00e6c5b0"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "bf7d94328349731351a14b1f050c930d93f07c5932525a450aac9bfe37d4ae31"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo cGFja2FnZSBjaGkKaW1wb3J0ICgKICAgICJjb250ZXh0IgogICAgInRlc3RpbmciCikKZnVuYyBUZXN0QWdlbnRPdXRjb21lVHJpbUtleSh0ICp0ZXN0aW5nLlQpIHsKICAgIHggOj0gTmV3Um91dGVDb250ZXh0KCkKICAgIHguVVJMUGFyYW1zLktleXMgPSBbXXN0cmluZ3siaWQiLCAiXHUwMGEwaWRcdTAwYTAifQogICAgeC5VUkxQYXJhbXMuVmFsdWVzID0gW11zdHJpbmd7ImFzY2lpIiwgInVuaWNvZGUifQogICAgY3R4IDo9IGNvbnRleHQuV2l0aFZhbHVlKGNvbnRleHQuQmFja2dyb3VuZCgpLCBSb3V0ZUN0eEtleSwgeCkKICAgIGNhc2VzIDo9IG1hcFtzdHJpbmddc3RyaW5neyJpZCI6ImFzY2lpIiwgIiBpZCAiOiJhc2NpaSIsICJcdGlkXHJcbiI6ImFzY2lpIiwgIlx1MDBhMGlkXHUwMGEwIjoidW5pY29kZSJ9CiAgICBmb3Iga2V5LCB3YW50IDo9IHJhbmdlIGNhc2VzIHsgaWYgZ290IDo9IFVSTFBhcmFtRnJvbUN0eChjdHgsIGtleSk7IGdvdCAhPSB3YW50IHsgdC5GYXRhbGYoIiVxOiBnb3QgJXEgd2FudCAlcSIsIGtleSwgZ290LCB3YW50KSB9IH0KfQo= | base64 -d > agent_outcome_test.go && test -s agent_outcome_test.go && go test -v . -run '^TestAgentOutcomeTrimKey$'"
+      ],
+      "returncode": 1,
+      "wall_seconds": 6.576,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "c2acfebee6e108dea9030a7602404c748923ad34ade842b545c39eb169d83616",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo cGFja2FnZSBjaGkKaW1wb3J0ICgKICAgICJjb250ZXh0IgogICAgInRlc3RpbmciCikKZnVuYyBUZXN0QWdlbnRPdXRjb21lVHJpbUtleSh0ICp0ZXN0aW5nLlQpIHsKICAgIHggOj0gTmV3Um91dGVDb250ZXh0KCkKICAgIHguVVJMUGFyYW1zLktleXMgPSBbXXN0cmluZ3siaWQiLCAiXHUwMGEwaWRcdTAwYTAifQogICAgeC5VUkxQYXJhbXMuVmFsdWVzID0gW11zdHJpbmd7ImFzY2lpIiwgInVuaWNvZGUifQogICAgY3R4IDo9IGNvbnRleHQuV2l0aFZhbHVlKGNvbnRleHQuQmFja2dyb3VuZCgpLCBSb3V0ZUN0eEtleSwgeCkKICAgIGNhc2VzIDo9IG1hcFtzdHJpbmddc3RyaW5neyJpZCI6ImFzY2lpIiwgIiBpZCAiOiJhc2NpaSIsICJcdGlkXHJcbiI6ImFzY2lpIiwgIlx1MDBhMGlkXHUwMGEwIjoidW5pY29kZSJ9CiAgICBmb3Iga2V5LCB3YW50IDo9IHJhbmdlIGNhc2VzIHsgaWYgZ290IDo9IFVSTFBhcmFtRnJvbUN0eChjdHgsIGtleSk7IGdvdCAhPSB3YW50IHsgdC5GYXRhbGYoIiVxOiBnb3QgJXEgd2FudCAlcSIsIGtleSwgZ290LCB3YW50KSB9IH0KfQo= | base64 -d > agent_outcome_test.go && test -s agent_outcome_test.go && go test -v . -run '^TestAgentOutcomeTrimKey$'"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.435,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "fab9551ba2f82feeb42b5cd1db5335e6338fa31a6b741a71d2a1ee115f13e0b1",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo cGFja2FnZSBjaGkKaW1wb3J0ICgKICAgICJjb250ZXh0IgogICAgInRlc3RpbmciCikKZnVuYyBUZXN0QWdlbnRPdXRjb21lVHJpbUtleSh0ICp0ZXN0aW5nLlQpIHsKICAgIHggOj0gTmV3Um91dGVDb250ZXh0KCkKICAgIHguVVJMUGFyYW1zLktleXMgPSBbXXN0cmluZ3siaWQiLCAiXHUwMGEwaWRcdTAwYTAifQogICAgeC5VUkxQYXJhbXMuVmFsdWVzID0gW11zdHJpbmd7ImFzY2lpIiwgInVuaWNvZGUifQogICAgY3R4IDo9IGNvbnRleHQuV2l0aFZhbHVlKGNvbnRleHQuQmFja2dyb3VuZCgpLCBSb3V0ZUN0eEtleSwgeCkKICAgIGNhc2VzIDo9IG1hcFtzdHJpbmddc3RyaW5neyJpZCI6ImFzY2lpIiwgIiBpZCAiOiJhc2NpaSIsICJcdGlkXHJcbiI6ImFzY2lpIiwgIlx1MDBhMGlkXHUwMGEwIjoidW5pY29kZSJ9CiAgICBmb3Iga2V5LCB3YW50IDo9IHJhbmdlIGNhc2VzIHsgaWYgZ290IDo9IFVSTFBhcmFtRnJvbUN0eChjdHgsIGtleSk7IGdvdCAhPSB3YW50IHsgdC5GYXRhbGYoIiVxOiBnb3QgJXEgd2FudCAlcSIsIGtleSwgZ290LCB3YW50KSB9IH0KfQo= | base64 -d > agent_outcome_test.go && test -s agent_outcome_test.go && go test -v . -run '^TestAgentOutcomeTrimKey$'"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.433,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "c2acfebee6e108dea9030a7602404c748923ad34ade842b545c39eb169d83616",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "chi-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "fd7b7c9889a6f9ada4972261a0ab1c9063471745241f57e58d1baeb6968b5c79"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "80d5d0efad20b4a654f32acea181c96c78193f7827b1a4293c117eb55167a7ec"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "go",
+        "test",
+        "-v",
+        ".",
+        "-run",
+        "^TestContext_Clone$"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.446,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "3356bad52c100aa9af7195c84144535220eb73d136d267a43ec994aa22ec51b8",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "40cca63de3b08a94eda5d121e3ec36542173d7cbe64338f806d52b41efc3301c",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "go",
+        "test",
+        "-v",
+        ".",
+        "-run",
+        "^TestContext_Clone$"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.399,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "bba810c38b3462a086ab9cfa5971f02f96d14d40c568e8f8ba8dd3296120df23",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "40cca63de3b08a94eda5d121e3ec36542173d7cbe64338f806d52b41efc3301c",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "go",
+        "test",
+        "-v",
+        ".",
+        "-run",
+        "^TestContext_Clone$"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.398,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "c01478abb69f6728ca57386bd3bd8c6354b7e6af3c31385c5af7947f609d89c7",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/chi-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "40cca63de3b08a94eda5d121e3ec36542173d7cbe64338f806d52b41efc3301c",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "chi-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "850637b0a96b9b52687bb24b291361ae3b71eacfffe3ac435025e3e6825a8ff5"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "028fb6ce51de791c50f0fb125a293cda1bfc54d7771d653edcf660298cb438cb"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "context_test.go",
+          "test_id": "github.com/go-chi/chi/v5::TestContext_Clone"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "context_test.go",
+          "test_id": "github.com/go-chi/chi/v5::TestReplaceWildcardsConsecutive"
+        }
+      ]
+    }
+  },
+  "ripgrep-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "4041a18748796ca2d6f48de4632ade6a28a1cad66d82b0f7fd2e4b3be672ae87"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "8118efb1c50a813cc577e0be3f956f15accea95ba81a5600631ef44a09384d89"
+    },
+    "positive_result": {
+      "path": "crates/cli/src/human.rs",
+      "name": "parse_human_readable_size",
+      "line": 79
+    },
+    "negative_result": {
+      "path": "crates/cli/src/human.rs",
+      "name": "parse_human_readable_size",
+      "line": 1
+    }
+  },
+  "ripgrep-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "036b59e63476816088bf7fcb9eab5ff06806e130672d3671f2586412eaee5620"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "fa0fcdaa88a07e589b7d5613af5cf56b5f3530031d28bee0fdf5c8e478176256"
+    },
+    "positive_result": {
+      "facts": {
+        "bare-number-unit": "bytes",
+        "binary-suffix-multipliers": [
+          "K=1024",
+          "M=1048576",
+          "G=1073741824"
+        ],
+        "malformed-input-is-error": true,
+        "overflow-is-error": true
+      },
+      "evidence": [
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "parse_human_readable_size",
+          "line": 79
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "bare-number-unit": "bytes",
+        "binary-suffix-multipliers": [
+          "K=1024",
+          "M=1048576",
+          "G=1073741824"
+        ],
+        "malformed-input-is-error": false,
+        "overflow-is-error": true
+      },
+      "evidence": [
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "parse_human_readable_size",
+          "line": 79
+        }
+      ]
+    }
+  },
+  "ripgrep-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "24b37268e0f9efe529d335c1dd5bf41ec3038afe740e3e6c09c238d6ee71f06e"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "75b1c63d015c8c2a720470a55f012be4c61ce53e90a00a414fd026c00cda056f"
+    },
+    "positive_result": {
+      "references": [
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "format",
+          "line": 19
+        },
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "int",
+          "line": 26
+        },
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "overflow",
+          "line": 33
+        }
+      ]
+    },
+    "negative_result": {
+      "references": [
+        {
+          "path": "crates/cli/src/human.rs",
+          "name": "fmt",
+          "line": 44
+        }
+      ]
+    }
+  },
+  "ripgrep-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "6471dfcfec0dcb8085365935043abc828228fcb2cd493a6761a80975bc10888b"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "52fa1c6e09bacbb064da586a2d8dbf06df6da8a53d9e9673f967ca9b1deba7b5"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -c \"from pathlib import Path; p=Path('crates/cli/src/human.rs'); s=p.read_text(); marker='    #[test]\\\\n    fn suffix_none()'; assert s.count(marker)==1; injected='    #[test]\\\\n    fn agent_lowercase_suffixes() {\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1k\\\").unwrap());\\\\n        assert_eq!(1 << 20, parse_human_readable_size(\\\"1m\\\").unwrap());\\\\n        assert_eq!(1 << 30, parse_human_readable_size(\\\"1g\\\").unwrap());\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1K\\\").unwrap());\\\\n        assert_eq!(17, parse_human_readable_size(\\\"17\\\").unwrap());\\\\n        assert!(parse_human_readable_size(\\\"1t\\\").is_err());\\\\n        assert!(parse_human_readable_size(\\\"18446744073709551615g\\\").is_err());\\\\n    }\\\\n\\\\n'+marker; s=s.replace(marker,injected,1); assert s.count('fn agent_lowercase_suffixes()')==1; p.write_text(s)\" && cargo test -p grep-cli human::tests::agent_lowercase_suffixes -- --exact --nocapture"
+      ],
+      "returncode": 101,
+      "wall_seconds": 2.78,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "a14d25fc29450cbce00cfb37c07873a9574e061ebc93cac23932bdcbe89a8b97",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "2936024752842ad97ee5b4ce008cfd2461f75dc1aa30eb076b89a1ae0933686b",
+      "outcome": "failed",
+      "snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -c \"from pathlib import Path; p=Path('crates/cli/src/human.rs'); s=p.read_text(); marker='    #[test]\\\\n    fn suffix_none()'; assert s.count(marker)==1; injected='    #[test]\\\\n    fn agent_lowercase_suffixes() {\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1k\\\").unwrap());\\\\n        assert_eq!(1 << 20, parse_human_readable_size(\\\"1m\\\").unwrap());\\\\n        assert_eq!(1 << 30, parse_human_readable_size(\\\"1g\\\").unwrap());\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1K\\\").unwrap());\\\\n        assert_eq!(17, parse_human_readable_size(\\\"17\\\").unwrap());\\\\n        assert!(parse_human_readable_size(\\\"1t\\\").is_err());\\\\n        assert!(parse_human_readable_size(\\\"18446744073709551615g\\\").is_err());\\\\n    }\\\\n\\\\n'+marker; s=s.replace(marker,injected,1); assert s.count('fn agent_lowercase_suffixes()')==1; p.write_text(s)\" && cargo test -p grep-cli human::tests::agent_lowercase_suffixes -- --exact --nocapture"
+      ],
+      "returncode": 0,
+      "wall_seconds": 2.848,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "a2f8a591bdc991415ad2571687a1f8a4b520b6dbdca48707812cf631b5d6c9f4",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "db40385888f95ced65c8a49df2e377a964908a8080f80f5d3526c6e0e9edfaff",
+      "outcome": "passed",
+      "snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -c \"from pathlib import Path; p=Path('crates/cli/src/human.rs'); s=p.read_text(); marker='    #[test]\\\\n    fn suffix_none()'; assert s.count(marker)==1; injected='    #[test]\\\\n    fn agent_lowercase_suffixes() {\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1k\\\").unwrap());\\\\n        assert_eq!(1 << 20, parse_human_readable_size(\\\"1m\\\").unwrap());\\\\n        assert_eq!(1 << 30, parse_human_readable_size(\\\"1g\\\").unwrap());\\\\n        assert_eq!(1024, parse_human_readable_size(\\\"1K\\\").unwrap());\\\\n        assert_eq!(17, parse_human_readable_size(\\\"17\\\").unwrap());\\\\n        assert!(parse_human_readable_size(\\\"1t\\\").is_err());\\\\n        assert!(parse_human_readable_size(\\\"18446744073709551615g\\\").is_err());\\\\n    }\\\\n\\\\n'+marker; s=s.replace(marker,injected,1); assert s.count('fn agent_lowercase_suffixes()')==1; p.write_text(s)\" && cargo test -p grep-cli human::tests::agent_lowercase_suffixes -- --exact --nocapture"
+      ],
+      "returncode": 101,
+      "wall_seconds": 2.729,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "a14d25fc29450cbce00cfb37c07873a9574e061ebc93cac23932bdcbe89a8b97",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "9bb2bfe71544ce322a2efc70bb61ca4708ef9cfeeac9608542edbea35d4ec0da",
+      "outcome": "failed",
+      "snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+      "verification_failures": [
+        "frozen test command failed with exit 101"
+      ]
+    }
+  },
+  "ripgrep-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "2ba147ccea030d22712921839fb9427d1bb2ccc35fef80102b72f883702d8df1"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "f7a42ded077f49f6d142eca15443085977dc981c93f3111fa1d2b27944663297"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "grep-cli",
+        "human::tests::suffix_k",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "returncode": 101,
+      "wall_seconds": 2.698,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "af5e5e7513bea115f163c440843f0185aa24675af063aa1c3645912b953e0b2a",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "8f18dfe816accec48e42a71c22c6f523fd64cc6a0d36f3c26be02c276da39c0b",
+      "outcome": "failed",
+      "snapshot_sha256": "42c19d2eeebf8c8fe57ea4c5f44dace7465a4b9e1bf9b943b757984eaa405766",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "grep-cli",
+        "human::tests::suffix_k",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "returncode": 0,
+      "wall_seconds": 2.771,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "822a92d2a166e368ea1f29007a4179c19ff8aeb2552d872c74cf2dc2f0e02be0",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "a3ce6c9afca18c15124a2dfc29d85baa5cdda30521f0c4394c09faa0e3e5b0b0",
+      "outcome": "passed",
+      "snapshot_sha256": "42c19d2eeebf8c8fe57ea4c5f44dace7465a4b9e1bf9b943b757984eaa405766",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "grep-cli",
+        "human::tests::suffix_k",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "returncode": 101,
+      "wall_seconds": 2.453,
+      "pre_test_seconds": 0.0,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "af5e5e7513bea115f163c440843f0185aa24675af063aa1c3645912b953e0b2a",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/ripgrep-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "839336d9b67d488066b8312670f99a7d0697a2a351d7d1609f58c3db38409218",
+      "outcome": "failed",
+      "snapshot_sha256": "42c19d2eeebf8c8fe57ea4c5f44dace7465a4b9e1bf9b943b757984eaa405766",
+      "verification_failures": [
+        "frozen test command failed with exit 101"
+      ]
+    }
+  },
+  "ripgrep-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "545107695e984ea29c8d2c8df7fe4052b32327b054890b1674aaf03e61c875a1"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "2f2c9ec8d8c0b3f58577bded7830f63c783efd35297f438dcc5d02e6bf03cce2"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "crates/cli/src/human.rs",
+          "test_id": "human::tests::suffix_k"
+        },
+        {
+          "path": "crates/core/flags/defs.rs",
+          "test_id": "flags::defs::test_max_filesize"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "Cargo.toml",
+          "test_id": "gitignore::tests::cs1"
+        }
+      ]
+    }
+  },
+  "command-line-api-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "6bab448e7789850001319b54a260b2848ec815d3b2a328a99736e6a081f5de32"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "7e9326085ca0b66a3034e0948b3a0547439d8728901e8a2b595e8ed61298306c"
+    },
+    "positive_result": {
+      "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+      "name": "SplitCommandLine",
+      "line": 39
+    },
+    "negative_result": {
+      "path": "src/System.CommandLine.Tests/SplitCommandLineTests.cs",
+      "name": "SplitCommandLine",
+      "line": 1
+    }
+  },
+  "command-line-api-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "ac8795db416426b291c126825a730a41ed2bfc7b3ff744d12d70d1722b7339bf"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "69a984e630fb5495f4c73dc7832523b585d0732cae1ae79f0471fb2534fc0f7b"
+    },
+    "positive_result": {
+      "facts": {
+        "outside-quote-whitespace-splits": true,
+        "inside-quote-whitespace-splits": false,
+        "quote-delimiters-remain-in-token": false
+      },
+      "evidence": [
+        {
+          "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+          "name": "SplitCommandLine",
+          "line": 39
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "outside-quote-whitespace-splits": false,
+        "inside-quote-whitespace-splits": false,
+        "quote-delimiters-remain-in-token": false
+      },
+      "evidence": [
+        {
+          "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+          "name": "SplitCommandLine",
+          "line": 39
+        }
+      ]
+    }
+  },
+  "command-line-api-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "1b3becb66a72266430757592fdf149f53730c10f03eefe6757c4f3c4dfbe4d86"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "1a5a4922eb8fb4e5df0a1483308857e5b0f4cac178b31f5a95461170128e5278"
+    },
+    "positive_result": {
+      "references": [
+        {
+          "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+          "name": "Parse",
+          "line": 32
+        },
+        {
+          "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+          "name": "SplitCommandLine",
+          "line": 40
+        }
+      ]
+    },
+    "negative_result": {
+      "references": [
+        {
+          "path": "src/System.CommandLine/Parsing/CommandLineParser.cs",
+          "name": "Parse",
+          "line": 21
+        }
+      ]
+    }
+  },
+  "command-line-api-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "1d2ff84d4c8c08bdc9552e313d11604d1edbed6c0499f345c873c3eda9913226"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "294fd6750fcddf770ab557c763accd126c94bfc96cce16b25457c2067f329fa9"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo dXNpbmcgU3lzdGVtLkNvbW1hbmRMaW5lLlBhcnNpbmc7CnVzaW5nIFh1bml0OwpuYW1lc3BhY2UgU3lzdGVtLkNvbW1hbmRMaW5lLlRlc3RzOwpwdWJsaWMgY2xhc3MgQWdlbnRPdXRjb21lUXVvdGVUZXN0cwp7CiAgICBbRmFjdF0KICAgIHB1YmxpYyB2b2lkIFByZXNlcnZlc0V4aXN0aW5nQm91bmRhcmllcygpCiAgICB7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgInJ1biIsICJ0d28gd29yZHMiLCAidGhyZWUgd29yZHMiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoInJ1biAndHdvIHdvcmRzJyBcInRocmVlIHdvcmRzXCIiKSk7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgIm9uZSIsICJ0d28iLCAidGhyZWUiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoIm9uZVx0dHdvICB0aHJlZSIpKTsKICAgICAgICBBc3NlcnQuRXF1YWwobmV3W10geyAicm0iLCAiYSBiIiB9LCBDb21tYW5kTGluZVBhcnNlci5TcGxpdENvbW1hbmRMaW5lKCJybSBcImEgYlwiIikpOwogICAgfQp9Cg== | base64 -d > src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && test -s src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && dotnet test src/System.CommandLine.Tests/System.CommandLine.Tests.csproj -f net8.0 --no-restore --filter FullyQualifiedName~AgentOutcomeQuoteTests --logger 'console;verbosity=normal' --nologo"
+      ],
+      "returncode": 1,
+      "wall_seconds": 4.963,
+      "pre_test_seconds": 1.015,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "487a0b354be4922fb4ce96a464140e99298604e6117b2c987880b0a3d1ae4dd2",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "50a840304fdb0644d3763ab205339b59d0609f397c7005840b133f9e4a18b098",
+      "outcome": "failed",
+      "snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo dXNpbmcgU3lzdGVtLkNvbW1hbmRMaW5lLlBhcnNpbmc7CnVzaW5nIFh1bml0OwpuYW1lc3BhY2UgU3lzdGVtLkNvbW1hbmRMaW5lLlRlc3RzOwpwdWJsaWMgY2xhc3MgQWdlbnRPdXRjb21lUXVvdGVUZXN0cwp7CiAgICBbRmFjdF0KICAgIHB1YmxpYyB2b2lkIFByZXNlcnZlc0V4aXN0aW5nQm91bmRhcmllcygpCiAgICB7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgInJ1biIsICJ0d28gd29yZHMiLCAidGhyZWUgd29yZHMiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoInJ1biAndHdvIHdvcmRzJyBcInRocmVlIHdvcmRzXCIiKSk7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgIm9uZSIsICJ0d28iLCAidGhyZWUiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoIm9uZVx0dHdvICB0aHJlZSIpKTsKICAgICAgICBBc3NlcnQuRXF1YWwobmV3W10geyAicm0iLCAiYSBiIiB9LCBDb21tYW5kTGluZVBhcnNlci5TcGxpdENvbW1hbmRMaW5lKCJybSBcImEgYlwiIikpOwogICAgfQp9Cg== | base64 -d > src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && test -s src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && dotnet test src/System.CommandLine.Tests/System.CommandLine.Tests.csproj -f net8.0 --no-restore --filter FullyQualifiedName~AgentOutcomeQuoteTests --logger 'console;verbosity=normal' --nologo"
+      ],
+      "returncode": 0,
+      "wall_seconds": 2.884,
+      "pre_test_seconds": 0.972,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "0a86b62a4ec7afbdbceddfbfc3f2c532eccd57897eb0962c631b237d6b3b1d75",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "sh",
+        "-c",
+        "echo dXNpbmcgU3lzdGVtLkNvbW1hbmRMaW5lLlBhcnNpbmc7CnVzaW5nIFh1bml0OwpuYW1lc3BhY2UgU3lzdGVtLkNvbW1hbmRMaW5lLlRlc3RzOwpwdWJsaWMgY2xhc3MgQWdlbnRPdXRjb21lUXVvdGVUZXN0cwp7CiAgICBbRmFjdF0KICAgIHB1YmxpYyB2b2lkIFByZXNlcnZlc0V4aXN0aW5nQm91bmRhcmllcygpCiAgICB7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgInJ1biIsICJ0d28gd29yZHMiLCAidGhyZWUgd29yZHMiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoInJ1biAndHdvIHdvcmRzJyBcInRocmVlIHdvcmRzXCIiKSk7CiAgICAgICAgQXNzZXJ0LkVxdWFsKG5ld1tdIHsgIm9uZSIsICJ0d28iLCAidGhyZWUiIH0sIENvbW1hbmRMaW5lUGFyc2VyLlNwbGl0Q29tbWFuZExpbmUoIm9uZVx0dHdvICB0aHJlZSIpKTsKICAgICAgICBBc3NlcnQuRXF1YWwobmV3W10geyAicm0iLCAiYSBiIiB9LCBDb21tYW5kTGluZVBhcnNlci5TcGxpdENvbW1hbmRMaW5lKCJybSBcImEgYlwiIikpOwogICAgfQp9Cg== | base64 -d > src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && test -s src/System.CommandLine.Tests/AgentOutcomeQuoteTests.cs && dotnet test src/System.CommandLine.Tests/System.CommandLine.Tests.csproj -f net8.0 --no-restore --filter FullyQualifiedName~AgentOutcomeQuoteTests --logger 'console;verbosity=normal' --nologo"
+      ],
+      "returncode": 1,
+      "wall_seconds": 2.513,
+      "pre_test_seconds": 0.978,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "de6ca1150efbf6da27373fefc9dad35328f210dfff4e20b5f93318ad17fc35f9",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "50a840304fdb0644d3763ab205339b59d0609f397c7005840b133f9e4a18b098",
+      "outcome": "failed",
+      "snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "command-line-api-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "bf87ebb36a522246110e0706a56d2703de474b6c38f27565dfe555528097eb2b"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "c09b69f81d62fbfbad8af15b0c58abb0f61b1c957787ac5364e8b0e2cdc66e66"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "dotnet",
+        "test",
+        "src/System.CommandLine.Tests/System.CommandLine.Tests.csproj",
+        "-f",
+        "net8.0",
+        "--no-restore",
+        "--filter",
+        "FullyQualifiedName~SplitCommandLineTests.It_splits_strings_based_on_whitespace",
+        "--logger",
+        "console;verbosity=normal",
+        "--nologo"
+      ],
+      "returncode": 1,
+      "wall_seconds": 2.585,
+      "pre_test_seconds": 0.978,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "770b792bde798d83a6008f78e58318898929de48ba692bde3fc1f59762749eea",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "21473e77306a0d1474620294ac4f848fb7393a1325dc548b5249de3440df034a",
+      "outcome": "failed",
+      "snapshot_sha256": "49079fe5ea476f9d9e271ff44ba442c0679d5267c3e19252be9eaa4a5826087a",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "dotnet",
+        "test",
+        "src/System.CommandLine.Tests/System.CommandLine.Tests.csproj",
+        "-f",
+        "net8.0",
+        "--no-restore",
+        "--filter",
+        "FullyQualifiedName~SplitCommandLineTests.It_splits_strings_based_on_whitespace",
+        "--logger",
+        "console;verbosity=normal",
+        "--nologo"
+      ],
+      "returncode": 0,
+      "wall_seconds": 2.585,
+      "pre_test_seconds": 0.967,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "d05e3a7595fe70eec801288d018a9c03dd2e9d72eabacef6bfc243093e0ba9a5",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "49079fe5ea476f9d9e271ff44ba442c0679d5267c3e19252be9eaa4a5826087a",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "dotnet",
+        "test",
+        "src/System.CommandLine.Tests/System.CommandLine.Tests.csproj",
+        "-f",
+        "net8.0",
+        "--no-restore",
+        "--filter",
+        "FullyQualifiedName~SplitCommandLineTests.It_splits_strings_based_on_whitespace",
+        "--logger",
+        "console;verbosity=normal",
+        "--nologo"
+      ],
+      "returncode": 1,
+      "wall_seconds": 2.589,
+      "pre_test_seconds": 0.952,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "b87921a4bb20ece5f6f181a248dfdf1f9f0ed4274db901875c620a7c249cd876",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/command-line-api-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "2199e22ea0fe0cbb051b21a73aa91d9d0e4759b5fe538f449ff6a3d405ec5a5f",
+      "outcome": "failed",
+      "snapshot_sha256": "49079fe5ea476f9d9e271ff44ba442c0679d5267c3e19252be9eaa4a5826087a",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "command-line-api-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "86a23e496b0e99af58eb0408d0f4b3a0babcecd3c1fe63e1d975f1600a049d3f"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "13890e9727c92f0a8d7f4fec1b2f61e6ff01957bf6032126e9338a9d2f757e47"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+          "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\ntwo\\nthree\\nfour\\n\")"
+        },
+        {
+          "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+          "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\r\\ntwo\\r\\nthree\\r\\nfour\\r\\n\")"
+        },
+        {
+          "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+          "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \"one two\\tthree   four \")"
+        },
+        {
+          "path": "src/System.CommandLine.Tests/SplitCommandLineTests.cs",
+          "test_id": "System.CommandLine.Tests.SplitCommandLineTests.It_splits_strings_based_on_whitespace"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "src/System.CommandLine.ApiCompatibility.Tests/ApiCompatibilityApprovalTests.cs",
+          "test_id": "System.CommandLine.ApiCompatibility.Tests.ApiCompatibilityApprovalTests.System_CommandLine_api_is_not_changed"
+        }
+      ]
+    }
+  },
+  "rake-location-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "909f0ca74911d3028e9ffec52c8f445fc12ce6783b32f089e45f120bf348a69b"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "e4043d45409a4fd6c778cb6912028935b825640021ef93ddcb433ff1eebc81a6"
+    },
+    "positive_result": {
+      "path": "lib/rake/task.rb",
+      "name": "enhance",
+      "line": 115
+    },
+    "negative_result": {
+      "path": "test/test_rake_task.rb",
+      "name": "enhance",
+      "line": 1
+    }
+  },
+  "rake-concept-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "d767ca65cec124f3165cd8809ed0e58237860e501063d91f0d963ed850eadd3c"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "d8226d6b5000931089a7f67b93a68b8b2712e5dbbafaa729f398cf3073974022"
+    },
+    "positive_result": {
+      "facts": {
+        "keeps-existing-prerequisites": true,
+        "keeps-existing-actions": true,
+        "appends-new-prerequisites": true,
+        "appends-optional-action": true
+      },
+      "evidence": [
+        {
+          "path": "lib/rake/task.rb",
+          "name": "enhance",
+          "line": 115
+        }
+      ]
+    },
+    "negative_result": {
+      "facts": {
+        "keeps-existing-prerequisites": false,
+        "keeps-existing-actions": true,
+        "appends-new-prerequisites": true,
+        "appends-optional-action": true
+      },
+      "evidence": [
+        {
+          "path": "lib/rake/task.rb",
+          "name": "enhance",
+          "line": 115
+        }
+      ]
+    }
+  },
+  "rake-references-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "5733cd6abf2271bd597dfb54067b2111f3e4a325a1c991330930e9678d93f333"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "bd097a1d82efb5d6ed92dc819c2d36d1dc667a9213e3b45d1ce23d2632fab22a"
+    },
+    "positive_result": {
+      "status": "refused",
+      "references": []
+    },
+    "negative_result": {
+      "status": "empty",
+      "references": []
+    }
+  },
+  "rake-safe-edit-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "dc504a050b6e77002147085ed317affb62b9421d7d6ee8058551d7a5cf17bde6"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "a19a149890c58a44d9068654adac3ad35016b2649a4664516a4794a728e3df56"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "-e",
+        "require \"rake\"; Rake::Task.clear; order=[]; Rake::Task.define_task(:p){order<<:p}; Rake::Task.define_task(:q){order<<:q}; t=Rake::Task.define_task(x:[:p]){order<<:original}; duplicate=proc{order<<:duplicate}; distinct=proc{order<<:distinct}; t.enhance([:q],&duplicate); t.enhance(&duplicate); t.enhance(&distinct); abort \"prerequisites\" unless t.prerequisites.map(&:to_s)==[\"p\",\"q\"]; t.invoke; abort \"actions\" unless order==[:p,:q,:original,:duplicate,:distinct]; puts \"AGENT_OUTCOMES_ASSERTIONS=2\""
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.189,
+      "pre_test_seconds": 0.108,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/baseline.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/baseline.stderr",
+      "raw_stderr_sha256": "e5aa4ce71f3442525c19b0029f5bf77e4988b8bd7e5d008a708b49adeef0ed3c",
+      "outcome": "failed",
+      "snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "-e",
+        "require \"rake\"; Rake::Task.clear; order=[]; Rake::Task.define_task(:p){order<<:p}; Rake::Task.define_task(:q){order<<:q}; t=Rake::Task.define_task(x:[:p]){order<<:original}; duplicate=proc{order<<:duplicate}; distinct=proc{order<<:distinct}; t.enhance([:q],&duplicate); t.enhance(&duplicate); t.enhance(&distinct); abort \"prerequisites\" unless t.prerequisites.map(&:to_s)==[\"p\",\"q\"]; t.invoke; abort \"actions\" unless order==[:p,:q,:original,:duplicate,:distinct]; puts \"AGENT_OUTCOMES_ASSERTIONS=2\""
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.19,
+      "pre_test_seconds": 0.107,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/reference.stdout",
+      "raw_stdout_sha256": "487cf9be1869ae33d7857e510ce11cd86c29968ef0d06a01c004a179a4f3b69c",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "-e",
+        "require \"rake\"; Rake::Task.clear; order=[]; Rake::Task.define_task(:p){order<<:p}; Rake::Task.define_task(:q){order<<:q}; t=Rake::Task.define_task(x:[:p]){order<<:original}; duplicate=proc{order<<:duplicate}; distinct=proc{order<<:distinct}; t.enhance([:q],&duplicate); t.enhance(&duplicate); t.enhance(&distinct); abort \"prerequisites\" unless t.prerequisites.map(&:to_s)==[\"p\",\"q\"]; t.invoke; abort \"actions\" unless order==[:p,:q,:original,:duplicate,:distinct]; puts \"AGENT_OUTCOMES_ASSERTIONS=2\""
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.179,
+      "pre_test_seconds": 0.11,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-safe-edit-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e5aa4ce71f3442525c19b0029f5bf77e4988b8bd7e5d008a708b49adeef0ed3c",
+      "outcome": "failed",
+      "snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "rake-repair-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "dc6b57467d3e6d398d207aa226bf64fcbbd9775d98c3ea9354f89ae0de9f7298"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "ee0fe7afe9eff194ffc29432bb9859a7978031484357da2e92368fe8acc5378d"
+    },
+    "positive_result": {},
+    "negative_result": {},
+    "baseline": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "test/test_rake_task.rb",
+        "-n",
+        "/^test_invoke$/",
+        "--verbose"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.216,
+      "pre_test_seconds": 0.11,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/baseline.stdout",
+      "raw_stdout_sha256": "d7b242c02b5ad340f5081dba636b499e118001d5f91ffe3d5bfd75cc9b151fba",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/baseline.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "ca60388aecdd2de5e118ade64786156302c8ff77f903db45251441965a23cd58",
+      "verification_failures": []
+    },
+    "reference": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "test/test_rake_task.rb",
+        "-n",
+        "/^test_invoke$/",
+        "--verbose"
+      ],
+      "returncode": 0,
+      "wall_seconds": 0.221,
+      "pre_test_seconds": 0.104,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/reference.stdout",
+      "raw_stdout_sha256": "60b2840e7787a9ed7ca2059036c1af5bf8bd254c87a4df250467da96ce4f6e14",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/reference.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "passed",
+      "snapshot_sha256": "ca60388aecdd2de5e118ade64786156302c8ff77f903db45251441965a23cd58",
+      "verification_failures": []
+    },
+    "plausible_wrong": {
+      "argv": [
+        "bundle",
+        "exec",
+        "ruby",
+        "-Itest",
+        "test/test_rake_task.rb",
+        "-n",
+        "/^test_invoke$/",
+        "--verbose"
+      ],
+      "returncode": 1,
+      "wall_seconds": 0.218,
+      "pre_test_seconds": 0.104,
+      "expected_test_executed": true,
+      "raw_stdout_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/plausible_wrong.stdout",
+      "raw_stdout_sha256": "e8282c85f9267d18567e8692e92d527ecd8265170c1029f8e4fe0e960a035fce",
+      "raw_stderr_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/mutation/rake-repair-v1/plausible_wrong.stderr",
+      "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "failed",
+      "snapshot_sha256": "ca60388aecdd2de5e118ade64786156302c8ff77f903db45251441965a23cd58",
+      "verification_failures": [
+        "frozen test command failed with exit 1"
+      ]
+    }
+  },
+  "rake-test-selection-v1": {
+    "positive": {
+      "correct": true,
+      "evidence_sha256": "dcb3215362991331de2217de44aaef8d0e0e3979a54bff422a23ffddcd22d697"
+    },
+    "negative": {
+      "correct": false,
+      "evidence_sha256": "ec9f7fb02a72f901e79cfa7675055826b7822bd6ddb309225015887c9c51e690"
+    },
+    "positive_result": {
+      "tests": [
+        {
+          "path": "test/test_rake_task.rb",
+          "test_id": "TestRakeTask#test_always_multitask"
+        },
+        {
+          "path": "test/test_rake_task.rb",
+          "test_id": "TestRakeTask#test_invoke"
+        }
+      ]
+    },
+    "negative_result": {
+      "tests": [
+        {
+          "path": "test/test_private_reader.rb",
+          "test_id": "TestPrivateAttrs#test_private_reader_is_private"
+        }
+      ]
+    }
+  }
+}

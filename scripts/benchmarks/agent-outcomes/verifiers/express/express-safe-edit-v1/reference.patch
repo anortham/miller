@@ -1,0 +1,4 @@
+--- a/lib/response.js
++++ b/lib/response.js
+@@ -246,0 +247 @@
++  this.set('X-Content-Type-Options', 'nosniff');

@@ -1,0 +1,5 @@
+--- a/src/flask/helpers.py
++++ b/src/flask/helpers.py
+@@ -33 +33 @@
+-    return bool(val and val.lower() not in {"0", "false", "no"})
++    return bool(val and val.lower() not in {"0", "false"})

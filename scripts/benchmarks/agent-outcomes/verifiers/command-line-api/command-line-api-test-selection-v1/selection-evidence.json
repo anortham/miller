@@ -1,0 +1,171 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 1,
+    "case_count": 904,
+    "runner_execution_count": 920,
+    "preexisting_nonpass": [
+      {
+        "path": "src/System.CommandLine.Suggest.Tests/DotnetSuggestEndToEndTests.cs",
+        "test_id": "System.CommandLine.Suggest.Tests.DotnetSuggestEndToEndTests.Dotnet_suggest_provides_suggestions_for_app",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Suggest.Tests/DotnetSuggestEndToEndTests.cs",
+        "test_id": "System.CommandLine.Suggest.Tests.DotnetSuggestEndToEndTests.Dotnet_suggest_provides_suggestions_for_app_with_only_commandname",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Suggest.Tests/DotnetSuggestEndToEndTests.cs",
+        "test_id": "System.CommandLine.Suggest.Tests.DotnetSuggestEndToEndTests.Test_app_supplies_suggestions",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/CompilationTests.cs",
+        "test_id": "System.CommandLine.Tests.CompilationTests.App_referencing_system_commandline_can_be_compiled_ahead_of_time",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/CompilationTests.cs",
+        "test_id": "System.CommandLine.Tests.CompilationTests.App_referencing_system_commandline_can_be_trimmed",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/CompletionTests.cs",
+        "test_id": "System.CommandLine.Tests.CompletionTests.It_can_provide_completions_within_quotes",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/CompletionTests.cs",
+        "test_id": "System.CommandLine.Tests.CompletionTests.Option_GetCompletions_are_not_provided_without_matching_prefix",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/Invocation/CancelOnProcessTerminationTests.cs",
+        "test_id": "System.CommandLine.Tests.Invocation.CancelOnProcessTerminationTests.CancellableHandler_is_cancelled_on_process_termination",
+        "outcome": "failed"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/ParserTests.SetupErrors.cs",
+        "test_id": "System.CommandLine.Tests.ParserTests+SetupErrors.When_command_names_collide_with_option_aliases_it_throws_on_parse",
+        "outcome": "skipped"
+      },
+      {
+        "path": "src/System.CommandLine.Tests/ParserTests.SetupErrors.cs",
+        "test_id": "System.CommandLine.Tests.ParserTests+SetupErrors.When_command_names_collide_with_option_names_it_throws_on_parse",
+        "outcome": "skipped"
+      }
+    ]
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 1,
+    "transition_count": 5
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\ntwo\\nthree\\nfour\\n\")"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\r\\ntwo\\r\\nthree\\r\\nfour\\r\\n\")"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \"one two\\tthree   four \")"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/SplitCommandLineTests.cs",
+      "test_id": "System.CommandLine.Tests.SplitCommandLineTests.It_splits_strings_based_on_whitespace"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "src/System.CommandLine.Tests/Invocation/CancelOnProcessTerminationTests.cs",
+      "test_id": "System.CommandLine.Tests.Invocation.CancelOnProcessTerminationTests.CancellableHandler_is_cancelled_on_process_termination",
+      "before": "failed",
+      "after": "passed"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\ntwo\\nthree\\nfour\\n\")",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\r\\ntwo\\r\\nthree\\r\\nfour\\r\\n\")",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \"one two\\tthree   four \")",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "src/System.CommandLine.Tests/SplitCommandLineTests.cs",
+      "test_id": "System.CommandLine.Tests.SplitCommandLineTests.It_splits_strings_based_on_whitespace",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [
+    {
+      "path": "src/System.CommandLine.Tests/Invocation/CancelOnProcessTerminationTests.cs",
+      "test_id": "System.CommandLine.Tests.Invocation.CancelOnProcessTerminationTests.CancellableHandler_is_cancelled_on_process_termination",
+      "outcomes": [
+        "failed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\ntwo\\nthree\\nfour\\n\")",
+      "outcomes": [
+        "passed",
+        "passed",
+        "failed",
+        "failed"
+      ]
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \" one\\r\\ntwo\\r\\nthree\\r\\nfour\\r\\n\")",
+      "outcomes": [
+        "passed",
+        "passed",
+        "failed",
+        "failed"
+      ]
+    },
+    {
+      "path": "src/System.CommandLine.Tests/Parsing/CommandLineStringSplitterTests.cs",
+      "test_id": "System.CommandLine.Tests.Parsing.CommandLineStringSplitterTests.It_splits_strings_based_on_whitespace(commandLine: \"one two\\tthree   four \")",
+      "outcomes": [
+        "passed",
+        "passed",
+        "failed",
+        "failed"
+      ]
+    },
+    {
+      "path": "src/System.CommandLine.Tests/SplitCommandLineTests.cs",
+      "test_id": "System.CommandLine.Tests.SplitCommandLineTests.It_splits_strings_based_on_whitespace",
+      "outcomes": [
+        "passed",
+        "passed",
+        "failed",
+        "failed"
+      ]
+    }
+  ],
+  "unchanged_case_count": 899,
+  "known_change_sha256": "f569604e6f45c6ca280886348e93dbd5439015681239ad25a15e5927582461d6",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

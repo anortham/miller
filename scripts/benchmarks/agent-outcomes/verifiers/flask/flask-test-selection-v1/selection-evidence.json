@@ -1,0 +1,33 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 0,
+    "case_count": 494,
+    "runner_execution_count": 494,
+    "preexisting_nonpass": []
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 1,
+    "transition_count": 1
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[No-False]"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "tests/test_helpers.py",
+      "test_id": "tests/test_helpers.py::TestHelpers::test_get_debug_flag[No-False]",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [],
+  "unchanged_case_count": 493,
+  "known_change_sha256": "bf91ed88ff3d1cfec321a708c4ec9341043a04a7cccad378ea9f6fce66c95073",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

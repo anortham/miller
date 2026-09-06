@@ -1,0 +1,2416 @@
+{
+  "inventory_scope": "complete case inventory from the repository native test runner",
+  "native_test_argv": [
+    "bundle",
+    "exec",
+    "rake",
+    "test",
+    "TESTOPTS=--verbose"
+  ],
+  "cases": [
+    {
+      "path": "test/test_private_reader.rb",
+      "test_id": "TestPrivateAttrs#test_private_reader_is_private"
+    },
+    {
+      "path": "test/test_private_reader.rb",
+      "test_id": "TestPrivateAttrs#test_private_reader_returns_data"
+    },
+    {
+      "path": "test/test_rake.rb",
+      "test_id": "TestRake#test_can_override_application"
+    },
+    {
+      "path": "test/test_rake.rb",
+      "test_id": "TestRake#test_each_dir_parent"
+    },
+    {
+      "path": "test/test_rake.rb",
+      "test_id": "TestRake#test_original_dir_reports_current_dir"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_bad_run"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_bad_run_includes_exception_name"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_bad_run_with_backtrace"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_bad_run_with_trace"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_building_imported_files_on_demand"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_class_with_application"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_class_with_application_user_defined"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_describe_tasks"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_exception_details"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_exception_details_bad_encoding"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_exception_details_cause"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_exception_details_with_detailed_message"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_prereqs"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_task_run"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_tasks"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_tasks_with_long_comments"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_tasks_with_long_comments_to_a_non_tty_shows_entire_comment"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_tasks_with_task_name_wider_than_tty_display"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_display_tasks_with_very_long_task_name_to_a_non_tty_shows_name_and_comment"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_finding_rakefile"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_good_run"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_handle_options_should_not_strip_options_from_argv"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_handle_options_trace_default_is_stderr"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_handle_options_trace_overrides_to_stdout"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_from_calculated_system_rakefile"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_from_calculated_system_rakefile_on_unix"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_from_calculated_system_rakefile_on_windows"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_from_system_rakefile"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile_doesnt_print_rakefile_directory_from_same_dir"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile_doesnt_print_rakefile_directory_from_subdir_if_silent"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile_from_subdir"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile_not_found"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_load_rakefile_prints_rakefile_directory_from_subdir"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_loading_imports"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_not_finding_rakefile"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_printing_original_exception_cause"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_rake_error_excludes_exception_name"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_run_with_bad_options"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_show_lines"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_standard_exception_handling_invalid_option"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_standard_exception_handling_other"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_standard_exception_handling_system_exit"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_standard_exception_handling_system_exit_nonzero"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_terminal_columns"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_truncating_comments_to_a_non_tty"
+    },
+    {
+      "path": "test/test_rake_application.rb",
+      "test_id": "TestRakeApplication#test_windows"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_backtrace"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_backtrace_with_error"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_backtrace_with_following_task_name"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_backtrace_with_stderr"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_backtrace_with_stdout"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_bad_option"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_default_options"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_default_task_collection"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_describe"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_describe_with_pattern"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_directory"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_dry_run"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_environment_and_tasks_together"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_environment_definition"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_execute"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_execute_and_continue"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_execute_and_print"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_help"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_jobs"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_libdir"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_missing_require"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_multiline_environment_definition"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_multitask"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_no_deprecated_messages"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_no_search"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_no_system"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_prereqs"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_quiet"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_rake_explicit_task_library"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_rakefile"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_rakelib"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_require"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_silent"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_system"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_task_collection"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_tasks"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace_rules"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace_with_error"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace_with_following_task_name"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace_with_stderr"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_trace_with_stdout"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_verbose"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_version"
+    },
+    {
+      "path": "test/test_rake_application_options.rb",
+      "test_id": "TestRakeApplicationOptions#test_where"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestBacktraceSuppression#test_bin_rake_suppressed"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestBacktraceSuppression#test_near_system_dir_isnt_suppressed"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestBacktraceSuppression#test_ruby_array_each_suppressed"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestBacktraceSuppression#test_system_dir_suppressed"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestRakeBacktrace#test_multi_collapse"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestRakeBacktrace#test_single_collapse"
+    },
+    {
+      "path": "test/test_rake_backtrace.rb",
+      "test_id": "TestRakeBacktrace#test_suppress_option"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_clean"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup_ignores_missing_files"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup_opt_overrides_trace_silent"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup_opt_overrides_trace_verbose"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup_trace"
+    },
+    {
+      "path": "test/test_rake_clean.rb",
+      "test_id": "TestRakeClean#test_cleanup_without_trace"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter#test_count"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter#test_count_with_default_nil"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter#test_count_with_default_raise"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter::TestClassMethod#test_count"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter::TestClassMethod#test_count_nil"
+    },
+    {
+      "path": "test/test_rake_cpu_counter.rb",
+      "test_id": "TestRakeCpuCounter::TestClassMethod#test_count_raise"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_falsey_dependencies"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_file_task"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_implicit_file_dependencies"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_incremental_definitions"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_missing_dependencies"
+    },
+    {
+      "path": "test/test_rake_definitions.rb",
+      "test_id": "TestRakeDefinitions#test_task"
+    },
+    {
+      "path": "test/test_rake_directory_task.rb",
+      "test_id": "TestRakeDirectoryTask#test_can_use_blocks"
+    },
+    {
+      "path": "test/test_rake_directory_task.rb",
+      "test_id": "TestRakeDirectoryTask#test_can_use_filelist"
+    },
+    {
+      "path": "test/test_rake_directory_task.rb",
+      "test_id": "TestRakeDirectoryTask#test_can_use_pathname"
+    },
+    {
+      "path": "test/test_rake_directory_task.rb",
+      "test_id": "TestRakeDirectoryTask#test_directory"
+    },
+    {
+      "path": "test/test_rake_directory_task.rb",
+      "test_id": "TestRakeDirectoryTask#test_directory_colon"
+    },
+    {
+      "path": "test/test_rake_dsl.rb",
+      "test_id": "TestRakeDsl#test_namespace_command"
+    },
+    {
+      "path": "test/test_rake_dsl.rb",
+      "test_id": "TestRakeDsl#test_namespace_command_with_a_string_like_object"
+    },
+    {
+      "path": "test/test_rake_dsl.rb",
+      "test_id": "TestRakeDsl#test_namespace_command_with_bad_name"
+    },
+    {
+      "path": "test/test_rake_dsl.rb",
+      "test_id": "TestRakeDsl#test_no_commands_constant"
+    },
+    {
+      "path": "test/test_rake_early_time.rb",
+      "test_id": "TestRakeEarlyTime#test_create"
+    },
+    {
+      "path": "test/test_rake_early_time.rb",
+      "test_id": "TestRakeEarlyTime#test_equality"
+    },
+    {
+      "path": "test/test_rake_early_time.rb",
+      "test_id": "TestRakeEarlyTime#test_original_time_compare_is_not_messed_up"
+    },
+    {
+      "path": "test/test_rake_early_time.rb",
+      "test_id": "TestRakeEarlyTime#test_to_s"
+    },
+    {
+      "path": "test/test_rake_extension.rb",
+      "test_id": "TestRakeExtension#test_extension_complains_when_a_method_that_is_present"
+    },
+    {
+      "path": "test/test_rake_extension.rb",
+      "test_id": "TestRakeExtension#test_methods_actually_exist"
+    },
+    {
+      "path": "test/test_rake_extension.rb",
+      "test_id": "TestRakeExtension#test_no_warning_when_defining_ok_method"
+    },
+    {
+      "path": "test/test_rake_file_creation_task.rb",
+      "test_id": "TestRakeFileCreationTask#test_directory"
+    },
+    {
+      "path": "test/test_rake_file_creation_task.rb",
+      "test_id": "TestRakeFileCreationTask#test_file_needed"
+    },
+    {
+      "path": "test/test_rake_file_creation_task.rb",
+      "test_id": "TestRakeFileCreationTask#test_no_retriggers_on_file_task"
+    },
+    {
+      "path": "test/test_rake_file_creation_task.rb",
+      "test_id": "TestRakeFileCreationTask#test_no_retriggers_on_filecreate_task"
+    },
+    {
+      "path": "test/test_rake_file_creation_task.rb",
+      "test_id": "TestRakeFileCreationTask#test_very_early_timestamp"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_add_default_exclude_list"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_add_many"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_add_matching"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_add_return"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_append"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_append_pathname"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_array_comparisons"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_array_equality"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_array_operators"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_basic_array_functions"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_claim_to_be_a_filelist_instance"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_claim_to_be_a_kind_of_array"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_claim_to_be_a_kind_of_filelist"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_clear_ignore_patterns"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_clone_and_dup"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_cloned_items_stay_frozen"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create_with_args"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create_with_block"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create_with_brackets"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create_with_brackets_and_filelist"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_create_with_pathname"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_curly_bracket_pattern"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_default_exclude"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_delegating_methods_do_not_include_to_a_or_to_ary"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_dont_claim_to_be_an_array_instance"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_duped_items_will_thaw"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_egrep_returns_0_if_no_matches"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_egrep_with_block"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_egrep_with_error"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_egrep_with_output"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_enumeration_methods"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_a_filelist"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_an_array"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_curly_bracket_pattern"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_pathname"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_return_on_create"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_with_alternate_file_seps"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_exclude_with_string_return_on_create"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_excluding_via_block"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_existing"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_file_utils_can_use_filelists"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_filelist_ext"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_flatten"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_gsub"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_ignore_special"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_include_with_another_array"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_include_with_another_filelist"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_include_with_pathname"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_inspect_pending"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_match"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_multiple_patterns"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_other_array_returning_methods"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_reject"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_special_return_delegating_methods_object_type"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_square_bracket_pattern"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_string_ext"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_sub"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_sub_with_block"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_to_array"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_to_s_pending"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_to_string"
+    },
+    {
+      "path": "test/test_rake_file_list.rb",
+      "test_id": "TestRakeFileList#test_unique"
+    },
+    {
+      "path": "test/test_rake_file_list_path_map.rb",
+      "test_id": "TestRakeFileListPathMap#test_file_list_supports_pathmap"
+    },
+    {
+      "path": "test/test_rake_file_list_path_map.rb",
+      "test_id": "TestRakeFileListPathMap#test_file_list_supports_pathmap_with_a_block"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_existing_file_depends_on_non_existing_file"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_file_depends_on_task_depend_on_file"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_file_need"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_file_times_new_depend_on_regular_task_timestamps"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_file_times_new_depends_on_old"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_file_times_old_depends_on_new"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_needed_eh_build_all"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_needed_eh_dependency"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_needed_eh_exists"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_prerequisite_can_be_pathname"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_source_is_first_prerequisite"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_sources_is_all_prerequisites"
+    },
+    {
+      "path": "test/test_rake_file_task.rb",
+      "test_id": "TestRakeFileTask#test_task_can_be_pathname"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_file_utils_methods_are_available_at_top_level"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_fileutils_methods_dont_leak"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_ln"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_nowrite"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_rm_filelist"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_rm_nowrite"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_rm_one_file"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_rm_two_files"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_ruby_with_a_single_string_argument"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_ruby_with_multiple_arguments"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_safe_ln_failover_to_cp_on_not_implemented_error"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_safe_ln_failover_to_cp_on_standard_error"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_safe_ln_fails_on_script_error"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_bad_option"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_chdir"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_failure"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_if_a_command_exits_with_error_status_its_full_output_is_printed"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_if_a_command_exits_with_error_status_sh_echoes_it_fully"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_noop"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_show_command"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_special_handling"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_verbose"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_verbose_false"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_verbose_flag_nil"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_with_a_single_string_argument"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_with_env"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_with_hash_option"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_with_multiple_arguments"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_sh_with_spawn_options"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_split_all"
+    },
+    {
+      "path": "test/test_rake_file_utils.rb",
+      "test_id": "TestRakeFileUtils#test_verbose"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_anonymous_tasks_can_be_invoked_indirectly"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_block_verbose_false_should_not_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_block_verbose_true_should_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_by_default_rakelib_files_are_included"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_can_invoke_task_in_nested_namespace"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_can_invoke_task_in_toplevel_namespace"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_comment_after_desc_is_ignored"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_comment_before_desc_is_ignored"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_comment_before_task_acts_like_desc"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_comment_separated_from_task_by_blank_line_is_not_picked_up"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_correct_number_of_tasks_reported"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_dash_f_with_no_arg_foils_rakefile_lookup"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_dot_rake_files_can_be_loaded_with_dash_r"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_dry_run"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_dry_run_bug"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_env_available_at_task_scope"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_env_available_at_top_scope"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_failing_test_sets_exit_status"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_file_creation_task"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_file_list_is_requirable_separately"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_file_task_are_not_scoped_by_namespaces"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_file_task_dependencies_scoped_by_namespaces"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_implicit_system"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_imports"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_inline_verbose_default_should_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_inline_verbose_false_should_not_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_inline_verbose_true_should_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_invalid_command_line_options"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_long_description"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_multi_desc"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_no_system"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_nosearch_with_rakefile_uses_local_rakefile"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_nosearch_without_rakefile_and_no_system_fails"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_nosearch_without_rakefile_finds_system"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_proper_namespace_access"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_rake_default"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_rake_error_on_bad_task"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_rake_namespace_refers_to_toplevel"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_rbext"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_regenerate_imports"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_rules_chaining_to_file_task"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_signal_propagation_in_tests"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_stand_alone_filelist"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_standalone_verbose_false_should_not_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_standalone_verbose_true_should_show_command"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_system"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_system_excludes_rakelib_files_too"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_task_override"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_tasks_can_reference_task_in_other_namespaces"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_tasks_can_reference_task_in_same_namespace"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_test_task_descriptions"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_test_task_when_verbose_unless_verbose_passed_not_prompt_testopts"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_trace_bug"
+    },
+    {
+      "path": "test/test_rake_functional.rb",
+      "test_id": "TestRakeFunctional#test_update_midway_through_chaining_to_file_task"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_append_one_circular"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_append_two_circular"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_append_with_one_argument"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_conj_on_invocation_chains"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_make_on_invocation_chains"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_member_eh_one"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_member_eh_two"
+    },
+    {
+      "path": "test/test_rake_invocation_chain.rb",
+      "test_id": "TestRakeInvocationChain#test_to_s_empty"
+    },
+    {
+      "path": "test/test_rake_late_time.rb",
+      "test_id": "TestRakeLateTime#test_late_time_comparisons"
+    },
+    {
+      "path": "test/test_rake_late_time.rb",
+      "test_id": "TestRakeLateTime#test_to_s"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_conjunction"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_conversion_to_string"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_conversion_with_inspect"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_empty_list"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_list_with_one_item"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_list_with_several_items"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_lists_are_enumerable"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_lists_are_structurally_equivalent"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_make_with_no_arguments"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_make_with_one_argument"
+    },
+    {
+      "path": "test/test_rake_linked_list.rb",
+      "test_id": "TestLinkedList#test_make_with_two_arguments"
+    },
+    {
+      "path": "test/test_rake_makefile_loader.rb",
+      "test_id": "TestRakeMakefileLoader#test_parse"
+    },
+    {
+      "path": "test/test_rake_multi_task.rb",
+      "test_id": "TestRakeMultiTask#test_all_multitasks_wait_on_slow_prerequisites"
+    },
+    {
+      "path": "test/test_rake_multi_task.rb",
+      "test_id": "TestRakeMultiTask#test_cross_thread_prerequisite_failures"
+    },
+    {
+      "path": "test/test_rake_multi_task.rb",
+      "test_id": "TestRakeMultiTask#test_multitasks_with_parameters"
+    },
+    {
+      "path": "test/test_rake_multi_task.rb",
+      "test_id": "TestRakeMultiTask#test_running_multitasks"
+    },
+    {
+      "path": "test/test_rake_multi_task.rb",
+      "test_id": "TestRakeMultiTask#test_task_not_executed_if_dependant_task_failed_concurrently"
+    },
+    {
+      "path": "test/test_rake_name_space.rb",
+      "test_id": "TestRakeNameSpace#test_namespace_creation"
+    },
+    {
+      "path": "test/test_rake_name_space.rb",
+      "test_id": "TestRakeNameSpace#test_namespace_lookup"
+    },
+    {
+      "path": "test/test_rake_name_space.rb",
+      "test_id": "TestRakeNameSpace#test_namespace_reports_tasks_it_owns"
+    },
+    {
+      "path": "test/test_rake_name_space.rb",
+      "test_id": "TestRakeNameSpace#test_scope"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_clone"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_initialize"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_initialize_no_version"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_initialize_noversion"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_package_name"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_package_name_noversion"
+    },
+    {
+      "path": "test/test_rake_package_task.rb",
+      "test_id": "TestRakePackageTask#test_without_parent_dir"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_9d_returns_partial_dirname"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_complex_patterns"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_d_returns_dirname"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_dash_returns_empty_string"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_f_returns_basename"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_multiple_patterns"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_n_returns_basename_without_extension"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_p_returns_entire_pathname"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_partial_directory_selection_works_with_patterns"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_pattern_can_use_backreferences"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_pattern_returns_substitutions"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_pattern_with_invalid_operator"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_pattern_with_star_replacement_string_uses_block"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_pattern_works_with_certain_valid_operators"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_percent_percent_returns_percent"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_returns_self_with_no_args"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_s_returns_file_separator"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_undefined_percent_causes_error"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_works_with_windows_separators"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_x_returns_everything_but_extension"
+    },
+    {
+      "path": "test/test_rake_path_map.rb",
+      "test_id": "TestRakePathMap#test_x_returns_extension"
+    },
+    {
+      "path": "test/test_rake_path_map_explode.rb",
+      "test_id": "TestRakePathMapExplode#test_explode"
+    },
+    {
+      "path": "test/test_rake_path_map_partial.rb",
+      "test_id": "TestRakePathMapPartial#test_pathmap_partial"
+    },
+    {
+      "path": "test/test_rake_pseudo_status.rb",
+      "test_id": "TestRakePseudoStatus#test_with_99_exit_status"
+    },
+    {
+      "path": "test/test_rake_pseudo_status.rb",
+      "test_id": "TestRakePseudoStatus#test_with_zero_exit_status"
+    },
+    {
+      "path": "test/test_rake_rake_test_loader.rb",
+      "test_id": "TestRakeRakeTestLoader#test_load_error_from_missing_test_file"
+    },
+    {
+      "path": "test/test_rake_rake_test_loader.rb",
+      "test_id": "TestRakeRakeTestLoader#test_load_error_raised_explicitly"
+    },
+    {
+      "path": "test/test_rake_rake_test_loader.rb",
+      "test_id": "TestRakeRakeTestLoader#test_load_error_raised_implicitly"
+    },
+    {
+      "path": "test/test_rake_rake_test_loader.rb",
+      "test_id": "TestRakeRakeTestLoader#test_pattern"
+    },
+    {
+      "path": "test/test_rake_reduce_compat.rb",
+      "test_id": "TestRakeReduceCompat#test_no_deprecated_dsl"
+    },
+    {
+      "path": "test/test_rake_require.rb",
+      "test_id": "TestRakeRequire#test_can_load_rake_library"
+    },
+    {
+      "path": "test/test_rake_require.rb",
+      "test_id": "TestRakeRequire#test_throws_error_if_library_not_found"
+    },
+    {
+      "path": "test/test_rake_require.rb",
+      "test_id": "TestRakeRequire#test_wont_reload_rake_library"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_close_matches_on_name_do_not_trigger_rule"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_create_with_source"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_file_names_beginning_with_dot_can_be_tricked_into_referring_to_file"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_multiple_rules1"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_multiple_rules2"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_non_extension_rule_name_refers_to_file"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_pathmap_automatically_applies_to_name"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_plain_strings_are_just_filenames"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_plain_strings_as_dependents_refer_to_files"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_proc_returning_lists_are_flattened_into_prereqs"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_recursive_rules_that_dont_terminate_will_overflow"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_recursive_rules_will_work_as_long_as_they_terminate"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_regex_rule_with_args"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_regex_rule_with_args_and_lambda_prereq"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_can_be_created_by_string"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_prereqs_can_be_created_by_pathname"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_prereqs_can_be_created_by_string"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_prereqs_can_be_created_by_symbol"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_rebuilds_obj_when_source_is_newer"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_runs_when_explicit_task_has_no_actions"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_with_method_prereq"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_with_one_arg_method_prereq"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_with_proc_dependent_will_trigger"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_with_two_sources_builds_both_sources"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rule_with_two_sources_but_one_missing_does_not_run"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_rules_with_bad_dependents_will_fail"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_second_rule_doest_run_if_first_triggers"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_second_rule_doest_run_if_first_triggers_with_reversed_rules"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_second_rule_runs_when_first_rule_doesnt"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_single_dependent"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_single_dependent_with_nil_args"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_string_rule_with_args"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_string_rule_with_args_and_lambda_prereq"
+    },
+    {
+      "path": "test/test_rake_rules.rb",
+      "test_id": "TestRakeRules#test_works_with_chained_extensions_in_rules"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_conj_against_two_elements"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_path_against_empty_scope"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_path_against_one_element"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_path_against_two_elements"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_path_with_task_name"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_path_with_task_name_against_empty_scope"
+    },
+    {
+      "path": "test/test_rake_scope.rb",
+      "test_id": "TestRakeScope#test_trim"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeFileList#test_existing!"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeFileList#test_gsub!"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeFileList#test_sub!"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_all_prerequisite_tasks_does_not_include_duplicates"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_all_prerequisite_tasks_includes_all_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_all_prerequisite_tasks_includes_self_on_cyclic_dependencies"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_already_invoked"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_always_multitask"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_arrays_can_be_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_can_double_invoke_with_reenable"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_can_triple_invoke_after_exception_with_reenable"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_clear"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_clear_actions"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_clear_args"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_clear_comments"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_clear_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comment_setting"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_do_not_set"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_is_nil"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_with_decimal_points"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_with_many_periods"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_with_sentences_exclamation_mark"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_with_sentences_period"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_comments_with_tabbed_sentences"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_create"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_defined"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_dry_run_prevents_actions"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_duplicate_comments"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_extended_comments"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_filelists_can_be_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_find"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_inspect"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_interspersed_duplicate_comments"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_investigation_output"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_invoke"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_invoke_with_circular_dependencies"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_multi_invocations"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_multiple_comments"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_no_double_invoke"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prereqs"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prerequisite_tasks_fails_if_prerequisites_are_undefined"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prerequisite_tasks_finds_tasks_with_same_name_outside_namespace"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prerequisite_tasks_honors_namespaces"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prerequisite_tasks_in_nested_namespaces"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_prerequisite_tasks_returns_tasks_not_strings"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_source_is_first_prerequisite"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_strings_can_be_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_suggests_valid_rake_task_names"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_symbols_can_be_prerequisites"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_task_gives_name_on_to_s"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_task_list"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_tasks_can_be_traced"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_timestamp_returns_latest_prereq_timestamp"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_timestamp_returns_now_if_all_prereqs_have_no_times"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTestTask#test: run code test-unit"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_can_handle_commas_in_args"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_can_handle_spaces_between_all_args"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_can_handle_spaces_between_args"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_empty_args"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_keeps_embedded_spaces"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_name_only"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_no_rakeopt"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_one_argument"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_rakeopt_with_blank_options"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_rakeopt_with_silent_options"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_terminal_width_using_env"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_terminal_width_using_hardcoded_80"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_terminal_width_using_stty"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_terminal_width_using_tput"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_terminal_width_with_failure"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_treat_blank_arg_as_empty_string"
+    },
+    {
+      "path": "test/test_rake_task_argument_parsing.rb",
+      "test_id": "TestRakeTaskArgumentParsing#test_two_arguments"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_all_and_extra_arguments_with_named_arguments"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_all_and_extra_arguments_without_named_arguments"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_args_do_not_reference_env_values"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_args_knows_its_names"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_blank_values_in_args"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_child_hides_parent_arg_names"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_creating_new_argument_scopes"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_deconstruct_keys"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_default_arguments_that_dont_match_names_are_ignored"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_default_arguments_values_can_be_merged"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_empty_arg_list_is_empty"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_enumerable_behavior"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_extra_args_with_less_than_named_arguments"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_extra_names_are_nil"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_fetch"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_has_key"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_multiple_values_in_args"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_named_args"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_to_hash"
+    },
+    {
+      "path": "test/test_rake_task_arguments.rb",
+      "test_id": "TestRakeTaskArguments#test_to_s"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_anonymous_namespace"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_correctly_scoped_prerequisites_are_invoked"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_create_filetask_in_namespace"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_create_task_manager"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_define_namespace_in_namespace"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_define_namespaced_task"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_define_task"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_index"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_lookup_with_explicit_scopes"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_name_lookup"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_name_lookup_in_multiple_scopes"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_name_lookup_with_implicit_file_tasks"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_name_lookup_with_nonexistent_task"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_namespace_task_create"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_namespace_yields_same_namespace_as_returned"
+    },
+    {
+      "path": "test/test_rake_task_manager.rb",
+      "test_id": "TestRakeTaskManager#test_undefined_task_with_custom_application"
+    },
+    {
+      "path": "test/test_rake_task_manager_argument_resolution.rb",
+      "test_id": "TestRakeTaskManagerArgumentResolution#test_good_arg_patterns"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_actions_adore_keywords"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_actions_of_various_arity_are_ok_with_args"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_arg_list_is_empty_if_no_args_given"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_args_given"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_args_not_passed_if_no_arg_names"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_args_not_passed_if_no_prereq_names_on_multitask"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_args_not_passed_if_no_prereq_names_on_task"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_arguments_are_passed_to_all_blocks"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_arguments_are_passed_to_block"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_block_with_no_parameters_is_ok"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_extra_parameters_are_ignored"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_name_and_needs"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_name_args_and_prereqs"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_name_with_args"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_named_args_are_passed_to_prereqs"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_no_args_given"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_tasks_can_access_arguments_as_hash"
+    },
+    {
+      "path": "test/test_rake_task_with_arguments.rb",
+      "test_id": "TestRakeTaskWithArguments#test_values_at"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_file_list_env_test"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_file_list_env_test_multiple"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_initialize"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_initialize_deps"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_initialize_multi_deps"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_initialize_override"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_libs_equals"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_libs_equals_empty"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_option_list_not_verbose_with_testopts"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_option_list_skips_duplicate_v"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_option_list_verbose_keyword_overrides"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_option_list_verbose_with_testopts"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_option_list_verbose_without_testopts"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_pattern_equals"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_pattern_equals_test_files_equals"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_run_code_direct"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_run_code_direct_skips_option_arguments"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_run_code_rake"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_run_injects_v_for_task_verbose"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_run_omits_v_for_global_verbose_only"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_task_order_only_prerequisites"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_task_order_only_prerequisites_key"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_task_prerequisites"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_task_prerequisites_deps"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_task_prerequisites_multi"
+    },
+    {
+      "path": "test/test_rake_test_task.rb",
+      "test_id": "TestRakeTestTask#test_test_files_equals"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_exceptions"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_creates_the_correct_number_of_threads"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_executes_in_current_thread_for_zero_threads"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_executes_in_other_thread_for_pool_of_size_one"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_executes_in_two_other_threads_for_pool_of_size_two"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_future_does_not_duplicate_arguments"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_join_empties_queue"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_prevents_deadlock"
+    },
+    {
+      "path": "test/test_rake_thread_pool.rb",
+      "test_id": "TestRakeTestThreadPool#test_pool_reports_correct_results"
+    },
+    {
+      "path": "test/test_rake_top_level_functions.rb",
+      "test_id": "TestRakeTopLevelFunctions#test_import"
+    },
+    {
+      "path": "test/test_rake_top_level_functions.rb",
+      "test_id": "TestRakeTopLevelFunctions#test_missing_other_constant"
+    },
+    {
+      "path": "test/test_rake_top_level_functions.rb",
+      "test_id": "TestRakeTopLevelFunctions#test_namespace"
+    },
+    {
+      "path": "test/test_rake_top_level_functions.rb",
+      "test_id": "TestRakeTopLevelFunctions#test_when_not_writing"
+    },
+    {
+      "path": "test/test_rake_top_level_functions.rb",
+      "test_id": "TestRakeTopLevelFunctions#test_when_writing"
+    },
+    {
+      "path": "test/test_rake_win32.rb",
+      "test_id": "TestRakeWin32#test_win32_backtrace_with_different_case"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_banner"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_continue"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_item_dequeued"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_item_queued"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_multiple_items"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_thread_created"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_thread_deleted"
+    },
+    {
+      "path": "test/test_thread_history_display.rb",
+      "test_id": "TestThreadHistoryDisplay#test_waiting"
+    },
+    {
+      "path": "test/test_trace_output.rb",
+      "test_id": "TestTraceOutput#test_trace_handles_nil_objects"
+    },
+    {
+      "path": "test/test_trace_output.rb",
+      "test_id": "TestTraceOutput#test_trace_issues_single_io_for_args_multiple_strings"
+    },
+    {
+      "path": "test/test_trace_output.rb",
+      "test_id": "TestTraceOutput#test_trace_issues_single_io_for_args_multiple_strings_and_alternate_sep"
+    },
+    {
+      "path": "test/test_trace_output.rb",
+      "test_id": "TestTraceOutput#test_trace_issues_single_io_for_args_with_empty_args"
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+[
+  {
+    "repo_id": "flask",
+    "upstream": "https://github.com/pallets/flask",
+    "commit": "d318b683471101618febed18996405ad26462110",
+    "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+    "language": "python",
+    "license": {
+      "spdx": "BSD-3-Clause",
+      "path": "LICENSE.txt"
+    },
+    "dependency_lock": {
+      "present": true,
+      "path": "uv.lock"
+    },
+    "native_test": [
+      "uv",
+      "run",
+      "--group",
+      "tests",
+      "pytest",
+      "-q"
+    ],
+    "split": "development",
+    "qualification": {
+      "returncode": 0,
+      "summary": "494 passed in 1.24s",
+      "output_sha256": "a962d4f0809ce56f054bfb0441a4f4bd3dbbdb31c2c20d076d17c1b9f76ec75a",
+      "repair_seed": {
+        "overlay_sha256": "bf91ed88ff3d1cfec321a708c4ec9341043a04a7cccad378ea9f6fce66c95073",
+        "task_snapshot_sha256": "7b8567ddc4fc45556a84e9bed28ed57c4ea503aae33de12e5be23902fc93397f",
+        "overlay_path": "verifiers/flask/flask-repair-v1/seed.patch"
+      },
+      "wall_seconds": 2.315
+    }
+  },
+  {
+    "repo_id": "express",
+    "upstream": "https://github.com/expressjs/express",
+    "commit": "023767fe9872e029271df1418f73401bff20ff40",
+    "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+    "language": "javascript",
+    "license": {
+      "spdx": "MIT",
+      "path": "LICENSE"
+    },
+    "dependency_lock": {
+      "present": false,
+      "path": null
+    },
+    "native_test": [
+      "sh",
+      "-c",
+      "npm install --no-package-lock --ignore-scripts && npm test -- --reporter dot"
+    ],
+    "split": "development",
+    "qualification": {
+      "returncode": 0,
+      "summary": "1260 passing",
+      "output_sha256": "53744a3b6cfc3ecefab939b2d2447071124c1f3d4c83029e19e8f095f3742763",
+      "repair_seed": {
+        "overlay_sha256": "3c79e37b6a36e92ce1c94805296094c4278d7133da992c19eace8819a9860d79",
+        "task_snapshot_sha256": "530fbe56b525bcee4b45c650cb497f83d3794a5f3ee2f81e596a1c40084182cd",
+        "overlay_path": "verifiers/express/express-repair-v1/seed.patch"
+      },
+      "wall_seconds": 12.492
+    }
+  },
+  {
+    "repo_id": "chi",
+    "upstream": "https://github.com/go-chi/chi",
+    "commit": "ae6be7469132cf471ca099d8c7bda4010c4ff7b2",
+    "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+    "language": "go",
+    "license": {
+      "spdx": "MIT",
+      "path": "LICENSE"
+    },
+    "dependency_lock": {
+      "present": false,
+      "path": null
+    },
+    "native_test": [
+      "go",
+      "test",
+      "./..."
+    ],
+    "split": "development",
+    "qualification": {
+      "returncode": 0,
+      "summary": "all packages passed",
+      "output_sha256": "b630f9ad32f51a718b3448f3096593a4c17cf942052101d38eeb7e4e0ced4731",
+      "repair_seed": {
+        "overlay_sha256": "1f0d0a4ed4632aaa536e21234c61ce35df70f220995ce31df5fffe0520b2d7ba",
+        "task_snapshot_sha256": "40cca63de3b08a94eda5d121e3ec36542173d7cbe64338f806d52b41efc3301c",
+        "overlay_path": "verifiers/chi/chi-repair-v1/seed.patch"
+      },
+      "wall_seconds": 26.729
+    }
+  },
+  {
+    "repo_id": "ripgrep",
+    "upstream": "https://github.com/BurntSushi/ripgrep",
+    "commit": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+    "language": "rust",
+    "license": {
+      "spdx": "MIT OR Unlicense",
+      "path": "COPYING"
+    },
+    "dependency_lock": {
+      "present": true,
+      "path": "Cargo.lock"
+    },
+    "native_test": [
+      "cargo",
+      "test",
+      "--workspace"
+    ],
+    "split": "development",
+    "qualification": {
+      "returncode": 0,
+      "summary": "workspace tests passed",
+      "output_sha256": "a7dcde1d822f971d3832a1e5b395b51b95cc260439d88b38168adf7ed58e6ae0",
+      "repair_seed": {
+        "overlay_sha256": "5790e73a66d87c4e5cad8e7f4219085a3daed68c312f09b89465361e085394a3",
+        "task_snapshot_sha256": "42c19d2eeebf8c8fe57ea4c5f44dace7465a4b9e1bf9b943b757984eaa405766",
+        "overlay_path": "verifiers/ripgrep/ripgrep-repair-v1/seed.patch"
+      },
+      "wall_seconds": 10.102
+    }
+  },
+  {
+    "repo_id": "command-line-api",
+    "upstream": "https://github.com/dotnet/command-line-api",
+    "commit": "c7b5e07cfed85e88c162dc1c916efaff03742e6e",
+    "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+    "language": "csharp",
+    "license": {
+      "spdx": "MIT",
+      "path": "LICENSE.md"
+    },
+    "dependency_lock": {
+      "present": false,
+      "path": null
+    },
+    "native_test": [
+      "sh",
+      "-c",
+      "DOTNET_ROLL_FORWARD=Major dotnet test src/System.CommandLine.Tests/System.CommandLine.Tests.csproj -f net8.0 --filter 'FullyQualifiedName~SplitCommandLineTests' --nologo"
+    ],
+    "split": "holdout",
+    "qualification": {
+      "returncode": 0,
+      "summary": "focused SplitCommandLine tests passed; full suite had one environment signal-code failure",
+      "output_sha256": "7bce03b142cb1f6db696cb476febb8976784de7246aa86794af7413d17655ae9",
+      "repair_seed": {
+        "overlay_sha256": "f569604e6f45c6ca280886348e93dbd5439015681239ad25a15e5927582461d6",
+        "task_snapshot_sha256": "49079fe5ea476f9d9e271ff44ba442c0679d5267c3e19252be9eaa4a5826087a",
+        "overlay_path": "verifiers/command-line-api/command-line-api-repair-v1/seed.patch"
+      },
+      "wall_seconds": 5.533
+    }
+  },
+  {
+    "repo_id": "rake",
+    "upstream": "https://github.com/ruby/rake",
+    "commit": "3834925b2d5e1cd889904eb92def1f9d4b81a66e",
+    "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+    "language": "ruby",
+    "license": {
+      "spdx": "MIT",
+      "path": "MIT-LICENSE"
+    },
+    "dependency_lock": {
+      "present": false,
+      "path": null
+    },
+    "native_test": [
+      "sh",
+      "-c",
+      "bundle install && bundle exec rake test"
+    ],
+    "split": "holdout",
+    "qualification": {
+      "returncode": 0,
+      "summary": "606 tests, 1472 assertions, 0 failures",
+      "output_sha256": "ac962c26523d56859e070117c374c2c6e38f14e37f4def9a9ae232f1faa5083e",
+      "repair_seed": {
+        "overlay_sha256": "84b5a0f0d285a9ac4dde0a59e10e43984112bd3fccd6826adab48b60081d1087",
+        "task_snapshot_sha256": "ca60388aecdd2de5e118ade64786156302c8ff77f903db45251441965a23cd58",
+        "overlay_path": "verifiers/rake/rake-repair-v1/seed.patch"
+      },
+      "wall_seconds": 14.219
+    }
+  }
+]

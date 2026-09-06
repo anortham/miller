@@ -1,0 +1,5 @@
+--- a/lib/response.js
++++ b/lib/response.js
+@@ -244 +244 @@
+-    this.set('Content-Type', 'text/json');
++    this.set('Content-Type', 'application/jsonp');

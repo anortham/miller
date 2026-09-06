@@ -196,10 +196,10 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
 7. Run new runner tests plus existing runner/proxy tests once. Existing prompt hashes and archived behavior must remain unchanged.
 
 **Acceptance criteria:**
-- [ ] Baseline can read, search, edit when permitted, and run tests with native tools.
-- [ ] Miller is the only intended paired configuration difference.
-- [ ] Total model usage is distinct from tool-output tokens; missing usage is visible.
-- [ ] Fake runner qualification consumes no credentials and makes no network calls.
+- [x] Baseline can read, search, edit when permitted, and run tests with native tools.
+- [x] Miller is the only intended paired configuration difference.
+- [x] Total model usage is distinct from tool-output tokens; missing usage is visible.
+- [x] Fake runner qualification consumes no credentials and makes no network calls.
 
 ## Task 4: Build and freeze a representative corpus
 
@@ -219,10 +219,10 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
    The test must enumerate every checked-in record and reject missing commits, hashes, verifiers, or unsupported workflow labels. An empty corpus must fail. Store upstream source externally; commit manifests/verifiers and redistribution-permitted small fixtures only.
 
 **Acceptance criteria:**
-- [ ] All 36 tasks have real source identities and exercised positive/negative verifiers.
-- [ ] Six languages and six independent repos are represented; no 40-language claim follows.
-- [ ] Frozen development/holdout split and exclusion decisions are recorded.
-- [ ] Held-out verification artifacts are inaccessible to the agent.
+- [x] All 36 tasks have real source identities and exercised positive/negative verifiers.
+- [x] Six languages and six independent repos are represented; no 40-language claim follows.
+- [x] Frozen development/holdout split and exclusion decisions are recorded.
+- [x] Held-out verification artifacts are inaccessible to the agent.
 
 ## Task 5: Add paired execution, honest costs, and reproducible scoring
 
@@ -288,6 +288,7 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
 
 | Task | Commit | Command/evidence | Scope | Timestamp | Result |
 |---|---|---|---|---|---|
-| Not executed | Not applicable | Planning only | planning | 2026-09-04 | No experiment run |
+| Task 3 | Pending integration commit | `python3 -B -m unittest discover -s scripts/tests -p 'test_agent_outcomes_*.py'` | native runner, contract, corpus integration | 2026-09-06T08:09:38Z | 75 passed in 4.458s; fake-only, no credentials/network |
+| Task 4 | Pending integration commit | `test_agent_outcomes_contract.py` 22 passed; `test_agent_outcomes_corpus.py` 12 passed; external replay digests in task report | six repositories, 36 tasks, mutation and full-inventory replay | 2026-09-06T08:09:38Z | Accepted; no model run or efficacy claim |
 
 Execution is complete for implementation when Tasks 1-5 and Task 6 dry qualification pass. The empirical campaign is a separate explicitly reported approval-dependent deliverable. Preserve any existing task worktree and all user changes; do not commit/push/release merely because a benchmark finished.

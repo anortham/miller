@@ -1,0 +1,16 @@
+{
+  "evidence_root": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1",
+  "source_root": "/tmp/miller-agent-outcomes-corpus.CtxgXl",
+  "mutation_replay": {
+    "path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/replay-record.json",
+    "sha256": "cd4808e8dde5aed0df8e0d271934caece3046f33d1605bc94f36351cca281e1b"
+  },
+  "selection_replay": {
+    "path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+    "sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+  },
+  "interrupted_setup_attempt": {
+    "path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/interrupted-attempt.json",
+    "sha256": "bc7f46cbdc0eaa9f65a7791502975b966dcde6987356db50f3035d54662c6efd"
+  }
+}

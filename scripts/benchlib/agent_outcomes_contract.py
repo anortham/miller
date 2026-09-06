@@ -253,27 +253,39 @@ def validate_verifier(mapping: Mapping[str, Any]) -> FrozenVerifier:
         for location in locations:
             _validate_location_label(location)
     elif kind == "concept":
-        _exact_fields(value, common | {"claims"}, "verifier", optional={"expected_status"})
+        has_claims = "claims" in value
+        has_facts = "facts" in value
+        if has_claims == has_facts:
+            raise ValueError("concept verifier must contain exactly one of claims or facts")
+        _exact_fields(value, common | ({"claims"} if has_claims else {"facts"}), "verifier", optional={"expected_status"})
         if expected_status == "empty":
             raise ValueError("concept verifier uses refused rather than empty")
-        claims = value["claims"]
-        if not isinstance(claims, list) or not claims:
-            raise ValueError("verifier claims must be non-empty")
-        claim_ids: set[str] = set()
-        for claim in claims:
-            claim = _mapping(claim, "concept claim")
-            _exact_fields(claim, {"claim_id", "acceptable_alternatives", "evidence"}, "concept claim")
-            _identity(claim["claim_id"], "concept claim_id")
-            if claim["claim_id"] in claim_ids:
-                raise ValueError(f"duplicate concept claim_id: {claim['claim_id']}")
-            claim_ids.add(claim["claim_id"])
-            alternatives = claim["acceptable_alternatives"]
-            if not isinstance(alternatives, list) or not alternatives:
-                raise ValueError("concept acceptable_alternatives must be non-empty")
-            for alternative in alternatives:
-                if not isinstance(alternative, str) or not _normalize_statement(alternative):
-                    raise ValueError("concept acceptable alternatives must be non-empty strings")
-            evidence = claim["evidence"]
+        records = value["claims"] if has_claims else value["facts"]
+        if not isinstance(records, list) or not records:
+            raise ValueError("verifier concept records must be non-empty")
+        record_ids: set[str] = set()
+        for record in records:
+            record = _mapping(record, "concept record")
+            if has_claims:
+                _exact_fields(record, {"claim_id", "acceptable_alternatives", "evidence"}, "concept claim")
+                record_id = record["claim_id"]
+                alternatives = record["acceptable_alternatives"]
+                if not isinstance(alternatives, list) or not alternatives:
+                    raise ValueError("concept acceptable_alternatives must be non-empty")
+                for alternative in alternatives:
+                    if not isinstance(alternative, str) or not _normalize_statement(alternative):
+                        raise ValueError("concept acceptable alternatives must be non-empty strings")
+            else:
+                if expected_status != "answered":
+                    raise ValueError("fact concept verifier supports answered results only")
+                _exact_fields(record, {"fact_id", "expected", "evidence"}, "concept fact")
+                record_id = record["fact_id"]
+                _fact_value(record["expected"], "concept fact expected")
+            _identity(record_id, "concept record id")
+            if record_id in record_ids:
+                raise ValueError(f"duplicate concept record id: {record_id}")
+            record_ids.add(record_id)
+            evidence = record["evidence"]
             if not isinstance(evidence, list) or not evidence:
                 raise ValueError("concept evidence must be non-empty")
             for location in evidence:
@@ -395,14 +407,17 @@ def verify_result(
     if kind == "location":
         failures.extend(_verify_one_location(task.verifier.value["locations"], result, root))
     elif kind == "concept":
-        failures.extend(
-            _verify_concept(
-                task.verifier.value["claims"],
-                task.verifier.value.get("expected_status", "answered"),
-                result,
-                root,
+        if "facts" in task.verifier.value:
+            failures.extend(_verify_concept_facts(task.verifier.value["facts"], result, root))
+        else:
+            failures.extend(
+                _verify_concept(
+                    task.verifier.value["claims"],
+                    task.verifier.value.get("expected_status", "answered"),
+                    result,
+                    root,
+                )
             )
-        )
     elif kind == "references":
         failures.extend(
             _verify_references(
@@ -430,8 +445,14 @@ def _verify_one_location(labels: Sequence[Mapping[str, Any]], result: Mapping[st
     try:
         value = _mapping(result, "result")
         _exact_fields(value, {"path", "name", "signature", "line"}, "result", optional={"name", "signature"})
-        if ("name" in value) == ("signature" in value):
+        name = value.get("name")
+        signature = value.get("signature")
+        if (name is None) == (signature is None):
             raise ValueError("result must contain exactly one of name or signature")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise ValueError("result name must be null or a non-empty string")
+        if signature is not None and (not isinstance(signature, str) or not signature):
+            raise ValueError("result signature must be null or a non-empty string")
         _positive_int(value["line"], "result line")
         _safe_artifact_path(root, value["path"])
     except ValueError as exc:
@@ -515,6 +536,119 @@ def _verify_concept(claims, expected_status, result, root):
         ):
             failures.append("concept result contains evidence outside the frozen labels")
     return failures
+
+
+def _verify_concept_facts(facts, result, root):
+    try:
+        value = _mapping(result, "result")
+        _exact_fields(value, {"facts", "evidence"}, "result")
+        submitted = _mapping(value["facts"], "result facts")
+        for fact_id, fact_value in submitted.items():
+            _identity(fact_id, "result fact id")
+            _fact_value(fact_value, f"result fact {fact_id}")
+        evidence = value["evidence"]
+        if not isinstance(evidence, list) or not evidence:
+            raise ValueError("result evidence must be non-empty")
+    except ValueError as exc:
+        return [str(exc)]
+    expected = {fact["fact_id"]: _thaw(fact["expected"]) for fact in facts}
+    failures = []
+    for fact_id in sorted(set(submitted) - set(expected)):
+        failures.append(f"result contains unknown concept fact: {fact_id}")
+    for fact_id in sorted(set(expected) - set(submitted)):
+        failures.append(f"result omits concept fact: {fact_id}")
+    for fact in facts:
+        fact_id = fact["fact_id"]
+        if fact_id in submitted and not _fact_values_equal(submitted[fact_id], expected[fact_id]):
+            failures.append(f"concept fact is incorrect: {fact_id}")
+        if fact_id in submitted and not any(
+            any(not _verify_one_location([label], item, root) for label in fact["evidence"])
+            for item in evidence
+        ):
+            failures.append(f"concept fact lacks frozen evidence: {fact_id}")
+    all_labels = [label for fact in facts for label in fact["evidence"]]
+    for item in evidence:
+        if not any(not _verify_one_location([label], item, root) for label in all_labels):
+            failures.append("concept result contains evidence outside the frozen labels")
+    return failures
+
+
+def public_response_schema(task: VerifiableTask) -> Mapping[str, Any]:
+    location = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["path", "line", "name", "signature"],
+        "properties": {
+            "path": {"type": "string", "description": "Repository-relative source path."},
+            "line": {"type": "integer", "minimum": 1},
+            "name": {"type": ["string", "null"], "description": "Native symbol name, or null when signature identifies the location."},
+            "signature": {"type": ["string", "null"], "description": "Native signature, or null when name identifies the location."},
+        },
+    }
+    workflow = task.task.workflow
+    if workflow == "location":
+        return location
+    if workflow == "concept":
+        if "facts" not in task.verifier.value:
+            return {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["status", "claims", "evidence"],
+                "properties": {
+                    "status": {"type": "string", "enum": ["answered", "refused"]},
+                    "claims": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                    "evidence": {"type": "array", "minItems": 1, "items": location},
+                },
+            }
+        fact_properties = {}
+        for fact in sorted(task.verifier.value["facts"], key=lambda item: item["fact_id"]):
+            expected = fact["expected"]
+            if isinstance(expected, bool):
+                value_schema = {"type": "boolean"}
+            elif isinstance(expected, str):
+                value_schema = {"type": "string"}
+            else:
+                value_schema = {"type": "array", "items": {"type": "string"}}
+            fact_properties[fact["fact_id"]] = value_schema
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["facts", "evidence"],
+            "properties": {
+                "facts": {
+                    "type": "object",
+                    "description": "Values for every behavior facet named in the task prompt. String arrays are unique unordered sets.",
+                    "additionalProperties": False,
+                    "required": list(fact_properties),
+                    "properties": fact_properties,
+                },
+                "evidence": {"type": "array", "minItems": 1, "items": location},
+            },
+        }
+    if workflow == "references":
+        return {"type": "object", "additionalProperties": False, "required": ["status", "references"], "properties": {"status": {"type": "string", "enum": ["answered", "empty", "refused"]}, "references": {"type": "array", "items": location}}}
+    if workflow == "test_selection":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["status", "tests"],
+            "properties": {
+                "status": {"type": "string", "enum": ["answered", "empty", "refused"]},
+                "tests": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["path", "test_id"],
+                        "properties": {
+                            "path": {"type": "string"},
+                            "test_id": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        }
+    return {"type": "object", "additionalProperties": False, "required": [], "properties": {}}
 
 
 def _verify_test_selection(labels, expected_status, result, root):
@@ -869,6 +1003,22 @@ def _string_list(value, label, unique):
     if unique and len(set(value)) != len(value):
         raise ValueError(f"{label} contains duplicates")
     return value
+
+
+def _fact_value(value, label):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) and item for item in value) and len(value) == len(set(value)):
+        return value
+    raise ValueError(f"{label} must be a boolean, non-empty string, or unique string array")
+
+
+def _fact_values_equal(left, right):
+    if isinstance(left, list) and isinstance(right, list):
+        return set(left) == set(right)
+    return left == right
 
 
 def _positive_int(value, label):

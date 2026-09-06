@@ -1,0 +1,4922 @@
+{
+  "inventory_scope": "complete case inventory from the repository native test runner",
+  "native_test_argv": [
+    "sh",
+    "-c",
+    "cargo test --workspace --no-fail-fast 2>&1"
+  ],
+  "cases": [
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::cs1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::cs2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::cs3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::cs4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig20"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig21"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig22"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig23"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig24"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig25"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig26"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig27"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig28"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig29"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig30"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig31"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig32"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig33"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig34"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig35"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig36"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig37"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig38"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig39"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig40"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig41"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig42"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig43"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig44"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ig9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "gitignore::tests::ignot9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_brace1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_brace2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_brace3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_empty1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_empty2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_many"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_negated_empty"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_negated_unclosed"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::allow_unclosed_class_single"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::any1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::any2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls20"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls21"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::cls9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_alt1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_alt2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_alt3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_alt4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_range1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_range2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_unclosed1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_unclosed2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_unclosed3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::err_unclosed4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_baselit1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_baselit2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_baselit3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_baselit4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_basetoks7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_ext7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_lit8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_prefix1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_prefix2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_prefix3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_prefix4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_req_ext9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::extract_suffix7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::literal1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::literal2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::match9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchalt9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchbackslash7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchcasei1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchcasei2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchcasei3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchcasei4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchescape"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot20"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot21"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot22"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot23"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot24"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot25"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot26"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot27"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot28"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot29"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot30"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchnot9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchpat7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrange9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec20"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec21"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec22"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec23"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec24"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec25"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec26"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec31"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec32"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec33"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec34"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchrec9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchslash1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchslash2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchslash3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchslash4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::matchslash5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re15"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re16"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re17"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re18"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re19"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re20"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re21"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re22"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re23"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re24"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re25"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re26"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re27"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re28"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re29"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re30"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re31"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re32"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re33"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re34"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re35"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re36"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re37"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re_casei"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re_empty"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re_slash1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::re_slash2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::rseq1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::rseq2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::rseq3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::rseq4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::rseq5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::seq1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::seq2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "glob::tests::seq3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::find_cap_ref9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp12"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp13"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp14"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "interpolate::tests::interp9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::ext1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::ext2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::ext3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::ext4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::ext5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::name1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::name2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::name3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::name4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::normal1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::normal2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::normal3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "pathutil::tests::normal4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "test_path_should_be_under_root - should panic"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match10"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match11"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::match9"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot1"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot2"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot3"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot4"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot5"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot6"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot7"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "types::tests::matchnot8"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "walk::tests::panic_in_parallel - should panic"
+    },
+    {
+      "path": "Cargo.toml",
+      "test_id": "walk::tests::panic_in_parallel_builder - should panic"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::backslash"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::carriage"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::invalid_utf8"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nl"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nothing_hex0"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nothing_hex1"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nothing_hex2"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nothing_simple"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::nul"
+    },
+    {
+      "path": "crates/cli/src/escape.rs",
+      "test_id": "escape::tests::tab"
+    },
+    {
+      "path": "crates/cli/src/hostname.rs",
+      "test_id": "hostname::tests::print_hostname"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::invalid_empty"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::invalid_non_digit"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::invalid_overflow"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::invalid_suffix"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_g"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_k"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_m"
+    },
+    {
+      "path": "crates/cli/src/human.rs",
+      "test_id": "human::tests::suffix_none"
+    },
+    {
+      "path": "crates/cli/src/pattern.rs",
+      "test_id": "pattern::tests::os"
+    },
+    {
+      "path": "crates/core/flags/config.rs",
+      "test_id": "flags::config::tests::basic"
+    },
+    {
+      "path": "crates/core/flags/config.rs",
+      "test_id": "json::basic"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_after_context"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_auto_hybrid_regex"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_before_context"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_binary"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_block_buffered"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_byte_offset"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_case_sensitive"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_color"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_colors"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_column"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_context"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_context_separator"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_count"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_count_matches"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_crlf"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_debug"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_dfa_size_limit"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_encoding"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_engine"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_field_context_separator"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_field_match_separator"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_file"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_files"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_files_with_matches"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_files_without_match"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_fixed_strings"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_follow"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_generate"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_glob"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_glob_case_insensitive"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_heading"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_help"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_hidden"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_hostname_bin"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_hyperlink_format"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_iglob"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_ignore_case"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_ignore_file"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_ignore_file_case_insensitive"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_include_zero"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_index"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_index_crud"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_index_force"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_index_path"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_invert_match"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_json"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_line_buffered"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_line_number"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_line_regexp"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_columns"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_columns_preview"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_count"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_depth"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_max_filesize"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_mmap"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_multiline"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_multiline_dotall"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_config"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_dot"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_exclude"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_files"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_global"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_messages"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_parent"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_ignore_vcs"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_line_number"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_messages"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_pcre2_unicode"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_require_git"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_no_unicode"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_null"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_null_data"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_one_file_system"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_only_matching"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_passthru"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_path_separator"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_pcre2"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_pcre2_version"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_pre"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_pre_glob"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_pretty"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_quiet"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_regex_size_limit"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_regexp"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_replace"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_search_zip"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_smart_case"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_sort"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_sort_files"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_sortr"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_stats"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_stop_on_nonmatch"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_text"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_threads"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_trace"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_trim"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_type"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_type_add"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_type_clear"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_type_list"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_type_not"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_unrestricted"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_version"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_vimgrep"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_with_filename"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_with_filename_no"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::test_word_regexp"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::available_shorts"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::choices_ascii_alphanumeric"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::longs_all_ascii_alphanumeric"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::longs_no_duplicates"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::non_switches_have_variable_names"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::shorts_all_ascii_alphanumeric"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::shorts_no_duplicates"
+    },
+    {
+      "path": "crates/core/flags/defs.rs",
+      "test_id": "flags::defs::tests::switches_have_no_choices"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_explicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_explicit_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_explicit_text"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_binary"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_count_binary"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_path"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_quiet"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_implicit_text"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match1_stdin"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match2_implicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::after_match2_implicit_text"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match1_explicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match1_implicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match1_implicit_binary"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match1_implicit_text"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match2_explicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match2_implicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::before_match2_implicit_text"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::matching_files_inconsistent_with_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_after_nul_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_binary_flag"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_match_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_match_explicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_match_implicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_match_multiple"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_match_near_nul"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "binary::mmap_text_flag"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/decompress.rs - decompress::DecompressionReader (line 321) - compile"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/escape.rs - escape::escape (line 21)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/escape.rs - escape::unescape (line 62)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/lib.rs - (line 51)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/lib.rs - (line 59)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/lib.rs - (line 65)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/pattern.rs - pattern::patterns_from_reader (line 125)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/cli/src/process.rs - process::CommandReader (line 157) - compile"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/globset/src/lib.rs - (line 18)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/globset/src/lib.rs - (line 34)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/globset/src/lib.rs - (line 50)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/globset/src/lib.rs - GlobSet::matches_all (line 367)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/globset/src/lib.rs - escape (line 1105)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/incremental.rs - incremental::IncrementalIgnore (line 44) - compile"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/lib.rs - (line 17) - compile"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/lib.rs - (line 35) - compile"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/types.rs - types (line 16)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/types.rs - types (line 34)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/types.rs - types (line 51)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/ignore/src/types.rs - types (line 71)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/matcher/src/lib.rs - Match (line 61)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/printer/src/color.rs - color::UserColorSpec (line 136)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/printer/src/hyperlink/mod.rs - hyperlink::HyperlinkFormat (line 62)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/printer/src/lib.rs - (line 26)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "crates/searcher/src/lib.rs - (line 39)"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::context_sep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::context_sep_default"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::context_sep_empty"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1078_max_columns_preview1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1078_max_columns_preview2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f109_case_sensitive_part1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f109_case_sensitive_part2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f109_max_depth"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1138_no_ignore_dot"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1155_auto_hybrid_regex"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1207_auto_encoding"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1207_ignore_encoding"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f129_context"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f129_matches"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f129_replace"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1404_nothing_searched_ignored"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1404_nothing_searched_warning"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1414_no_require_git"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1420_no_ignore_exclude"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1466_no_ignore_files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f159_max_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f159_max_count_zero"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1842_field_context_separator"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1842_field_match_separator"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f196_persistent_config"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_eucjp"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_replacement_encoding"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_sjis"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_unknown_encoding"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_utf16_auto"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f1_utf16_explicit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f20_no_filename"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f2288_context_partial_override"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f2288_context_partial_override_rev"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f2361_sort_nested_files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f243_column_line"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f263_sort_files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f263_sort_files_reverse"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f275_pathsep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f34_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f34_only_matching_line_column"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f362_dfa_size_limit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f362_exceeds_regex_size_limit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f411_parallel_quiet_search_stats"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f411_parallel_search_stats"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f411_single_threaded_quiet_search_stats"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f411_single_threaded_search_stats"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f416_crlf"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f416_crlf_multiline"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f416_crlf_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f419_zero_as_shortcut_for_null"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f45_precedence_internal"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f45_precedence_with_others"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f45_relative_cwd"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f68_no_ignore_vcs"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f7"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f70_smart_case"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f740_passthru"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f7_stdin"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f89_count"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f89_files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f89_files_with_matches"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f89_files_without_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f89_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_max_columns_matches"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_max_columns_multi_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_max_columns_multi_per_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_max_columns_multi_standard"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_max_columns_normal"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f917_trim_multi_standard"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f948_exit_code_error"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f948_exit_code_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f948_exit_code_no_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::f993_null_data"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::no_context_sep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::no_context_sep_overridden"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::no_context_sep_overrides"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "feature::no_unicode"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::notutf8"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::notutf8_file"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::quiet_stats"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::r1095_crlf_empty_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::r1095_missing_crlf"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "json::r1412_look_behind_match_missing"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::after_context_line_numbers"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::before_context_line_numbers"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_convert"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_convert_mmap"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_quit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_quit_mmap"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_search_mmap"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::binary_search_no_mmap"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::byte_offset_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::columns"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_brotli"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_bzip2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_failing_gzip"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_gzip"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_lz4"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_lzma"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_uncompress"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_xz"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::compressed_zstd"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::context_line_numbers"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::count_matches_inverted"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::count_matches_via_only"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::dir"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_type_add"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_type_add_compose"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_type_clear"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_types"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_types_all"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_types_negate"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::file_types_negate_all"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::files_with_matches"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::files_without_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::glob_always_case_insensitive"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::glob_case_insensitive"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::glob_case_sensitive"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::glob_negate"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_generic"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_git"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_git_multi_root_order"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_git_parent"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_git_parent_stop"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_git_parent_stop_file"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_hidden"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_rgignore_multi_root_order"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_ripgrep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::ignore_ripgrep_parent_no_stop"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::include_zero"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::include_zero_override"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::inverted"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::inverted_line_numbers"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::line_numbers"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_parse_error_length"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_parse_error_suffix"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_parse_k_suffix"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_parse_m_suffix"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_parse_no_suffix"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::max_filesize_suffix_overflow"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::no_ignore"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::no_ignore_hidden"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::no_parent_ignore_git"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::preprocessing"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::preprocessing_glob"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::replace_groups"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::replace_named_groups"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::replace_with_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::single_file"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::sort_accessed"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::sort_files"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::sortr_accessed"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::symlink_follow"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::symlink_nofollow"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::type_list"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::unrestricted1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::unrestricted2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::unrestricted3"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::vimgrep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::vimgrep_no_line"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::vimgrep_no_line_no_column"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::with_filename"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::with_heading"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::with_heading_default"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "misc::word_period"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::dot_all"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::dot_no_newline"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::overlap1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::overlap2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::stdin"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "multiline::vimgrep"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::f1757"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r105_part1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r105_part2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1064"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1098"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1130"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1159_exit_status"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1159_invalid_flag"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1163"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1164"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1173"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1174"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1176_line_regex"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1176_literal_file"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1203_reverse_suffix_literal"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1223_no_dir_check_for_default_path"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1259_drop_last_byte_nonl"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r127"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r128"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r131"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1311_multi_line_term_replace"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1319"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1334_crazy_literals"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1334_invert_empty_patterns"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r137"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1380"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1389_bad_symlinks_no_biscuit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1401_look_ahead_only_matching_1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1401_look_ahead_only_matching_2"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1412_look_behind_no_replacement"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1446_respect_excludes_in_worktree"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1537"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1559"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r156"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1573"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r16"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1638"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1739_replacement_lineterm_match"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1765"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1838_nul_error_with_binary_detection"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r184"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1866"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1868_context_passthru_override"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1878"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r1891"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r199"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r206"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2094"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2095"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r210"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2198"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2208"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2236"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r228"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r229"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2480"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r25"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r251"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r256"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r256_j1"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2574"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2658_null_data_line_regexp"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r270"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2711"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2770_gitignore_error"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r279"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2944_incorrect_bytes_searched"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r2990_trip_over_trailing_dot"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r30"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3067_gitignore_error"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3108_files_without_match_quiet_exit"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3127_gitignore_allow_unclosed_class"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3127_glob_flag_not_allow_unclosed_class"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3139_multiline_lookahead_files_with_matches"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3173_hidden_whitelist_only_dot"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3179_global_gitignore_cwd"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3180_look_around_panic"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r3275_git_global_config_env"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r391"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r405"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r428_color_context_path"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r428_unrecognized_style"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r451_only_matching"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r451_only_matching_as_in_issue"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r483_matching_no_stdout"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r483_non_matching_exit_code"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r49"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r493"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r50"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r506_word_not_parenthesized"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r553_flag"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r553_switch"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r568_leading_hyphen_option_args"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r599"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r64"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r65"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r67"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r693_context_in_contextless_mode"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r807"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_2731"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_2747"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_2778"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_2836"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_2933"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r829_original"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r87"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r90"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r900"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r93"
+    },
+    {
+      "path": "crates/core/main.rs",
+      "test_id": "regression::r99"
+    },
+    {
+      "path": "crates/core/messages.rs",
+      "test_id": "dir::tests::errored"
+    },
+    {
+      "path": "crates/globset/src/glob.rs",
+      "test_id": "misc::glob"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::debug"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::default_set_is_empty_works"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::empty_set_works"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::escape"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_basename_literals"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_extensions"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_literals"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_prefix"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_regex"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_required_extensions"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::matches_all_suffix"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::set_does_not_remember"
+    },
+    {
+      "path": "crates/globset/src/lib.rs",
+      "test_id": "tests::set_works"
+    },
+    {
+      "path": "crates/ignore/src/default_types.rs",
+      "test_id": "default_types::tests::default_types_aliases_are_sorted"
+    },
+    {
+      "path": "crates/ignore/src/default_types.rs",
+      "test_id": "default_types::tests::default_types_are_sorted"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::absolute_parent"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::absolute_parent_anchored"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::absolute_parent_matchers_are_cached_across_roots"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::custom_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::custom_ignore_over_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::custom_ignore_precedence"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::errored_both"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::errored_partial"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::errored_partial_and_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::exclude_lowest"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::explicit_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::git_exclude"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::git_info_exclude_in_linked_worktree"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::gitignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::gitignore_allowed_no_git"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::gitignore_no_git"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::gitignore_with_jj"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::ignore_over_gitignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::multi_root_custom_ignore_order_independent"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::multi_root_gitignore_order_independent"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::not_present_empty"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "dir::tests::stops_at_git_dir"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "overrides::tests::gitignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "walk::tests::custom_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "walk::tests::explicit_ignore"
+    },
+    {
+      "path": "crates/ignore/src/dir.rs",
+      "test_id": "walk::tests::gitignore"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::parse_excludes_file1"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::parse_excludes_file2"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::parse_excludes_file3"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::parse_excludes_file4"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::parse_excludes_file5"
+    },
+    {
+      "path": "crates/ignore/src/gitignore.rs",
+      "test_id": "gitignore::tests::regression_106"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::anchored_child_rule_uses_child_root"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::cached_allowed_parent_matches_children"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::cached_ignored_parent_matches_children"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::cached_parent_matcher_is_used_for_directory"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::compiled_matchers_are_reused"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::compiled_multi_child_matchers_are_not_reused"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::compiled_multi_matchers_are_reused"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::depth_limits"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::depth_limits_apply_to_root"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::descendants_of_hidden_directories_are_ignored"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::directly_ignored_directory_is_not_descended"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::dot_dash_root_is_not_stdin"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::file_types_are_applied"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::gitignore_whitelist_overrides_hidden_filter"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::glob_overrides_apply_to_ancestors"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::glob_overrides_are_applied"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::hidden_directories_outside_depth_limits"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::hidden_files_and_directories"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::ignored_ancestor_wins"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::leading_dot_slash_impacts_matching"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::max_filesize"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::max_filesize_does_not_stat_ignored_file"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::max_filesize_respects_follow_links"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::multiple_roots_keep_their_own_context"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::nested_parent_gitignores"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::parent_ignore_and_custom_ignore"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::parent_loading_can_be_disabled"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::partial_errors_keep_valid_rules"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::paths_are_relative_to_the_root"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::respects_git_repository_boundaries"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::stdin_is_inert_with_depth_limits"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::symlink_path_stays_under_lexical_root"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "incremental::tests::whitelisted_hidden_directory_allows_descendants"
+    },
+    {
+      "path": "crates/ignore/src/incremental.rs",
+      "test_id": "walk::tests::max_filesize"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::absolute_path"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::allow_directories"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::default_case_sensitive"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::only_ignores"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::precedence"
+    },
+    {
+      "path": "crates/ignore/src/overrides.rs",
+      "test_id": "overrides::tests::simple"
+    },
+    {
+      "path": "crates/ignore/src/types.rs",
+      "test_id": "types::tests::test_invalid_defs"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "flags::config::tests::error"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::custom_ignore_exclusive_use"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::explicit_ignore_exclusive_use"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::first_path_not_symlink"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::gitignore_parent"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::max_depth"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::max_depth_does_not_load_unreachable_ignore_files"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::min_depth"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::no_ignores"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::no_read_permissions"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::same_file_system"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::symlink_loop"
+    },
+    {
+      "path": "crates/ignore/src/walk.rs",
+      "test_id": "walk::tests::symlinks"
+    },
+    {
+      "path": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "test_id": "test_dirs_in_deep"
+    },
+    {
+      "path": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "test_id": "test_dirs_in_root"
+    },
+    {
+      "path": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "test_id": "test_files_in_deep"
+    },
+    {
+      "path": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "test_id": "test_files_in_root"
+    },
+    {
+      "path": "crates/ignore/tests/gitignore_skip_bom.rs",
+      "test_id": "gitignore_skip_bom"
+    },
+    {
+      "path": "crates/index/src/literal.rs",
+      "test_id": "literal::tests::iter_ngrams"
+    },
+    {
+      "path": "crates/index/src/literal.rs",
+      "test_id": "literal::tests::queries"
+    },
+    {
+      "path": "crates/matcher/src/lib.rs",
+      "test_id": "test_matcher::captures"
+    },
+    {
+      "path": "crates/matcher/src/lib.rs",
+      "test_id": "test_matcher::captures_iter"
+    },
+    {
+      "path": "crates/matcher/src/lib.rs",
+      "test_id": "test_matcher::find_iter"
+    },
+    {
+      "path": "crates/matcher/src/lib.rs",
+      "test_id": "test_matcher::replace_with_captures"
+    },
+    {
+      "path": "crates/matcher/src/lib.rs",
+      "test_id": "test_matcher::try_captures_iter"
+    },
+    {
+      "path": "crates/matcher/tests/test_matcher.rs",
+      "test_id": "test_matcher::no_captures"
+    },
+    {
+      "path": "crates/printer/src/color.rs",
+      "test_id": "misc::line"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::alias_names_are_reasonable"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::aliases_are_sorted"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::aliases_are_valid_formats"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::build_empty_format"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::build_format"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::handle_alias"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::parse_format"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::parse_invalid"
+    },
+    {
+      "path": "crates/printer/src/hyperlink/mod.rs",
+      "test_id": "hyperlink::tests::parse_valid"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "json::replacement"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "json::tests::always_begin_end_no_match"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "json::tests::max_matches_after_context"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "json::tests::missing_crlf"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "json::tests::no_match"
+    },
+    {
+      "path": "crates/printer/src/json.rs",
+      "test_id": "standard::tests::replacement"
+    },
+    {
+      "path": "crates/printer/src/jsont.rs",
+      "test_id": "jsont::tests::base64_basic"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "multiline::only_matching"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::byte_offset"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::byte_offset_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::column_number"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::column_number_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::context_break_multiple_heading"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::context_break_multiple_no_heading"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::heading"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::heading_multiple"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert_context"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert_context_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert_context_only_matching"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert_context_only_matching_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::invert_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::line_number_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_multi_line_preview"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_preview"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_with_count"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_with_count_preview_no_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_with_count_preview_one_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_columns_with_count_preview_two_matches"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_context"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_context_invert"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_multi_line1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_multi_line2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_multi_line3"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::max_matches_multi_line4"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::no_heading"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::no_heading_multiple"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns_multi_line1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns_multi_line2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns_preview"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns_preview_multi_line1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_max_columns_preview_multi_line2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_multi_line1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::only_matching_multi_line2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::path_terminator"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line1_only_first_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line2_only_first_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line3"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::per_match_multi_line3_only_first_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::regression_after_context_with_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::regression_crlf_preserve"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::regression_search_empty_with_crlf"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_max_columns"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_max_columns_preview1"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_max_columns_preview2"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_multi_line_combine_lines"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_multi_line_diff_line_term"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_only_matching"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_passthru"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::replacement_per_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::reports_binary"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::reports_match"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::reports_stats"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::reports_stats_multiple"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::separator_field"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::separator_path"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::trim_ascii"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::trim_ascii_multi_line"
+    },
+    {
+      "path": "crates/printer/src/standard.rs",
+      "test_id": "standard::tests::trim_ascii_with_line_term"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "misc::count_matches"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "misc::quiet"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_matches"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_max_matches"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_no_path"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_no_path_even_with_path"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path_field_separator"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path_separator"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path_terminator"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path_with_zero"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::count_path_without_zero"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_with_match_error"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_with_match_found"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_with_match_not_found"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_without_match_error"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_without_match_found"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::path_without_match_not_found"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::quiet"
+    },
+    {
+      "path": "crates/printer/src/summary.rs",
+      "test_id": "summary::tests::quiet_with_stats"
+    },
+    {
+      "path": "crates/printer/src/util.rs",
+      "test_id": "util::tests::custom_decimal_format"
+    },
+    {
+      "path": "crates/regex/src/ast.rs",
+      "test_id": "ast::tests::various"
+    },
+    {
+      "path": "crates/regex/src/ast.rs",
+      "test_id": "ban::tests::various"
+    },
+    {
+      "path": "crates/regex/src/ast.rs",
+      "test_id": "literal::tests::various"
+    },
+    {
+      "path": "crates/regex/src/ast.rs",
+      "test_id": "strip::tests::various"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "escape::tests::empty"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::alternation"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::anything"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::case_insensitive_alternation"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::class"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::concat"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::crazy_repeats"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::empty"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::heuristics"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::impossible"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::literal"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::look"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::optimize"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "literal::tests::repetition"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "misc::literal"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "non_matching::tests::literal"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "overrides::tests::empty"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "walk::tests::empty"
+    },
+    {
+      "path": "crates/regex/src/literal.rs",
+      "test_id": "walk::tests::from_iter"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "gitignore::tests::case_insensitive"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "json::crlf"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "matcher::tests::candidate_lines"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "matcher::tests::case_smart"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "matcher::tests::line_terminator_crlf"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "matcher::tests::line_terminator_error"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "matcher::tests::word"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "misc::case_insensitive"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "misc::word"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "overrides::tests::case_insensitive"
+    },
+    {
+      "path": "crates/regex/src/matcher.rs",
+      "test_id": "test_matcher::try_find_iter"
+    },
+    {
+      "path": "crates/regex/src/non_matching.rs",
+      "test_id": "non_matching::tests::anchor"
+    },
+    {
+      "path": "crates/regex/src/non_matching.rs",
+      "test_id": "non_matching::tests::dot"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "json::tests::binary_detection"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_basics1"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_basics2"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_basics3"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_basics4"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_convert1"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_convert2"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_convert3"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_convert4"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_none"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_quit1"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_quit2"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_quit3"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_quit4"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_binary_quit5"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_empty"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_limited_capacity1"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_limited_capacity2"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_limited_capacity3"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_small_capacity"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::buffer_zero_capacity"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "line_buffer::tests::replace"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "matcher::tests::line_terminator"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "misc::replace"
+    },
+    {
+      "path": "crates/searcher/src/line_buffer.rs",
+      "test_id": "test_matcher::replace"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::line_count"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::line_iter"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::line_iter_empty"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::line_locate"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::line_locate_weird"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::preceding_lines_doc"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::preceding_lines_empty1"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::preceding_lines_empty2"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::preceding_lines_sherlock"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "lines::tests::preceding_lines_short"
+    },
+    {
+      "path": "crates/searcher/src/lines.rs",
+      "test_id": "misc::count"
+    },
+    {
+      "path": "crates/searcher/src/searcher/core.rs",
+      "test_id": "test_matcher::find"
+    },
+    {
+      "path": "crates/searcher/src/searcher/core.rs",
+      "test_id": "test_matcher::shortest_match"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "literal::tests::scratch"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::basic1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::basic2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::basic3"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::basic4"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::big1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::big_error_multi_line"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::big_error_one_line"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::binary1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::binary2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::binary3"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::binary4"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_code1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_code2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_code3"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock3"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock4"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock5"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock6"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock_invert1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::context_sherlock_invert2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::invert1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::line_number1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::line_number_invert1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::multi_line_overlap1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::multi_line_overlap2"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::passthru_sherlock1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::passthru_sherlock_invert1"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::regression_2260"
+    },
+    {
+      "path": "crates/searcher/src/searcher/glue.rs",
+      "test_id": "searcher::glue::tests::scratch"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "feature::stop_on_nonmatch"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "json::tests::max_matches"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "searcher::tests::config_error_heap_limit"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "searcher::tests::config_error_line_terminator"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "searcher::tests::uft8_bom_sniffing"
+    },
+    {
+      "path": "crates/searcher/src/searcher/mod.rs",
+      "test_id": "standard::tests::max_matches"
+    },
+    {
+      "path": "crates/searcher/src/sink.rs",
+      "test_id": "misc::context"
+    },
+    {
+      "path": "crates/searcher/src/sink.rs",
+      "test_id": "multiline::context"
+    },
+    {
+      "path": "crates/searcher/src/sink.rs",
+      "test_id": "standard::tests::context_break"
+    },
+    {
+      "path": "crates/searcher/src/sink.rs",
+      "test_id": "standard::tests::line_number"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "misc::after_context"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "misc::before_context"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line1"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line2"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line3"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line4"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line5"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "searcher::glue::tests::empty_line6"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line1"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line2"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line3"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line4"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line5"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "testutil::tests::empty_line6"
+    },
+    {
+      "path": "crates/searcher/src/testutil.rs",
+      "test_id": "walk::tests::filter"
+    },
+    {
+      "path": "tests/json.rs",
+      "test_id": "pattern::tests::bytes"
+    },
+    {
+      "path": "tests/util.rs",
+      "test_id": "standard::tests::path"
+    }
+  ]
+}

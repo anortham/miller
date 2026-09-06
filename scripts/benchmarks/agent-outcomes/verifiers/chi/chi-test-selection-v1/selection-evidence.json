@@ -1,0 +1,33 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 0,
+    "case_count": 290,
+    "runner_execution_count": 290,
+    "preexisting_nonpass": []
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 1,
+    "transition_count": 1
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "context_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestContext_Clone"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "context_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestContext_Clone",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [],
+  "unchanged_case_count": 289,
+  "known_change_sha256": "1f0d0a4ed4632aaa536e21234c61ce35df70f220995ce31df5fffe0520b2d7ba",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

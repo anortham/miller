@@ -1,0 +1,5 @@
+--- a/src/System.CommandLine/Parsing/CommandLineParser.cs
++++ b/src/System.CommandLine/Parsing/CommandLineParser.cs
+@@ -73 +73 @@
+-                else if (c == '\"')
++                else if (c == '\"' || c == '\'')

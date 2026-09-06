@@ -1,0 +1,9 @@
+--- a/crates/cli/src/human.rs
++++ b/crates/cli/src/human.rs
+@@ -94,3 +94,3 @@
+-        "K" => value.checked_mul(1 << 10),
+-        "M" => value.checked_mul(1 << 20),
+-        "G" => value.checked_mul(1 << 30),
++        "K" | "k" => value.checked_mul(1 << 10),
++        "M" | "m" => value.checked_mul(1 << 20),
++        "G" | "g" => value.checked_mul(1 << 30),

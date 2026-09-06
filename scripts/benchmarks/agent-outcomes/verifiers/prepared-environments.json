@@ -1,0 +1,104 @@
+[
+  {
+    "repo_id": "flask",
+    "prepare_once_argv": [
+      "sh",
+      "-c",
+      "UV_PROJECT_ENVIRONMENT={prepared}/venv uv sync --project {setup_source} --group tests"
+    ],
+    "pre_test_argv": [],
+    "test_environment": {
+      "PATH_PREPEND": "{prepared}/venv/bin",
+      "PYTHONPATH": "{candidate}/src"
+    },
+    "ready_paths": [
+      "{prepared}/venv/bin/python"
+    ]
+  },
+  {
+    "repo_id": "express",
+    "prepare_once_argv": [
+      "sh",
+      "-c",
+      "mkdir -p {prepared}/package && cp {setup_source}/package.json {prepared}/package/package.json && npm install --prefix {prepared}/package --no-package-lock --ignore-scripts --offline --no-audit --no-fund"
+    ],
+    "pre_test_argv": [],
+    "test_environment": {
+      "PATH_PREPEND": "{prepared}/package/node_modules/.bin",
+      "NODE_PATH": "{prepared}/package/node_modules"
+    },
+    "ready_paths": [
+      "{prepared}/package/node_modules/.bin/mocha"
+    ]
+  },
+  {
+    "repo_id": "chi",
+    "prepare_once_argv": [
+      "go",
+      "mod",
+      "download"
+    ],
+    "pre_test_argv": [],
+    "test_environment": {
+      "GOMODCACHE": "{prepared}/gomodcache",
+      "GOCACHE": "{prepared}/gocache"
+    },
+    "ready_paths": [
+      "{prepared}/gomodcache"
+    ]
+  },
+  {
+    "repo_id": "ripgrep",
+    "prepare_once_argv": [
+      "cargo",
+      "fetch",
+      "--locked"
+    ],
+    "pre_test_argv": [],
+    "test_environment": {
+      "CARGO_HOME": "{prepared}/cargo-home",
+      "CARGO_TARGET_DIR": "{candidate}/.agent-outcomes-target"
+    },
+    "ready_paths": [
+      "{prepared}/cargo-home"
+    ]
+  },
+  {
+    "repo_id": "command-line-api",
+    "prepare_once_argv": [
+      "dotnet",
+      "restore",
+      "System.CommandLine.sln"
+    ],
+    "pre_test_argv": [
+      "dotnet",
+      "restore",
+      "System.CommandLine.sln"
+    ],
+    "test_environment": {
+      "DOTNET_ROLL_FORWARD": "Major",
+      "NUGET_PACKAGES": "{prepared}/nuget"
+    },
+    "ready_paths": [
+      "{prepared}/nuget"
+    ]
+  },
+  {
+    "repo_id": "rake",
+    "prepare_once_argv": [
+      "bundle",
+      "install"
+    ],
+    "pre_test_argv": [
+      "sh",
+      "-c",
+      "cp {setup_source}/Gemfile.lock {candidate}/Gemfile.lock && bundle check"
+    ],
+    "test_environment": {
+      "BUNDLE_PATH": "{prepared}/gems"
+    },
+    "ready_paths": [
+      "{prepared}/gems"
+    ]
+  }
+]

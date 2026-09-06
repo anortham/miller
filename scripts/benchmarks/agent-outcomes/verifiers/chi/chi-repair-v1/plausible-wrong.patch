@@ -1,0 +1,5 @@
+--- a/context.go
++++ b/context.go
+@@ -117 +117 @@
+-	clone.methodsAllowed = x.methodsAllowed
++	clone.methodsAllowed = nil

@@ -1,0 +1,573 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 0,
+    "case_count": 1253,
+    "runner_execution_count": 1260,
+    "preexisting_nonpass": []
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 55,
+    "transition_count": 55
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/repos with a valid api key should respond repos json"
+    },
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/user/:name/repos with a valid api key should respond user repos json"
+    },
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/users with a valid api key should respond users json"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router should be .use()able"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router when next() is called should continue lookup"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router when next(err) is called should break out of app.router"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() async local storage should persist store"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() async local storage should persist store when inflated"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() charset should ignore charset"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should be case-insensitive"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should parse without encoding"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support deflate encoding"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support gzip encoding"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support identity encoding"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle Content-Length: 0"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle duplicated middleware"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle empty message-body"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should parse application/octet-stream"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with inflate option when true should accept content-encoding"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when \"application/vnd+octets\" should parse for custom type"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/octet-stream\""
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/vnd+octets\""
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when a function should parse when truthy value returned"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when a function should work without content-type"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with verify option should allow pass-through"
+    },
+    {
+      "path": "test/req.acceptsEncodings.js",
+      "test_id": "req .acceptsEncodings should be false if encoding not accepted"
+    },
+    {
+      "path": "test/req.acceptsEncodings.js",
+      "test_id": "req .acceptsEncodings should return encoding if accepted"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages should be false if language not accepted"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages should return language if accepted"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages when Accept-Language is not present should always return language"
+    },
+    {
+      "path": "test/req.signedCookies.js",
+      "test_id": "req .signedCookies should return a signed JSON cookie"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains otherwise should return an empty array"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should return an array"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should work with IPv4 address"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should work with IPv6 address"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set otherwise should return an empty array"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when present should return an array"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv4"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv6"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole domain"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains with no host should return an empty array"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains with trusted X-Forwarded-Host should return an array"
+    },
+    {
+      "path": "test/res.cookie.js",
+      "test_id": "res .cookie(name, string, options) maxAge should not mutate the options object"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json escape\" setting should not break undefined escape"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json escape\" setting should unicode escape HTML-sniffing characters"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json replacer\" setting should be passed to JSON.stringify()"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json spaces\" setting should be passed to JSON.stringify()"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given an array should respond with json"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given an object should respond with json"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for Number"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for String"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for null"
+    },
+    {
+      "path": "test/res.locals.js",
+      "test_id": "res should work when mounted"
+    },
+    {
+      "path": "test/res.send.js",
+      "test_id": "res .send(Number) should send as application/json"
+    },
+    {
+      "path": "test/res.send.js",
+      "test_id": "res .send(Object) should send as application/json"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/repos with a valid api key should respond repos json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/user/:name/repos with a valid api key should respond user repos json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/acceptance/web-service.js",
+      "test_id": "web-service GET /api/users with a valid api key should respond users json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router should be .use()able",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router when next() is called should continue lookup",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/app.router.js",
+      "test_id": "app.router when next(err) is called should break out of app.router",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() async local storage should persist store",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() async local storage should persist store when inflated",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() charset should ignore charset",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should be case-insensitive",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should parse without encoding",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support deflate encoding",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support gzip encoding",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() encoding should support identity encoding",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle Content-Length: 0",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle duplicated middleware",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should handle empty message-body",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() should parse application/octet-stream",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with inflate option when true should accept content-encoding",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when \"application/vnd+octets\" should parse for custom type",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/octet-stream\"",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when [\"application/octet-stream\", \"application/vnd+octets\"] should parse \"application/vnd+octets\"",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when a function should parse when truthy value returned",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with type option when a function should work without content-type",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/express.raw.js",
+      "test_id": "express.raw() with verify option should allow pass-through",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.acceptsEncodings.js",
+      "test_id": "req .acceptsEncodings should be false if encoding not accepted",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.acceptsEncodings.js",
+      "test_id": "req .acceptsEncodings should return encoding if accepted",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages should be false if language not accepted",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages should return language if accepted",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.acceptsLanguages.js",
+      "test_id": "req .acceptsLanguages when Accept-Language is not present should always return language",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.signedCookies.js",
+      "test_id": "req .signedCookies should return a signed JSON cookie",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains otherwise should return an empty array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should return an array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should work with IPv4 address",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when present should work with IPv6 address",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set otherwise should return an empty array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when present should return an array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv4",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole IPv6",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains when subdomain offset is set when subdomain offset is zero should return an array with the whole domain",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains with no host should return an empty array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/req.subdomains.js",
+      "test_id": "req .subdomains with trusted X-Forwarded-Host should return an array",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.cookie.js",
+      "test_id": "res .cookie(name, string, options) maxAge should not mutate the options object",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json escape\" setting should not break undefined escape",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json escape\" setting should unicode escape HTML-sniffing characters",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json replacer\" setting should be passed to JSON.stringify()",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) \"json spaces\" setting should be passed to JSON.stringify()",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given an array should respond with json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given an object should respond with json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for Number",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for String",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.json.js",
+      "test_id": "res .json(object) when given primitives should respond with json for null",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.locals.js",
+      "test_id": "res should work when mounted",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.send.js",
+      "test_id": "res .send(Number) should send as application/json",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/res.send.js",
+      "test_id": "res .send(Object) should send as application/json",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [],
+  "unchanged_case_count": 1198,
+  "known_change_sha256": "3c79e37b6a36e92ce1c94805296094c4278d7133da992c19eace8819a9860d79",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

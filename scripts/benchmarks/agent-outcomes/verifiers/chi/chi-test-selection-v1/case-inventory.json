@@ -1,0 +1,1171 @@
+{
+  "inventory_scope": "complete case inventory from the repository native test runner",
+  "native_test_argv": [
+    "go",
+    "test",
+    "-json",
+    "./..."
+  ],
+  "cases": [
+    {
+      "path": "context_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestContext_Clone"
+    },
+    {
+      "path": "context_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestReplaceWildcardsConsecutive"
+    },
+    {
+      "path": "context_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestRoutePattern"
+    },
+    {
+      "path": "middleware/basic_auth_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicAuth"
+    },
+    {
+      "path": "middleware/basic_auth_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicAuth/invalid_basic_auth_credentials"
+    },
+    {
+      "path": "middleware/basic_auth_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicAuth/no_authorization_header"
+    },
+    {
+      "path": "middleware/basic_auth_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicAuth/valid_basic_auth_credentials"
+    },
+    {
+      "path": "middleware/clean_path_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCleanPath"
+    },
+    {
+      "path": "middleware/client_ip_example_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::Example_clientIP"
+    },
+    {
+      "path": "middleware/client_ip_example_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::Example_clientIPFromXFFTrustedProxies"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_3fxj_6jh8_hvhx"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_3fxj_6jh8_hvhx/behind_proxy_uses_xff"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_3fxj_6jh8_hvhx/direct_internet_uses_remoteaddr"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_9g5q_2w5x_hmxf"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_rjr7_jggh_pgcp"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_rjr7_jggh_pgcp/only_opted_in_header_is_read"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestAdvisory_GHSA_rjr7_jggh_pgcp/xff_loopback_spoof_rejected"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/empty"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/invalid"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/ipv4"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/ipv4_with_port"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/ipv6_canonical"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/ipv6_uncompressed_normalized"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/ipv6_zone_stripped"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/loopback_accepted"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/multiple_ips"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/private_v4_accepted"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/private_v6_accepted"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/unspecified_accepted"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader/v4_mapped_ipv6_folded_to_v4"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins/attacker_then_proxy"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins/last_empty_no_fallback"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins/last_unparseable_no_fallback"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins/single_value_unchanged"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromHeader_MultiValueLastWins/three_values_last_wins"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr/bare_ipv4"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr/empty"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr/garbage"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr/ipv4_with_port"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr/ipv6_with_port"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr_V4MappedIsUnmapped"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr_V4MappedIsUnmapped/v4_mapped_bare"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromRemoteAddr_V4MappedIsUnmapped/v4_mapped_with_port"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/bad_parse_at_position"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/empties_dont_shift_position"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/missing_header"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/multi_header"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/n1_rightmost"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/n2_exactly_matches_len"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/n2_second_from_right"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/n3_third_from_right"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/shorter_than_n"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/single_entry_n_two"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/spoof_prepend_ignored"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/v4_mapped_at_position_folded"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies/zone_stripped_at_position"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFFTrustedProxies_PanicsOnZero"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/comma_no_space"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/comma_space"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/empty"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/ipv6"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/missing"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/mixed_v4_v6_rightmost_wins"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/multi_header_merged"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/multi_header_with_commas"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/single"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/v4_mapped_rightmost_folded"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/weird_with_empties_then_valid_rightmost"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_NoTrustedPrefixes/zone_stripped_rightmost"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_PanicsOnBadPrefix"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/all_trusted_returns_empty"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/boundary_first_addr_in_prefix"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/boundary_last_addr_in_prefix"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/ip_just_outside_prefix_is_client"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/ipv6_trusted_range"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/mixed_v4_v6_trust_list"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/multiple_trusted_proxies_skipped"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/private_between_trusted_is_client"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPFromXFF_TrustedPrefixes/single_trusted_proxy_skipped"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPLastWriteWins"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPLastWriteWins/earlier_persists_when_later_finds_nothing"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPLastWriteWins/earlier_persists_when_later_xff_all_trusted"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestClientIPLastWriteWins/later_overrides_earlier"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestGetClientIPAddr_RoundTrip"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestGetClientIPAddr_Unset"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_FailClosedOnUnparseable"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_FailClosedOnUnparseable/garbage_between_client_and_trusted_proxy"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_FailClosedOnUnparseable/garbage_in_unreachable_left_header"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_FailClosedOnUnparseable/garbage_past_trusted_chain"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_FailClosedOnUnparseable/garbage_rightmost_no_prefixes"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_IPv6ZoneIDBypassesTrustedV6Prefix"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_MultipleHeadersMerged"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_V4MappedIPv6BypassesTrustedV4Prefix"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_V4MappedIPv6BypassesTrustedV4Prefix/internal_address_via_v4_mapped"
+    },
+    {
+      "path": "middleware/client_ip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXFF_V4MappedIPv6BypassesTrustedV4Prefix/loopback_via_v4_mapped"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/deflate_is_used"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/gzip_is_only_encoding"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/gzip_is_preferred_over_deflate"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/no_expected_encodings_due_to_content_type"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/no_expected_encodings_due_to_no_accepted_encodings"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressor/nop_is_preferred"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorDefaultTextTypes"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorDefaultTextTypes/text/csv"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorDefaultTextTypes/text/markdown"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorDefaultTextTypes/text/vtt"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/catch-all_wildcard_#1"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/catch-all_wildcard_#2"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/defaults"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/invalid_wildcard_#1"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/invalid_wildcard_#2"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/mixed"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/no_wildcard"
+    },
+    {
+      "path": "middleware/compress_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestCompressorWildcards/valid_wildcard"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_accept_requests_with_a_matching_charset"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_accept_requests_with_a_matching_charset_when_multiple_charsets_are_supported"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_accept_requests_with_a_matching_charset_with_extra_values"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_accept_requests_with_no_charset_if_empty_charset_headers_are_allowed"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_be_case-insensitive"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_not_accept_requests_with_a_mismatching_charset"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_not_accept_requests_with_a_mismatching_charset_even_if_empty_charsets_are_allowed"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_not_accept_requests_with_no_charset_if_empty_charset_headers_are_not_allowed"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_skip_validation_for_requests_without_a_body"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentCharset/should_skip_validation_for_requests_without_a_body_and_no_Content-Type_header"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncoding"
+    },
+    {
+      "path": "middleware/content_charset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestSplit"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/No_support_for_br_encoding"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/No_support_for_deflate_and_br_encoding"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/Support_for_deflate_and_gzip_encoding"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/Support_for_gzip_and_deflate_encoding"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/Support_gzip_encoding"
+    },
+    {
+      "path": "middleware/content_encoding_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentEncodingMiddleware/Support_no_encoding"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_accept_requests_with_a_matching_content-type_with_extra_values"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_accept_requests_with_a_matching_content_type"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_accept_requests_with_a_matching_content_type_no_charset"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_accept_requests_with_a_matching_content_type_when_multiple_content_types_are_supported"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_not_accept_requests_with_a_mismatching_content_type"
+    },
+    {
+      "path": "middleware/content_type_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestContentType/should_not_accept_requests_with_a_mismatching_content_type_even_if_multiple_content_types_are_allowed"
+    },
+    {
+      "path": "middleware/get_head_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestGetHead"
+    },
+    {
+      "path": "middleware/heartbeat_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestHeartbeat"
+    },
+    {
+      "path": "middleware/logger_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRequestLogger"
+    },
+    {
+      "path": "middleware/logger_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRequestLoggerReadFrom"
+    },
+    {
+      "path": "middleware/middleware_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestNew"
+    },
+    {
+      "path": "middleware/middleware_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestNew/allows_request_with_custom_header"
+    },
+    {
+      "path": "middleware/middleware_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestNew/rejects_request_without_custom_header"
+    },
+    {
+      "path": "middleware/middleware_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestWrapWriterHTTP2"
+    },
+    {
+      "path": "middleware/middleware_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::Test_contextKey_String"
+    },
+    {
+      "path": "middleware/path_rewrite_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPathRewrite"
+    },
+    {
+      "path": "middleware/realip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestInvalidIP"
+    },
+    {
+      "path": "middleware/realip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXForwardForIP"
+    },
+    {
+      "path": "middleware/realip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXForwardForXRealIPPrecedence"
+    },
+    {
+      "path": "middleware/realip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestXRealIP"
+    },
+    {
+      "path": "middleware/recoverer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRecoverer"
+    },
+    {
+      "path": "middleware/recoverer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRecovererAbortHandler"
+    },
+    {
+      "path": "middleware/recoverer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRecovererNoColor"
+    },
+    {
+      "path": "middleware/request_id_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRequestID"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/*.example.com_api.example.com"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/*.example.com_example.com"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/*_anything"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/api.*_api.example.com"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/example.com_example.com"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/example.com_other.com"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/prefix*suffix_prefixmiddlesuffix"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/prefix*suffix_prefixsuffix"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestPattern/prefix*suffix_wrongmiddlesuffix"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/RouteAny_should_match_any_of_the_provided_patterns"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/default_route_should_be_used_when_no_match"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/empty_router_should_call_next_handler_exactly_once"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/matching_header_should_route_to_correct_middleware"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/no_match_and_no_default_should_call_next_handler"
+    },
+    {
+      "path": "middleware/route_headers_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRouteHeaders/wildcard_pattern_should_match"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRedirectSlashes"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRedirectSlashes_PreventBackslashRelativeOpenRedirect"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRedirectSlashes_PreventBackslashRelativeOpenRedirect/encoded_backslash:_/%5Cevil.com/"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestRedirectSlashes_PreventBackslashRelativeOpenRedirect/raw_backslash:_/\\evil.com/"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestStripPrefix"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestStripSlashes"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestStripSlashesInRoute"
+    },
+    {
+      "path": "middleware/strip_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestStripSlashesWithNilContext"
+    },
+    {
+      "path": "middleware/sunset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestSunset"
+    },
+    {
+      "path": "middleware/sunset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestSunset/Sunset_with_link"
+    },
+    {
+      "path": "middleware/sunset_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestSunset/Sunset_without_link"
+    },
+    {
+      "path": "middleware/terminal_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::Test_cW"
+    },
+    {
+      "path": "middleware/terminal_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::Test_cW/No_color"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleBacklog"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleClientTimeout"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleCustomStatusCode"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleMaximum"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleRetryAfter"
+    },
+    {
+      "path": "middleware/throttle_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestThrottleTriggerGatewayTimeout"
+    },
+    {
+      "path": "middleware/url_format_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestURLFormat"
+    },
+    {
+      "path": "middleware/url_format_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestURLFormatInSubRouter"
+    },
+    {
+      "path": "middleware/value_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestWithValue"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicWriterDiscardsWritesToOriginalResponseWriter"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicWriterDiscardsWritesToOriginalResponseWriter/With_Tee"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicWriterDiscardsWritesToOriginalResponseWriter/Without_Tee"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestBasicWritesTeesWritesWithoutDiscard"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestHttp2FancyWriterRemembersWroteHeaderWhenFlushed"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestHttpFancyWriterReadFromByteCountWithTee"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestHttpFancyWriterReadFromHonorsDiscard"
+    },
+    {
+      "path": "middleware/wrap_writer_test.go",
+      "test_id": "github.com/go-chi/chi/v5/middleware::TestHttpFancyWriterRemembersWroteHeaderWhenFlushed"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestCustomHTTPMethod"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestEscapedURLParams"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMethodNotAllowed"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMethodNotAllowed/Registered_Method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMethodNotAllowed/Unregistered_Method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMiddlewarePanicOnLateUse"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMountingExistingPath"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMountingSelf"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMountingSelf/direct_self-mount"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMountingSelf/mount_of_inline_mux_sharing_the_same_tree"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMountingSimilarPattern"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxBasic"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxBig"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxComplicatedNotFound"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxComplicatedNotFound/post"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxComplicatedNotFound/pre"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxContextIsThreadSafe"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxEmptyParams"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxEmptyRoutes"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxFind"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Invalid_pattern_with_no_method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Invalid_pattern_with_supported_method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Invalid_pattern_with_unsupported_method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Valid_pattern_with_HTTP_POST"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Valid_pattern_with_multiple_whitespace_after_method"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxHandlePatternValidation/Valid_pattern_without_HTTP_GET"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMatch"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMatch_DoesNotHaveBasePath"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMatch_HasBasePath"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMiddlewareStack"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMissingParams"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxMounts"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxNestedMethodNotAllowed"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxNestedNotFound"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxPlain"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxRegexp"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxRegexp2"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxRegexp3"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxRouteGroups"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxSubrouterWildcardParam"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxSubroutes"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxSubroutesBasic"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxTrailingSlash"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxWildcardRoute"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxWildcardRouteCheckTwo"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestMuxWith"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestNestedGroups"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestQueryHTTPMethod"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestRouterFromMuxWith"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestServeHTTPExistingContext"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestServerBaseContext"
+    },
+    {
+      "path": "mux_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestSingleHandler"
+    },
+    {
+      "path": "path_value_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPathValue"
+    },
+    {
+      "path": "path_value_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPathValue/Basic_path_value"
+    },
+    {
+      "path": "path_value_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPathValue/Two_path_values"
+    },
+    {
+      "path": "path_value_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPathValue/Wildcard_path"
+    },
+    {
+      "path": "pattern_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPattern"
+    },
+    {
+      "path": "pattern_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPattern/Basic_path_value"
+    },
+    {
+      "path": "pattern_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPattern/Nested_sub-router"
+    },
+    {
+      "path": "pattern_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPattern/Two_path_values"
+    },
+    {
+      "path": "pattern_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestPattern/Wildcard_path"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestRoutesHidesMountStub"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestRoutesHidesMountStub/handler_colliding_with_a_mount_pattern_hides_the_stub"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestRoutesHidesMountStub/plain_mount_reports_a_single_subroute_entry"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTree"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTreeFindPattern"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTreeMoar"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTreeRegexMatchWholeParam"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTreeRegexp"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestTreeRegexpRecursive"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalkInlineMiddlewaresAcrossSubrouter"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalkInlineMiddlewaresAcrossSubrouter/Use_on_subrouter_combined_with_outer_With"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalkInlineMiddlewaresAcrossSubrouter/With+Group_wrapping_Route+With"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalkMiddlewaresAcrossGroupAndRoute"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalkRouteWithHandlerAndSubrouter"
+    },
+    {
+      "path": "tree_test.go",
+      "test_id": "github.com/go-chi/chi/v5::TestWalker"
+    }
+  ]
+}

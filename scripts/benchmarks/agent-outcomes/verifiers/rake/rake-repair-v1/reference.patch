@@ -1,0 +1,5 @@
+--- a/lib/rake/task.rb
++++ b/lib/rake/task.rb
+@@ -241 +241 @@
+-        prerequisite_tasks.reverse_each { |p|
++        prerequisite_tasks.each { |p|

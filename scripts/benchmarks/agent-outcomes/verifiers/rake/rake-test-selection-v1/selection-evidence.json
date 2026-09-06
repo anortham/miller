@@ -1,0 +1,43 @@
+{
+  "baseline": {
+    "outcome": "completed",
+    "returncode": 0,
+    "case_count": 601,
+    "runner_execution_count": 606,
+    "preexisting_nonpass": []
+  },
+  "changed": {
+    "outcome": "completed",
+    "returncode": 1,
+    "transition_count": 2
+  },
+  "derived_impacted_cases": [
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_always_multitask"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_invoke"
+    }
+  ],
+  "outcome_transitions": [
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_always_multitask",
+      "before": "passed",
+      "after": "failed"
+    },
+    {
+      "path": "test/test_rake_task.rb",
+      "test_id": "TestRakeTask#test_invoke",
+      "before": "passed",
+      "after": "failed"
+    }
+  ],
+  "unstable_cases": [],
+  "unchanged_case_count": 599,
+  "known_change_sha256": "84b5a0f0d285a9ac4dde0a59e10e43984112bd3fccd6826adab48b60081d1087",
+  "external_record_path": "/home/murphy/source/miller-evidence/agent-outcomes-task4-round1/selection-record.json",
+  "external_record_sha256": "0132584dc2a44fa20b523b2adfce1053cc97e73354fc85580c2d45ac399de1a7"
+}

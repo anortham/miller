@@ -15,6 +15,7 @@ from benchlib.agent_outcomes_contract import (
     VerificationExecution,
     bind_verifier,
     load_json,
+    public_response_schema,
     validate_campaign,
     validate_run_record,
     validate_task,
@@ -27,6 +28,24 @@ from benchlib.agent_outcomes_contract import (
 
 SHA256 = "a" * 64
 COMMIT = "b" * 40
+
+
+def assert_strict_output_objects(test, schema):
+    if isinstance(schema, dict):
+        allowed = {"type", "description", "properties", "required", "additionalProperties", "items", "enum", "minItems", "maxItems", "minimum"}
+        test.assertFalse(set(schema) - allowed)
+        if schema.get("type") == "object":
+            test.assertFalse(schema["additionalProperties"])
+            test.assertEqual(set(schema.get("properties", {})), set(schema.get("required", [])))
+        for key, value in schema.items():
+            if key == "properties":
+                for property_schema in value.values():
+                    assert_strict_output_objects(test, property_schema)
+            elif key not in {"required", "enum", "type", "description"}:
+                assert_strict_output_objects(test, value)
+    elif isinstance(schema, list):
+        for value in schema:
+            assert_strict_output_objects(test, value)
 
 
 class CopyExecutor:
@@ -204,6 +223,69 @@ class AgentOutcomesContractTests(unittest.TestCase):
             ],
         }
         self.assertFalse(verify_result(bound, extra_wrong_evidence, self.root).correct)
+
+    def test_fact_concept_grading_is_typed_and_paraphrase_independent(self):
+        task = validate_task(self.task_mapping(workflow="concept", verifier_id="concept-facts"))
+        location = {
+            "path": "src/service.py",
+            "name": "save",
+            "signatures": ["def save(value)"],
+            "spans": [{"line_start": 1, "line_end": 1}],
+        }
+        verifier = validate_verifier(
+            {
+                "verifier_id": "concept-facts",
+                "kind": "concept",
+                "facts": [
+                    {"fact_id": "returns-input", "expected": True, "evidence": [location]},
+                    {"fact_id": "result-kind", "expected": "unchanged", "evidence": [location]},
+                    {"fact_id": "traits", "expected": ["identity", "pure"], "evidence": [location]},
+                ],
+            }
+        )
+        result = {
+            "facts": {
+                "returns-input": True,
+                "result-kind": "unchanged",
+                "traits": ["pure", "identity"],
+            },
+            "evidence": [{"path": "src/service.py", "name": "save", "line": 1}],
+        }
+        bound = bind_verifier(task, verifier)
+        self.assertTrue(verify_result(bound, result, self.root).correct)
+        for wrong in (
+            {**result, "facts": {**result["facts"], "returns-input": False}},
+            {**result, "facts": {**result["facts"], "unknown-fact": True}},
+            {**result, "facts": {"returns-input": True, "result-kind": "unchanged"}},
+            {**result, "evidence": []},
+        ):
+            with self.subTest(wrong=wrong):
+                self.assertFalse(verify_result(bound, wrong, self.root).correct)
+
+    def test_public_response_schema_exposes_shape_without_expected_values(self):
+        task = validate_task(self.task_mapping(workflow="concept", verifier_id="concept-facts"))
+        verifier = validate_verifier(
+            {
+                "verifier_id": "concept-facts",
+                "kind": "concept",
+                "facts": [
+                    {
+                        "fact_id": "returns-input",
+                        "expected": True,
+                        "evidence": [{"path": "src/service.py", "name": "save", "signatures": ["def save(value)"], "spans": [{"line_start": 1, "line_end": 1}]}],
+                    }
+                ],
+            }
+        )
+        schema = public_response_schema(bind_verifier(task, verifier))
+        encoded = json.dumps(schema, sort_keys=True, separators=(",", ":"))
+        self.assertIn('"facts"', encoded)
+        self.assertIn('"evidence"', encoded)
+        self.assertIn("returns-input", encoded)
+        self.assertNotIn('"expected"', encoded)
+        self.assertNotIn('"const"', encoded)
+        assert_strict_output_objects(self, schema)
+        self.assertEqual(encoded, json.dumps(public_response_schema(bind_verifier(task, verifier)), sort_keys=True, separators=(",", ":")))
 
     def test_explicit_refusal_and_empty_results_are_distinct_from_missing_evidence(self):
         refusal_task = validate_task(
