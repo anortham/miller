@@ -14,6 +14,10 @@
 
 ## Global Constraints
 
+Release closeout: Miller 1.28.0 shipped on 2026-09-06 with published julie-extract 2.40.5.
+M1 through M4 and the M5 implementation/dry qualification are released. The paid M5 campaign
+and the unmatched S1 runtime qualification remain separate, uncompleted work.
+
 - Julie **Audit Plan 4 is merged at `bb93a721`**. Do not repeat its refactors. The review found only a leftover unused Vue parsing wrapper and stale closure records; bounded correction ownership is separate from J1's store files.
 - Read each repository's current `CLAUDE.md`/`AGENTS.md`, its test strategy, and the assigned plan before editing. Repo rules override copied historical plan assumptions.
 - Use Miller to orient, inspect actual interfaces, and assess impact before implementing. Recheck line numbers and APIs against the assigned commit.
