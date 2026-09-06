@@ -196,6 +196,48 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task An_attach_write_does_not_recreate_a_root_deleted_after_admission()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+        using var cts = new CancellationTokenSource();
+        bool writeAttempted = false;
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(MainRoot,
+            HostOptions(adoption, adoptedStatusWriter: (root, record, mode) =>
+            {
+                Assert.Equal(CtDaemonWriteMode.CreateIfMissing, mode);
+                writeAttempted = true;
+                Directory.Delete(root, recursive: true);
+                CtDaemonLease.WriteStatus(root, record, mode);
+                return true;
+            }), cts.Token);
+        try
+        {
+            await WaitForAsync(() => disposed.Disposed, "the vanished context to detach");
+            Assert.True(writeAttempted);
+            Assert.False(run.IsCompleted);
+            Assert.False(Directory.Exists(WorktreeRoot));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    [Fact]
     public async Task A_missing_worktree_root_detaches_the_context_and_the_loop_keeps_running()
     {
         BuildLinkedWorktree();
@@ -264,6 +306,13 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
         facts.Tests.Add(FakeMillerFactSource.Hit("test:wt", "AppTests", "tests/AppTests.cs", isTest: true));
         var provider = new FakeContinuousTestProvider
         {
+            DiscoverCases = [new ProviderTestCase("test:wt", "test:wt", "test:wt", "test:wt",
+                Framework: "xunit", SourcePath: "tests/AppTests.cs",
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["ct_project_path"] = Path.GetFullPath(wtProject),
+                    ["inventory_probe"] = "worktree-discovery",
+                })],
             RunResult = new ProviderRunResult(
                 "run:wt",
                 "passed",
@@ -322,7 +371,7 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                     IReadOnlyList<ContinuousTestStatus> statuses =
                         wtStore.ListContinuousTestStatuses(wtId);
                     CtDaemonCommandAck? ack = CtCommandChannel.TryReadAck(MainRoot, request.CommandId);
-                    if (statuses.Count == 0 ||
+                    if (statuses.Count == 0 || !provider.Started.Task.IsCompletedSuccessfully ||
                         ack is not { State: CtDaemonCommandState.Acknowledged, Reason: "run" })
                         return false;
 
@@ -334,6 +383,8 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
 
             Assert.NotNull(routedStatuses);
             Assert.NotEmpty(routedStatuses);
+            Assert.Equal("worktree-discovery",
+                Assert.Single(wtStore.ListTestCases(wtId)).Metadata?["inventory_probe"]?.ToString());
             Assert.True(File.Exists(CtSchema.DbPathFor(WorktreeRoot)));
             Assert.Equal(CtDaemonCommandState.Acknowledged, routedAck?.State);
             Assert.Equal("run", routedAck?.Reason);

@@ -210,12 +210,16 @@ public sealed class CtDaemonLease : IDisposable
     internal static void WriteStatus(
         string workspaceRoot,
         CtDaemonStatusRecord status,
-        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing) =>
-        CtDaemonJson.WriteAtomic(
+        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing)
+    {
+        if (mode == CtDaemonWriteMode.CreateIfMissing)
+            CtDaemonStatusDirectory.Ensure(workspaceRoot);
+        CtDaemonJson.WriteAtomicInExistingDirectory(
             CtDaemonProtocol.StatusPath(workspaceRoot),
             status,
             CtDaemonJsonContext.Default.CtDaemonStatusRecord,
             mode);
+    }
 
     private static void WriteLease(string workspaceRoot, CtDaemonLeaseRecord record) =>
         CtDaemonJson.WriteAtomic(
@@ -429,6 +433,21 @@ public static class CtDaemonJson
         T value,
         JsonTypeInfo<T> typeInfo,
         CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing)
+        => WriteAtomicCore(path, value, typeInfo, mode, createParentDirectories: true);
+
+    internal static void WriteAtomicInExistingDirectory<T>(
+        string path,
+        T value,
+        JsonTypeInfo<T> typeInfo,
+        CtDaemonWriteMode mode)
+        => WriteAtomicCore(path, value, typeInfo, mode, createParentDirectories: false);
+
+    private static void WriteAtomicCore<T>(
+        string path,
+        T value,
+        JsonTypeInfo<T> typeInfo,
+        CtDaemonWriteMode mode,
+        bool createParentDirectories)
     {
         // Probed BEFORE the temp file is staged. Staging alone would recreate the directory this
         // mode exists to leave alone, because the temp name is a sibling of the destination.
@@ -436,7 +455,7 @@ public static class CtDaemonJson
             return;
 
         string? dir = Path.GetDirectoryName(path);
-        if (mode == CtDaemonWriteMode.CreateIfMissing && !string.IsNullOrEmpty(dir))
+        if (createParentDirectories && mode == CtDaemonWriteMode.CreateIfMissing && !string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         // The temp name carries the writing process AND thread. A fixed "<path>.tmp" is shared state:
