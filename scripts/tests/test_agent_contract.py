@@ -1596,7 +1596,13 @@ class AgentContractTests(unittest.TestCase):
             run["$defs"]["failureReason"]["enum"],
         )
         self.assertEqual(0, run["properties"]["tool_output_tokens"]["minimum"])
-        self.assertEqual(8, run["properties"]["tool_call_count"]["maximum"])
+        self.assertEqual(64, run["properties"]["tool_call_count"]["maximum"])
+        self.assertEqual(
+            64,
+            run["properties"]["tool_calls"]["items"]["properties"]["sequence"][
+                "maximum"
+            ],
+        )
         for field in [
             "tool_output_bytes",
             "tool_output_tokens",

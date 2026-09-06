@@ -16,15 +16,14 @@ from benchlib.agent_outcomes_contract import (
     bind_verifier,
     load_json,
     public_response_schema,
+    source_inventory,
+    source_snapshot_sha256,
     validate_campaign,
     validate_run_record,
     validate_task,
     validate_verifier,
     verify_result,
-    source_inventory,
-    source_snapshot_sha256,
 )
-
 
 SHA256 = "a" * 64
 COMMIT = "b" * 40
@@ -32,11 +31,24 @@ COMMIT = "b" * 40
 
 def assert_strict_output_objects(test, schema):
     if isinstance(schema, dict):
-        allowed = {"type", "description", "properties", "required", "additionalProperties", "items", "enum", "minItems", "maxItems", "minimum"}
+        allowed = {
+            "type",
+            "description",
+            "properties",
+            "required",
+            "additionalProperties",
+            "items",
+            "enum",
+            "minItems",
+            "maxItems",
+            "minimum",
+        }
         test.assertFalse(set(schema) - allowed)
         if schema.get("type") == "object":
             test.assertFalse(schema["additionalProperties"])
-            test.assertEqual(set(schema.get("properties", {})), set(schema.get("required", [])))
+            test.assertEqual(
+                set(schema.get("properties", {})), set(schema.get("required", []))
+            )
         for key, value in schema.items():
             if key == "properties":
                 for property_schema in value.values():
@@ -143,7 +155,12 @@ class AgentOutcomesContractTests(unittest.TestCase):
 
     def test_all_six_workflows_validate(self):
         workflows = (
-            "location", "concept", "references", "safe_edit", "repair", "test_selection"
+            "location",
+            "concept",
+            "references",
+            "safe_edit",
+            "repair",
+            "test_selection",
         )
         for workflow in workflows:
             with self.subTest(workflow=workflow):
@@ -156,9 +173,7 @@ class AgentOutcomesContractTests(unittest.TestCase):
         task = self.location_task(path="src/service.py", name="save", line=1)
         result = {"path": "src/service.py", "name": "save", "line": 1}
         self.assertTrue(verify_result(task, result, self.root).correct)
-        self.assertFalse(
-            verify_result(task, {**result, "line": 99}, self.root).correct
-        )
+        self.assertFalse(verify_result(task, {**result, "line": 99}, self.root).correct)
 
     def test_read_only_grading_rejects_changed_source_snapshot(self):
         task = self.location_task()
@@ -169,7 +184,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
         result = {"path": "src/service.py", "name": "save", "line": 1}
         checked = verify_result(task, result, self.root)
         self.assertFalse(checked.correct)
-        self.assertTrue(any("snapshot_sha256" in failure for failure in checked.failures))
+        self.assertTrue(
+            any("snapshot_sha256" in failure for failure in checked.failures)
+        )
 
     def test_signature_is_a_native_location_identity(self):
         task = self.location_task()
@@ -181,7 +198,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
         self.assertTrue(verify_result(task, result, self.root).correct)
 
     def test_concept_grading_requires_frozen_claim_and_evidence(self):
-        task = validate_task(self.task_mapping(workflow="concept", verifier_id="concept-save"))
+        task = validate_task(
+            self.task_mapping(workflow="concept", verifier_id="concept-save")
+        )
         verifier = validate_verifier(
             {
                 "verifier_id": "concept-save",
@@ -225,7 +244,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
         self.assertFalse(verify_result(bound, extra_wrong_evidence, self.root).correct)
 
     def test_fact_concept_grading_is_typed_and_paraphrase_independent(self):
-        task = validate_task(self.task_mapping(workflow="concept", verifier_id="concept-facts"))
+        task = validate_task(
+            self.task_mapping(workflow="concept", verifier_id="concept-facts")
+        )
         location = {
             "path": "src/service.py",
             "name": "save",
@@ -237,9 +258,21 @@ class AgentOutcomesContractTests(unittest.TestCase):
                 "verifier_id": "concept-facts",
                 "kind": "concept",
                 "facts": [
-                    {"fact_id": "returns-input", "expected": True, "evidence": [location]},
-                    {"fact_id": "result-kind", "expected": "unchanged", "evidence": [location]},
-                    {"fact_id": "traits", "expected": ["identity", "pure"], "evidence": [location]},
+                    {
+                        "fact_id": "returns-input",
+                        "expected": True,
+                        "evidence": [location],
+                    },
+                    {
+                        "fact_id": "result-kind",
+                        "expected": "unchanged",
+                        "evidence": [location],
+                    },
+                    {
+                        "fact_id": "traits",
+                        "expected": ["identity", "pure"],
+                        "evidence": [location],
+                    },
                 ],
             }
         )
@@ -263,7 +296,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
                 self.assertFalse(verify_result(bound, wrong, self.root).correct)
 
     def test_public_response_schema_exposes_shape_without_expected_values(self):
-        task = validate_task(self.task_mapping(workflow="concept", verifier_id="concept-facts"))
+        task = validate_task(
+            self.task_mapping(workflow="concept", verifier_id="concept-facts")
+        )
         verifier = validate_verifier(
             {
                 "verifier_id": "concept-facts",
@@ -272,7 +307,14 @@ class AgentOutcomesContractTests(unittest.TestCase):
                     {
                         "fact_id": "returns-input",
                         "expected": True,
-                        "evidence": [{"path": "src/service.py", "name": "save", "signatures": ["def save(value)"], "spans": [{"line_start": 1, "line_end": 1}]}],
+                        "evidence": [
+                            {
+                                "path": "src/service.py",
+                                "name": "save",
+                                "signatures": ["def save(value)"],
+                                "spans": [{"line_start": 1, "line_end": 1}],
+                            }
+                        ],
                     }
                 ],
             }
@@ -285,9 +327,18 @@ class AgentOutcomesContractTests(unittest.TestCase):
         self.assertNotIn('"expected"', encoded)
         self.assertNotIn('"const"', encoded)
         assert_strict_output_objects(self, schema)
-        self.assertEqual(encoded, json.dumps(public_response_schema(bind_verifier(task, verifier)), sort_keys=True, separators=(",", ":")))
+        self.assertEqual(
+            encoded,
+            json.dumps(
+                public_response_schema(bind_verifier(task, verifier)),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
 
-    def test_explicit_refusal_and_empty_results_are_distinct_from_missing_evidence(self):
+    def test_explicit_refusal_and_empty_results_are_distinct_from_missing_evidence(
+        self,
+    ):
         refusal_task = validate_task(
             self.task_mapping(workflow="concept", verifier_id="concept-refusal")
         )
@@ -299,7 +350,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
                 "claims": [
                     {
                         "claim_id": "claim-refusal",
-                        "acceptable_alternatives": ["the source cannot establish the behavior"],
+                        "acceptable_alternatives": [
+                            "the source cannot establish the behavior"
+                        ],
                         "evidence": [
                             {
                                 "path": "src/service.py",
@@ -318,7 +371,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
             "evidence": [{"path": "src/service.py", "name": "save", "line": 1}],
         }
         self.assertTrue(
-            verify_result(bind_verifier(refusal_task, refusal), refusal_result, self.root).correct
+            verify_result(
+                bind_verifier(refusal_task, refusal), refusal_result, self.root
+            ).correct
         )
 
         empty_task = validate_task(
@@ -334,7 +389,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
         )
         bound = bind_verifier(empty_task, empty)
         self.assertTrue(
-            verify_result(bound, {"status": "empty", "references": []}, self.root).correct
+            verify_result(
+                bound, {"status": "empty", "references": []}, self.root
+            ).correct
         )
         self.assertFalse(verify_result(bound, {"references": []}, self.root).correct)
 
@@ -365,9 +422,15 @@ class AgentOutcomesContractTests(unittest.TestCase):
             "spans": [{"line_start": 1, "line_end": 1}],
         }
         references = bind_verifier(
-            validate_task(self.task_mapping(workflow="references", verifier_id="refs-save")),
+            validate_task(
+                self.task_mapping(workflow="references", verifier_id="refs-save")
+            ),
             validate_verifier(
-                {"verifier_id": "refs-save", "kind": "references", "locations": [location]}
+                {
+                    "verifier_id": "refs-save",
+                    "kind": "references",
+                    "locations": [location],
+                }
             ),
         )
         reference_result = {
@@ -421,7 +484,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
         for path in ("/tmp/service.py", "../service.py", "src/../service.py"):
             with self.subTest(path=path):
                 result = {"path": path, "name": "save", "line": 1}
-                self.assertFalse(verify_result(self.location_task(), result, self.root).correct)
+                self.assertFalse(
+                    verify_result(self.location_task(), result, self.root).correct
+                )
 
         outside = self.root.parent / f"{self.root.name}-outside.py"
         outside.write_text("def save(value):\n    return value\n", encoding="utf-8")
@@ -465,9 +530,8 @@ class AgentOutcomesContractTests(unittest.TestCase):
         ):
             link = self.root / name
             os.symlink(target, link)
-            with self.subTest(name=name):
-                with self.assertRaises(ValueError):
-                    source_inventory(self.root)
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                source_inventory(self.root)
             link.unlink()
         cycle_a = self.root / "cycle-a"
         cycle_b = self.root / "cycle-b"
@@ -527,7 +591,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
     def test_load_json_rejects_duplicate_keys(self):
         path = self.root / "duplicate.json"
         path.write_text('{"contract_id":"agent-outcomes-v1","contract_id":"other"}')
-        with self.assertRaisesRegex(ValueError, "duplicate JSON object key: contract_id"):
+        with self.assertRaisesRegex(
+            ValueError, "duplicate JSON object key: contract_id"
+        ):
             load_json(path)
         nonfinite = self.root / "nonfinite.json"
         nonfinite.write_text('{"value":NaN}', encoding="utf-8")
@@ -574,13 +640,19 @@ class AgentOutcomesContractTests(unittest.TestCase):
 
     def test_published_schemas_accept_contract_examples_and_reject_unknown_fields(self):
         root = SCRIPTS_ROOT / "benchmarks" / "agent-outcomes"
-        task_schema = json.loads((root / "task.schema.json").read_text(encoding="utf-8"))
-        campaign_schema = json.loads((root / "campaign.schema.json").read_text(encoding="utf-8"))
+        task_schema = json.loads(
+            (root / "task.schema.json").read_text(encoding="utf-8")
+        )
+        campaign_schema = json.loads(
+            (root / "campaign.schema.json").read_text(encoding="utf-8")
+        )
         assert_schema_valid(self, task_schema, self.task_mapping(), task_schema)
         assert_schema_valid(self, campaign_schema, valid_campaign(), campaign_schema)
         validate_task(self.task_mapping())
         validate_campaign(valid_campaign())
-        invalid = self.task_mapping() | {"product_symbol_id": "python:src/service.py:save"}
+        invalid = self.task_mapping() | {
+            "product_symbol_id": "python:src/service.py:save"
+        }
         self.assertTrue(schema_errors(task_schema, invalid, task_schema, "$"))
         with self.assertRaisesRegex(ValueError, "product_symbol_id"):
             validate_task(invalid)
@@ -737,7 +809,9 @@ class AgentOutcomesContractTests(unittest.TestCase):
             bind_verifier(task, verifier), {}, self.root, executor=CopyExecutor()
         )
         self.assertFalse(checked.correct)
-        self.assertIn("acceptance test was deleted: tests/test_service.py", checked.failures)
+        self.assertIn(
+            "acceptance test was deleted: tests/test_service.py", checked.failures
+        )
 
     def init_candidate_repository(self):
         (self.root / "src" / "public.py").write_text("PUBLIC = 1\n", encoding="utf-8")
@@ -824,7 +898,11 @@ def schema_errors(schema, value, root_schema, path):
                 errors.extend(schema_errors(additional, item, root_schema, child))
         if "propertyNames" in schema:
             for key in value:
-                errors.extend(schema_errors(schema["propertyNames"], key, root_schema, f"{path}.<key>"))
+                errors.extend(
+                    schema_errors(
+                        schema["propertyNames"], key, root_schema, f"{path}.<key>"
+                    )
+                )
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):
             errors.append(f"{path}: too few items")
@@ -834,7 +912,11 @@ def schema_errors(schema, value, root_schema, path):
                 errors.append(f"{path}: duplicate items")
         if "items" in schema:
             for index, item in enumerate(value):
-                errors.extend(schema_errors(schema["items"], item, root_schema, f"{path}[{index}]"))
+                errors.extend(
+                    schema_errors(
+                        schema["items"], item, root_schema, f"{path}[{index}]"
+                    )
+                )
     if isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
             errors.append(f"{path}: too short")
@@ -888,8 +970,16 @@ def valid_campaign():
         "host": {"name": "codex", "version": "0.153.3", "binary_sha256": SHA256},
         "model": {"model_id": "gpt-fixture", "reasoning": "high"},
         "arms": [
-            {"arm_id": "native", "runtime_identity": None, "runtime_qualification_sha256": None},
-            {"arm_id": "native+miller-semantic", "runtime_identity": runtime_identity(), "runtime_qualification_sha256": SHA256},
+            {
+                "arm_id": "native",
+                "runtime_identity": None,
+                "runtime_qualification_sha256": None,
+            },
+            {
+                "arm_id": "native+miller-semantic",
+                "runtime_identity": runtime_identity(),
+                "runtime_qualification_sha256": SHA256,
+            },
         ],
         "repetition_count": 3,
         "order_seed": 1729,

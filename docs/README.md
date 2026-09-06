@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [Agent-outcomes harness qualification](findings/2026-09-04-agent-outcomes-harness-qualification.md) - qualified 36-task dry replay and separate frozen 24-task development-pilot proposal with zero paid execution; the prepared image passed 24 probes, all 36 offline verifier states, paired Chi same-CID CT, and the final branch gate, while the empirical campaign remains unapproved and unrun, with no efficacy or S1 claim.
 - [M2/M4 integration verification](findings/2026-09-06-m2-m4-integration-verification.md) - published 2.40.4 cursor ordering and recovery, SQLite sidecar parity/cost evidence, 40-language Content/Search/Context projection, byte-stable Context boundaries, and combined build/fast/Scale gates.
 - [Reader-retention restart recovery](findings/2026-09-05-reader-retention-restart-recovery.md) - the live legacy-store upgrade case missed by M1's initial fixtures, normal-workflow recovery, and the paired producer/bootstrap fixes that preceded the current 2.40.4 pin.
 - [Architecture review follow-up program](plans/2026-09-04-architecture-review-program.md) - seven implementation plans across Miller, julie-extractors, and julie-semantic-sidecar, with execution order, file ownership, compatibility gates, and verification. Its preparation-state table is historical; consult each plan's acceptance and findings for execution evidence.

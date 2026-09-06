@@ -1,0 +1,447 @@
+{
+  "campaign": {
+    "approved_money_ceiling": null,
+    "approved_total_run_count": 360,
+    "arms": [
+      {
+        "arm_id": "native",
+        "runtime_identity": null,
+        "runtime_qualification_sha256": null
+      },
+      {
+        "arm_id": "native+miller-lexical",
+        "runtime_identity": null,
+        "runtime_qualification_sha256": null
+      }
+    ],
+    "campaign_id": "miller-full-corpus-dry-2026-09-06",
+    "contract_id": "agent-outcomes-v1",
+    "host": {
+      "binary_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "name": "codex-cli",
+      "version": "0.153.4"
+    },
+    "model": {
+      "model_id": "UNAVAILABLE-REQUIRES-PAID-CAMPAIGN-APPROVAL",
+      "reasoning": "medium"
+    },
+    "network_policy": "denied",
+    "order_seed": 20260906,
+    "platform_toolchain_image_sha256": "f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+    "pricing": null,
+    "repetition_count": 5,
+    "resource_limits": {
+      "max_parallel_runs": 1,
+      "memory_bytes": 8589934592
+    },
+    "task_set_sha256": "4124b0f30f39b45ec5d6a5345d4c31270a8e876df3c546932532277d6178783b"
+  },
+  "campaign_sha256": "2a261171708ce0612866829af1fd9d1ffde8777f6cf94391f8c8b9ed6116fe86",
+  "contract_id": "agent-outcomes-controller-v1",
+  "execution_envelope": {
+    "codex_path": "/usr/local/bin/codex",
+    "comparison_mode": "primary",
+    "ct_known_changes": null,
+    "ct_lifecycle": null,
+    "image_reference": "localhost/miller-agent-outcomes@sha256:f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+    "miller_path": "/opt/miller/miller",
+    "podman_path": "podman",
+    "prepared_environments_path": "/home/murphy/source/miller-evidence/agent-outcomes-task6/runtime/prepared8/prepared-binding-e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1.json",
+    "prepared_environments_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1",
+    "provider_transport": null,
+    "runtime_qualification_path": null,
+    "runtime_qualification_sha256": null,
+    "sample_size_plan": {
+      "approved_budget_sha256": "1da1df124624e82fec10d68867e24582a37de588510ca8cefb504e0170d2dc0a",
+      "phase": "pilot",
+      "pilot_variance": null
+    },
+    "semantic_runtime_binding_path": null,
+    "semantic_runtime_binding_sha256": null,
+    "setup_components": [
+      {
+        "applies_to_arms": [
+          "native",
+          "native+miller-lexical"
+        ],
+        "bucket": "shared",
+        "component_id": "offline-dependency-image",
+        "cost": 0.0,
+        "environment_id": "prepared8-f3e39a672f0a",
+        "evidence_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1",
+        "wall_time_seconds": null
+      }
+    ],
+    "source_roots": {
+      "chi-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi-repair-seed",
+      "chi-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "command-line-api-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api-repair-seed",
+      "command-line-api-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "express-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express-repair-seed",
+      "express-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "flask-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask-repair-seed",
+      "flask-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "rake-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake-repair-seed",
+      "rake-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "ripgrep-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep-repair-seed",
+      "ripgrep-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep"
+    },
+    "task_bindings": {
+      "chi-concept": {
+        "public_response_schema_sha256": "69bf4c5bca492b112b3e75b2f4bfb1499a389d4e3a1b33d0ba4f82ced6bf529a",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+        "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+        "task_sha256": "5a6771ba1f75e22d078f5c6ba9cb7b4f2d511a5fae6c29a49ff68408f5a0c4a1",
+        "verifier_sha256": "bf01994dfe978c2c84f02049a0ffb32ce60e989c060d14353978c3940e8b2ec4"
+      },
+      "chi-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+        "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+        "task_sha256": "b794fb85ea4d95eb619b38ef53ae855543aa83a96aef2c767574b9c7f583797e",
+        "verifier_sha256": "f2b9d021d2021817489163317c3f45dfd4daa8a56482c7007ea3b32b66d2a76b"
+      },
+      "chi-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+        "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+        "task_sha256": "04528a0c1edc6171bb37499d8491de0817fdf9523fa8a84bd45bd9bec99c3242",
+        "verifier_sha256": "73053a58d21b163a3204b0cb033e9c48cd4cd4b95ce877c90b99a6c8f2be61ec"
+      },
+      "chi-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi-repair-seed",
+        "source_snapshot_sha256": "40cca63de3b08a94eda5d121e3ec36542173d7cbe64338f806d52b41efc3301c",
+        "task_sha256": "84b24eedc2d63bd6e03ae9feace81e45119433aa2b9513cd8add82098387d858",
+        "verifier_sha256": "291539193afaf2a4e9ac1c45bfbe2affc289165734f1e494625fde0b58bded73"
+      },
+      "chi-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+        "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+        "task_sha256": "2411ef9fef2b6505a761752ea45c8d263faf7027d4b8b4e445067dd0849bdd8b",
+        "verifier_sha256": "a9c60f76ef7fe80fa13d2f6f7f3f9bbe05016349a7584d3a1d98f99c58496c28"
+      },
+      "chi-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "chi",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+        "source_snapshot_sha256": "b6bfd79d0a74e8b1486c2b11ad3ad36a545afa67c9b4260d6ba6455e4facba02",
+        "task_sha256": "9a868204e970ad34424473955167c2924457e0a8ed2e1b6f1d372d68ea1c037f",
+        "verifier_sha256": "7f0f723136f6efa7bbe1ef36d8c16160f5279c5c5a52617d5c9491e3d66e6197"
+      },
+      "command-line-api-concept": {
+        "public_response_schema_sha256": "e82735241c8f5f1ef1da70f526a37be1db1631d524f58ae55ba55ea8d0bdb03a",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+        "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+        "task_sha256": "72d8953ac59307ec5254148cad1d0fc81bca26a9e1fda63c1e4af4db7ced11db",
+        "verifier_sha256": "a681f3042dad95776f02c9acf386b5ec9efcc68c88bfb7519bb9a9a2488a58a5"
+      },
+      "command-line-api-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+        "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+        "task_sha256": "6682ea4ec316c99bcd32a09642ca5a19401d2704a226f27aababee397a5d72b5",
+        "verifier_sha256": "3dd413c790ea8ca9af3600605dbca1abb876a3a1c938527023c16a9916786021"
+      },
+      "command-line-api-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+        "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+        "task_sha256": "02dd176b75cfba472766ced770a18ab11e75c3b18bb6478dc160edca916fc06d",
+        "verifier_sha256": "ba8e6aacdafcc676d1464755b5478fafaabed89f04113b8f2c68b6ec30376ff1"
+      },
+      "command-line-api-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api-repair-seed",
+        "source_snapshot_sha256": "49079fe5ea476f9d9e271ff44ba442c0679d5267c3e19252be9eaa4a5826087a",
+        "task_sha256": "e7564fdc6c01cfa096ba486eb37e735bdbad1a9d65f9b8b1c0a266df42e1b4f9",
+        "verifier_sha256": "1005bbff0054dc54712e1ee64d676bc9ddae2c823e4b3d5bb2fa2ecab287a57c"
+      },
+      "command-line-api-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+        "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+        "task_sha256": "d4601408ef8e89a1715afb80e611e8ea6522c98bac61d7957f37448f91fe0c89",
+        "verifier_sha256": "15fc49b741914062085498d0271351dcf8af1688382e9051d46645ca56eedd48"
+      },
+      "command-line-api-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "command-line-api",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+        "source_snapshot_sha256": "b8036a09a71d45f64e2546994fdeda45764b5821411cc39ce8af62f230689880",
+        "task_sha256": "7cf4d4e07b7c9d7faf567eaee335e684284d01b66d5023d64eb2615f2141cfe1",
+        "verifier_sha256": "d15912aefc25d80dfbafc24d4c7c74a7c9ae0af51e9683286c175376772eb1c9"
+      },
+      "express-concept": {
+        "public_response_schema_sha256": "0e14d0a1fbd2d73d868de7826d32cd8643051cd0e297742d5be082f32797a63e",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+        "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+        "task_sha256": "5e66ae7613213b4f0d375989fe479c0d6e1d5abbd5c26abacb24c4e057fb4b77",
+        "verifier_sha256": "0e72ab38176f3c8126b2614e2fa88bf337611dfd32bbc88c082491606e5748df"
+      },
+      "express-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+        "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+        "task_sha256": "a09d30070fa4e924509f5a3526ea8b3ec67f3ae4fdad9e37531ac9ef2da7b48f",
+        "verifier_sha256": "8930592bcfaed60be029eb72b115c4f243c27a3cc4a697152bfa9fce940de655"
+      },
+      "express-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+        "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+        "task_sha256": "8daa83093c5a6457f15ca3660d8835e087ede855d1cb7c4ed1e9beb8bf33f73e",
+        "verifier_sha256": "9f85ef2b0fac06c1d4da013e0a3cce2872f8d28724dea8369cb3c9e2c7cde10f"
+      },
+      "express-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express-repair-seed",
+        "source_snapshot_sha256": "530fbe56b525bcee4b45c650cb497f83d3794a5f3ee2f81e596a1c40084182cd",
+        "task_sha256": "197b1f93b08ce1c197694a9e1e6fbd487717975e49bc5303d1b742aed322c064",
+        "verifier_sha256": "049e69e977f5b14f5aa9be3df7df220ec90c6b82b72d87261fd30ad7e0137b51"
+      },
+      "express-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+        "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+        "task_sha256": "c4fdc6c7613a368ebc670a6a709b52d57fc0931d0c2afa32376c6af6ccb4269e",
+        "verifier_sha256": "d542bffe0102c54dad1e142740595a2451a2aebe3f72c2631d8d3750084c3f47"
+      },
+      "express-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "express",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+        "source_snapshot_sha256": "12796f4d7dceaa06ca08367434ce26dd8888f2eb42fdcafcb12a0129048ed93a",
+        "task_sha256": "f1ce2587d94afa2506e027547a459a5a994bc133e24469815441be256e601c25",
+        "verifier_sha256": "7df7a3598b956b659c20fc60607244f3d4d1dec88b002230995b91deeca2ac81"
+      },
+      "flask-concept": {
+        "public_response_schema_sha256": "ff1d111b11a3bf6910beb0960aff248fc2421bb7b66c8ddbe9a75c201770b491",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+        "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+        "task_sha256": "02596fc22c531ad16dd70e262d86644f03570fa877e5bf4d5eae5bd2c0c8b4a4",
+        "verifier_sha256": "34568249aece1353b08205a2b0eb0ae1daf2557293647dab6e664038da15a412"
+      },
+      "flask-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+        "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+        "task_sha256": "a83bd33d4b0dbcd48eb9571e2df73c780b700963f81bdef2935aab1e36cb17d9",
+        "verifier_sha256": "dfdba845186c95a510fd92c3a21f51f01daa1cacb4873b52878d4fc6a47b2667"
+      },
+      "flask-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+        "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+        "task_sha256": "81f1eaa24dfc43eed05cf7e5b6ace309aca1287ecd2cea2b6f247761ef3819c2",
+        "verifier_sha256": "041ea36e6f4057adcab58c1d18e5d5fcd40353de021008d48620862e6895a740"
+      },
+      "flask-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask-repair-seed",
+        "source_snapshot_sha256": "7b8567ddc4fc45556a84e9bed28ed57c4ea503aae33de12e5be23902fc93397f",
+        "task_sha256": "efe88c1ec3368d32bed3798b9f53867dec8299109fcd49d817d0eabd99d49994",
+        "verifier_sha256": "b2be1290c72d9442eab3b593c72e05ebf5b2b89be582f1a9d06786b436d72803"
+      },
+      "flask-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+        "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+        "task_sha256": "361812bdb526bf35434afe93ef39a39e793b5ce5e00c17606fbb14c5d2da0d7e",
+        "verifier_sha256": "b0af52090c8aa189f954f368729378a6f57ac7d8df53370c427637bc86928a92"
+      },
+      "flask-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "flask",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+        "source_snapshot_sha256": "e7decee4b5f0c7af003b7d9916bc2d6f9e5d725628a3d1ea8c18e4518d302055",
+        "task_sha256": "571b9e361b33c616a9b8c23bc2d6c78a9bda1082b2e527d9ff32be40c0d2e7e2",
+        "verifier_sha256": "6dd0ccbd2b6bae99e3fbea68cf9b8e49e01b725916ac6685c2017ce061c53ff7"
+      },
+      "rake-concept": {
+        "public_response_schema_sha256": "16acf2bc0bb4b56ee04b3d1df64fb5af756b647f44f830a8f846e5b7227aec3c",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+        "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+        "task_sha256": "9a038a1fbba7e0a3250600fd4f8abd336363a8f905a0d3e2e2d480f37050b40a",
+        "verifier_sha256": "2dfaa21f6d1ae072fc5453762088af6010cbddfef3a302ac947a1cae1208c8b2"
+      },
+      "rake-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+        "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+        "task_sha256": "f987600966fc1fdc91b62b5022cd6f2968bf39791567903e9811de15a0918790",
+        "verifier_sha256": "823c2319108e39545722542825f49ea79ad482a3326f49616a33717c81f2bff8"
+      },
+      "rake-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+        "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+        "task_sha256": "ead77981a69053fd64d67e0239ef5b7df17812f424ba07f4664811b0cc9fbf4a",
+        "verifier_sha256": "e030248bdef60289b780471b4b5fe2642bddcbf57abd00daa4a863c8112eeb29"
+      },
+      "rake-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake-repair-seed",
+        "source_snapshot_sha256": "ca60388aecdd2de5e118ade64786156302c8ff77f903db45251441965a23cd58",
+        "task_sha256": "4235698ec7909e290287e26713cca495fdc6bab315d8c1f787b9f87854f5d275",
+        "verifier_sha256": "498f5d5bfa1935093c92f0c339af7b3c8df640edb096bf4baf5f7b8f91a2b96e"
+      },
+      "rake-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+        "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+        "task_sha256": "52cfb220efc6194531e147e580ea4aab2d9af5cb4b062e28991e2e014a2d5fcb",
+        "verifier_sha256": "ce65235125df3022b8fffef958323d64d14997b183c5e4474c8032d8bc44cb23"
+      },
+      "rake-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "rake",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+        "source_snapshot_sha256": "77d3d8bd92b187b655b5d4c3dbe863e2bd86208a538ecdeedf1a569376cc2044",
+        "task_sha256": "4f711bb517bbd337e81bf9179c94e73db9b7599975a8b5cf6417e40c418fa7f9",
+        "verifier_sha256": "2450d6b653f587e0b595f27bcaa1ac3c2936085561d897c91ea9a151e6adfbde"
+      },
+      "ripgrep-concept": {
+        "public_response_schema_sha256": "c564d6a77ec44f1ab5d7495693aafe1c15865695e52b371033ea5d3d94054afe",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+        "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+        "task_sha256": "1f024d52bb2798b9a48d0766fa4177d4cde3d15e80e7f553429ed03012137bc1",
+        "verifier_sha256": "e310b8fe058e97c941fcb1d49737b4116896a20a71f9e9345d8160b2613eaae5"
+      },
+      "ripgrep-location": {
+        "public_response_schema_sha256": "b66baf56fb1252fc556746501e67a178f1fe453f9611af7c3d52d527ee814dd3",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+        "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+        "task_sha256": "d33ea29c526d0cc306d9954b59fa526bcf9ae8a88d3d5f3d94e8576a7e570236",
+        "verifier_sha256": "043fbd7a25a3b74f93035053c14619fc737bb7ea8949073e77b79f65510fe6db"
+      },
+      "ripgrep-references": {
+        "public_response_schema_sha256": "7b4b796b93cea3d8c8c290a1884b78b72fb4a5cee512e8596f2a26bd2ec13408",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+        "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+        "task_sha256": "2f3d7652c44e2b320d4364be5be6f370aed532bef5111a278098965087a833ef",
+        "verifier_sha256": "11004f1f89015411cde92c220094cb686deba90bcdf5636b3388c6a7726b135a"
+      },
+      "ripgrep-repair": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep-repair-seed",
+        "source_snapshot_sha256": "42c19d2eeebf8c8fe57ea4c5f44dace7465a4b9e1bf9b943b757984eaa405766",
+        "task_sha256": "3f47674d5bc4eec3e9a5f3713f6c8257644742481818f2d34a266001d5548915",
+        "verifier_sha256": "8809914f4ac3f41715007aababd6195433031fde1f30080e9fefde2cff4eb1e6"
+      },
+      "ripgrep-safe-edit": {
+        "public_response_schema_sha256": "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+        "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+        "task_sha256": "71e600b11b77d0d63acd0da0c60a44f45072684b8621ed2664f3e06c171a6d4f",
+        "verifier_sha256": "d3d791453ad4cd30e0c45f393adf7f10ca2db287cde94af4c407712d8bbb5a0b"
+      },
+      "ripgrep-test-selection": {
+        "public_response_schema_sha256": "07712f6f3524a280511b7cea5e6e18d3759c180b5de3778d38b67e54b098eed7",
+        "repo_id": "ripgrep",
+        "source_root": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+        "source_snapshot_sha256": "10c3228fca02bdbb398c466d49a72db1a0df282f394b241d3e52a3e4d224a04d",
+        "task_sha256": "fc4eef39208878e430c787a4829353f0de33fa336b4cec6bc116fbab6e6b340f",
+        "verifier_sha256": "e3683018865f7735f420e195a23b1cc249cd8917d294c919fae251b628ebe0f3"
+      }
+    },
+    "task_ids": [
+      "flask-location",
+      "flask-concept",
+      "flask-references",
+      "flask-safe-edit",
+      "flask-repair",
+      "flask-test-selection",
+      "express-location",
+      "express-concept",
+      "express-references",
+      "express-safe-edit",
+      "express-repair",
+      "express-test-selection",
+      "chi-location",
+      "chi-concept",
+      "chi-references",
+      "chi-safe-edit",
+      "chi-repair",
+      "chi-test-selection",
+      "ripgrep-location",
+      "ripgrep-concept",
+      "ripgrep-references",
+      "ripgrep-safe-edit",
+      "ripgrep-repair",
+      "ripgrep-test-selection",
+      "command-line-api-location",
+      "command-line-api-concept",
+      "command-line-api-references",
+      "command-line-api-safe-edit",
+      "command-line-api-repair",
+      "command-line-api-test-selection",
+      "rake-location",
+      "rake-concept",
+      "rake-references",
+      "rake-safe-edit",
+      "rake-repair",
+      "rake-test-selection"
+    ],
+    "task_manifest_path": "/home/murphy/source/miller/.worktrees/wal-recurrence/scripts/benchmarks/agent-outcomes/tasks.jsonl",
+    "task_manifest_sha256": "489f55a1f2956f37179a417a4f02e84ec88bd65228d2c775dcab8a47677ac104",
+    "verifier_manifest_path": "/home/murphy/source/miller/.worktrees/wal-recurrence/scripts/benchmarks/agent-outcomes/verifiers/verifiers.json",
+    "verifier_manifest_sha256": "29cb6ccca44e8a964b51c59ab07ec59041cfec5d491cb8bed11a0f8017b4e25f"
+  },
+  "execution_envelope_sha256": "edae53d4e662ee9fdb28a012c26ab169673dd2744d33129299f9a13825e036d9"
+}

@@ -1,0 +1,2234 @@
+{
+  "arm_identities": {
+    "native": {
+      "arm_id": "native",
+      "runtime_identity": null,
+      "runtime_qualification_sha256": null
+    },
+    "native+miller-lexical": {
+      "arm_id": "native+miller-lexical",
+      "runtime_identity": null,
+      "runtime_qualification_sha256": null
+    }
+  },
+  "campaign_sha256": "2a261171708ce0612866829af1fd9d1ffde8777f6cf94391f8c8b9ed6116fe86",
+  "contract_id": "agent-outcomes-run-v1",
+  "dry_run": true,
+  "execution_envelope_sha256": "edae53d4e662ee9fdb28a012c26ab169673dd2744d33129299f9a13825e036d9",
+  "plan": [
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "chi-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "command-line-api-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "express-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "flask-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "rake-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-concept"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-location"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-references"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-repair"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-safe-edit"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 1,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 1,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 2,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 2,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 3,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 3,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 1,
+      "repetition": 4,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 2,
+      "repetition": 4,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native+miller-lexical",
+      "order": 1,
+      "repetition": 5,
+      "task_id": "ripgrep-test-selection"
+    },
+    {
+      "arm_id": "native",
+      "order": 2,
+      "repetition": 5,
+      "task_id": "ripgrep-test-selection"
+    }
+  ],
+  "plan_sha256": "3b8c7f6cb05d03ed4238a814183d8478e1dce5d197c61d7d0001617b3e1f923e",
+  "planned_attempt_count": 360,
+  "setup_components": [
+    {
+      "applies_to_arms": [
+        "native",
+        "native+miller-lexical"
+      ],
+      "bucket": "shared",
+      "component_id": "offline-dependency-image",
+      "cost": 0.0,
+      "environment_id": "prepared8-f3e39a672f0a",
+      "evidence_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1",
+      "wall_time_seconds": null
+    }
+  ],
+  "task_repositories": {
+    "chi-concept": "chi",
+    "chi-location": "chi",
+    "chi-references": "chi",
+    "chi-repair": "chi",
+    "chi-safe-edit": "chi",
+    "chi-test-selection": "chi",
+    "command-line-api-concept": "command-line-api",
+    "command-line-api-location": "command-line-api",
+    "command-line-api-references": "command-line-api",
+    "command-line-api-repair": "command-line-api",
+    "command-line-api-safe-edit": "command-line-api",
+    "command-line-api-test-selection": "command-line-api",
+    "express-concept": "express",
+    "express-location": "express",
+    "express-references": "express",
+    "express-repair": "express",
+    "express-safe-edit": "express",
+    "express-test-selection": "express",
+    "flask-concept": "flask",
+    "flask-location": "flask",
+    "flask-references": "flask",
+    "flask-repair": "flask",
+    "flask-safe-edit": "flask",
+    "flask-test-selection": "flask",
+    "rake-concept": "rake",
+    "rake-location": "rake",
+    "rake-references": "rake",
+    "rake-repair": "rake",
+    "rake-safe-edit": "rake",
+    "rake-test-selection": "rake",
+    "ripgrep-concept": "ripgrep",
+    "ripgrep-location": "ripgrep",
+    "ripgrep-references": "ripgrep",
+    "ripgrep-repair": "ripgrep",
+    "ripgrep-safe-edit": "ripgrep",
+    "ripgrep-test-selection": "ripgrep"
+  }
+}

@@ -263,10 +263,10 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
    These are proposed commands to implement and test. `run` without `--dry-run` additionally requires an approval record whose campaign digest/run ceiling match. Refuse a changed campaign, missing usage-cap enforcement, or exhausted budget. A host that reports usage only at completion must count overshoot and stop further attempts; do not claim a hard token ceiling it cannot enforce.
 
 **Acceptance criteria:**
-- [ ] Fake paired runs produce deterministic scores and preserve failures/voids.
-- [ ] Cost includes failed work and setup; zero-success cases cannot look cheap.
-- [ ] No detected difference is reported as inconclusive, not proof of equivalence.
-- [ ] The historical scorer and original benchmark outputs remain untouched.
+- [x] Fake paired runs produce deterministic scores and preserve failures/voids.
+- [x] Cost includes failed work and setup; zero-success cases cannot look cheap.
+- [x] No detected difference is reported as inconclusive, not proof of equivalence.
+- [x] The historical scorer and original benchmark outputs remain untouched.
 
 ## Task 6: Qualify the harness, then run only approved campaigns
 
@@ -279,16 +279,19 @@ Commit mode: `parallel-lead-commit`. Workers hand verified owned files to the le
 5. Write the result even if Miller loses. State where it helped, where it hurt, operational cost, and uncertainty. Keep implementation completion distinct from the empirical conclusion. Update `docs/README.md` to the new finding; update public claims only from reviewed completed results.
 
 **Acceptance criteria:**
-- [ ] Harness qualification is reproducible without paid calls.
-- [ ] Every measured result is bound to a frozen campaign and complete attempt ledger.
-- [ ] Unsupported hardware/hosts and unapproved runs are explicit, not counted as passes.
+- [x] Harness qualification is reproducible without paid calls.
+- [x] Every measured result is bound to a frozen campaign and complete attempt ledger.
+  No empirical result exists yet; all generated dry records are bound to the frozen dry campaign and complete ledger.
+- [x] Unsupported hardware/hosts and unapproved runs are explicit, not counted as passes.
 - [ ] Final recommendations follow results; a negative result does not trigger label changes.
 
 ## Handoff and completion ledger
 
 | Task | Commit | Command/evidence | Scope | Timestamp | Result |
 |---|---|---|---|---|---|
-| Task 3 | Pending integration commit | `python3 -B -m unittest discover -s scripts/tests -p 'test_agent_outcomes_*.py'` | native runner, contract, corpus integration | 2026-09-06T08:09:38Z | 75 passed in 4.458s; fake-only, no credentials/network |
-| Task 4 | Pending integration commit | `test_agent_outcomes_contract.py` 22 passed; `test_agent_outcomes_corpus.py` 12 passed; external replay digests in task report | six repositories, 36 tasks, mutation and full-inventory replay | 2026-09-06T08:09:38Z | Accepted; no model run or efficacy claim |
+| Task 3 | `466629ed` | `python3 -B -m unittest discover -s scripts/tests -p 'test_agent_outcomes_*.py'` | native runner, contract, corpus integration | 2026-09-06T08:09:38Z | 75 passed in 4.458s; fake-only, no credentials/network |
+| Task 4 | `466629ed` | `test_agent_outcomes_contract.py` 22 passed; `test_agent_outcomes_corpus.py` 12 passed; external replay digests in task report | six repositories, 36 tasks, mutation and full-inventory replay | 2026-09-06T08:09:38Z | Accepted; no model run or efficacy claim |
+| Task 5 | Pending integration commit | controller 23 passed; scoring 7 passed; CT 20 passed; final branch gate 436 ran/433 passed/3 skipped/0 failed (`fc510d3a…`) | paired controller, durable ledger, prepared/CT adapters, accounting, typed S1 projection | 2026-09-06T12:07:48Z | Implementation and exact-image physical integration accepted; no paid/model run |
+| Task 6 dry | Pending integration commit | exact `validate` / `freeze` / `run --dry-run` / `score`; prepared probes `cb37e1e8…`; offline replay `954c6032…`; paired CT `20dec2ea…`; final gate `fc510d3a…`; [`findings/2026-09-04-agent-outcomes-harness-qualification.md`](../findings/2026-09-04-agent-outcomes-harness-qualification.md) | full 36-task synthetic replay; separate 24-development-task × 2-arm × 5-repetition pilot freeze; dry attempt phase denied network and made no provider/model call | 2026-09-06T12:07:48Z | Harness qualified; 360 synthetic attempts and actual model/provider spend 0; proposed paid pilot ceiling 240 attempts excludes 12 holdouts; empirical campaign unapproved and unrun |
 
 Execution is complete for implementation when Tasks 1-5 and Task 6 dry qualification pass. The empirical campaign is a separate explicitly reported approval-dependent deliverable. Preserve any existing task worktree and all user changes; do not commit/push/release merely because a benchmark finished.

@@ -1,0 +1,43 @@
+FROM registry.fedoraproject.org/fedora@sha256:b013b98e4f4c43b46fb59b71b9d3d1f4f33df503ff84b1ea3415cafc32ead87c
+
+RUN dnf install -y \
+        cargo \
+        clang \
+        diffutils \
+        dotnet-sdk-8.0 \
+        dotnet-sdk-10.0 \
+        findutils \
+        gcc \
+        gcc-c++ \
+        git \
+        golang \
+        make \
+        nodejs20 \
+        nodejs20-bin \
+        nodejs20-npm \
+        openssl-devel \
+        patch \
+        pkgconf-pkg-config \
+        procps-ng \
+        python3 \
+        ruby \
+        ruby-devel \
+        rubygem-bundler \
+        rust \
+        uv \
+        which \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+COPY --chmod=0755 codex /usr/local/bin/codex
+COPY miller/ /opt/miller/
+
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN test "$(codex --version)" = "codex-cli 0.153.4" \
+    && test -x /opt/miller/miller \
+    && /opt/miller/miller --version
+
+WORKDIR /workspace

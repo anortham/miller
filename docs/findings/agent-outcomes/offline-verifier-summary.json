@@ -1,0 +1,32 @@
+{
+  "binding_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1",
+  "image_digest": "f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+  "network_policy": "none",
+  "raw_summary_path": "/tmp/miller-agent-runtime-evidence.nGFJDI/offline-replay-final3/offline-replay-summary-954c60323abe8e7cc9f83e72f70ac8ecbc54c9eb01be2747ab02ede9db1f93dd.json",
+  "raw_summary_sha256": "954c60323abe8e7cc9f83e72f70ac8ecbc54c9eb01be2747ab02ede9db1f93dd",
+  "repositories": [
+    "chi",
+    "command-line-api",
+    "express",
+    "flask",
+    "rake",
+    "ripgrep"
+  ],
+  "repository_setup_record_count": 6,
+  "schema": "agent-outcomes-offline-verifier-summary-v1",
+  "states": {
+    "baseline": {
+      "expected_incorrect": 12,
+      "ran": 12
+    },
+    "plausible_wrong": {
+      "expected_incorrect": 12,
+      "ran": 12
+    },
+    "reference": {
+      "expected_correct": 12,
+      "ran": 12
+    }
+  },
+  "verifier_state_count": 36
+}

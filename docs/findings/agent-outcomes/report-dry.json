@@ -1,0 +1,422 @@
+{
+  "arms": {
+    "native": {
+      "arm_id": "native",
+      "attempt_count": 180,
+      "cost_coverage": {
+        "measured": 181,
+        "total": 181
+      },
+      "cost_per_verified_success": 0.0,
+      "infrastructure_void_count": 36,
+      "infrastructure_void_spend": 0.0,
+      "measured_cost_subtotal": 0.0,
+      "measured_infrastructure_void_spend": 0.0,
+      "measured_model_tokens_subtotal": 86184,
+      "metrics": {
+        "calls": {
+          "miller": 0,
+          "native": {
+            "command": 183
+          }
+        },
+        "correctness": {
+          "denominator": 144,
+          "rate": 0.25,
+          "verified_successes": 36
+        },
+        "fallback": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "irrelevant_output": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "retries": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "retrieval_diagnostics": {
+          "miller_calls": 0,
+          "quality": null,
+          "quality_coverage": {
+            "measured": 0,
+            "total": 180
+          }
+        },
+        "sufficient_evidence": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "tokens": {
+          "coverage": {
+            "measured": 180,
+            "total": 180
+          },
+          "measured_subtotal": 86184,
+          "total": 86184
+        },
+        "wall_time_seconds": {
+          "coverage": {
+            "measured": 180,
+            "total": 180
+          },
+          "total": 32472.0
+        }
+      },
+      "miller_calls": 0,
+      "native_tool_counts": {
+        "command": 183
+      },
+      "outcome_counts": {
+        "correct": 36,
+        "incorrect": 36,
+        "infrastructure_void": 36,
+        "product_error": 36,
+        "timeout": 36,
+        "unsupported": 0
+      },
+      "runtime_identity": null,
+      "runtime_qualification_sha256": null,
+      "scored_attempt_count": 144,
+      "setup": {
+        "cold_setup_cost": 0.0,
+        "cold_setup_wall_time_seconds": null,
+        "component_count": 1,
+        "cost_coverage": {
+          "measured": 1,
+          "total": 1
+        },
+        "cost_per_task": {
+          "1": 0.0,
+          "10": 0.0,
+          "100": 0.0
+        },
+        "wall_time_coverage": {
+          "measured": 0,
+          "total": 1
+        }
+      },
+      "success_count": 36,
+      "success_rate": 0.25,
+      "timeout_product_error_rate": 0.5,
+      "token_coverage": {
+        "measured": 180,
+        "total": 180
+      },
+      "total_cost": 0.0,
+      "total_model_tokens": 86184,
+      "total_wall_time_seconds": 32472.0,
+      "unsupported_rate": 0.0,
+      "wall_time_coverage": {
+        "measured": 180,
+        "total": 180
+      },
+      "wrong_action_rate": 0.25
+    },
+    "native+miller-lexical": {
+      "arm_id": "native+miller-lexical",
+      "attempt_count": 180,
+      "cost_coverage": {
+        "measured": 181,
+        "total": 181
+      },
+      "cost_per_verified_success": 0.0,
+      "infrastructure_void_count": 36,
+      "infrastructure_void_spend": 0.0,
+      "measured_cost_subtotal": 0.0,
+      "measured_infrastructure_void_spend": 0.0,
+      "measured_model_tokens_subtotal": 86256,
+      "metrics": {
+        "calls": {
+          "miller": 288,
+          "native": {
+            "command": 177
+          }
+        },
+        "correctness": {
+          "denominator": 144,
+          "rate": 0.25,
+          "verified_successes": 36
+        },
+        "fallback": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "irrelevant_output": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "retries": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "retrieval_diagnostics": {
+          "miller_calls": 288,
+          "quality": null,
+          "quality_coverage": {
+            "measured": 0,
+            "total": 180
+          }
+        },
+        "sufficient_evidence": {
+          "coverage": {
+            "measured": 0,
+            "total": 180
+          },
+          "value": null
+        },
+        "tokens": {
+          "coverage": {
+            "measured": 180,
+            "total": 180
+          },
+          "measured_subtotal": 86256,
+          "total": 86256
+        },
+        "wall_time_seconds": {
+          "coverage": {
+            "measured": 180,
+            "total": 180
+          },
+          "total": 32508.0
+        }
+      },
+      "miller_calls": 288,
+      "native_tool_counts": {
+        "command": 177
+      },
+      "outcome_counts": {
+        "correct": 36,
+        "incorrect": 36,
+        "infrastructure_void": 36,
+        "product_error": 36,
+        "timeout": 36,
+        "unsupported": 0
+      },
+      "runtime_identity": null,
+      "runtime_qualification_sha256": null,
+      "scored_attempt_count": 144,
+      "setup": {
+        "cold_setup_cost": 0.0,
+        "cold_setup_wall_time_seconds": null,
+        "component_count": 1,
+        "cost_coverage": {
+          "measured": 1,
+          "total": 1
+        },
+        "cost_per_task": {
+          "1": 0.0,
+          "10": 0.0,
+          "100": 0.0
+        },
+        "wall_time_coverage": {
+          "measured": 0,
+          "total": 1
+        }
+      },
+      "success_count": 36,
+      "success_rate": 0.25,
+      "timeout_product_error_rate": 0.5,
+      "token_coverage": {
+        "measured": 180,
+        "total": 180
+      },
+      "total_cost": 0.0,
+      "total_model_tokens": 86256,
+      "total_wall_time_seconds": 32508.0,
+      "unsupported_rate": 0.0,
+      "wall_time_coverage": {
+        "measured": 180,
+        "total": 180
+      },
+      "wrong_action_rate": 0.25
+    }
+  },
+  "campaign_setup": {
+    "cold_setup_cost": 0.0,
+    "cold_setup_wall_time_seconds": null,
+    "component_count": 1,
+    "cost_coverage": {
+      "measured": 1,
+      "total": 1
+    },
+    "cost_per_task": {
+      "1": 0.0,
+      "10": 0.0,
+      "100": 0.0
+    },
+    "wall_time_coverage": {
+      "measured": 0,
+      "total": 1
+    }
+  },
+  "campaign_sha256": "2a261171708ce0612866829af1fd9d1ffde8777f6cf94391f8c8b9ed6116fe86",
+  "campaign_totals": {
+    "attempt_count": 360,
+    "cost_coverage": {
+      "measured": 361,
+      "total": 361
+    },
+    "cost_per_verified_success": 0.0,
+    "infrastructure_void_count": 72,
+    "infrastructure_void_spend": 0.0,
+    "measured_cost_subtotal": 0.0,
+    "measured_infrastructure_void_spend": 0.0,
+    "measured_model_tokens_subtotal": 172440,
+    "miller_calls": 288,
+    "native_tool_counts": {
+      "command": 360
+    },
+    "outcome_counts": {
+      "correct": 72,
+      "incorrect": 72,
+      "infrastructure_void": 72,
+      "product_error": 72,
+      "timeout": 72,
+      "unsupported": 0
+    },
+    "scored_attempt_count": 288,
+    "setup": {
+      "cold_setup_cost": 0.0,
+      "cold_setup_wall_time_seconds": null,
+      "component_count": 1,
+      "cost_coverage": {
+        "measured": 1,
+        "total": 1
+      },
+      "cost_per_task": {
+        "1": 0.0,
+        "10": 0.0,
+        "100": 0.0
+      },
+      "wall_time_coverage": {
+        "measured": 0,
+        "total": 1
+      }
+    },
+    "success_count": 72,
+    "success_rate": 0.25,
+    "timeout_product_error_rate": 0.5,
+    "token_coverage": {
+      "measured": 360,
+      "total": 360
+    },
+    "total_cost": 0.0,
+    "total_model_tokens": 172440,
+    "total_wall_time_seconds": 64980.0,
+    "unsupported_rate": 0.0,
+    "wall_time_coverage": {
+      "measured": 360,
+      "total": 360
+    },
+    "wrong_action_rate": 0.25
+  },
+  "contract_id": "agent-outcomes-score-v1",
+  "dry_run": true,
+  "execution_envelope_sha256": "edae53d4e662ee9fdb28a012c26ab169673dd2744d33129299f9a13825e036d9",
+  "observed_setup_by_arm": {
+    "native": {
+      "coverage": {
+        "measured": 0,
+        "total": 180
+      },
+      "measured_wall_time_seconds": 0.0,
+      "wall_time_seconds": null
+    },
+    "native+miller-lexical": {
+      "coverage": {
+        "measured": 0,
+        "total": 180
+      },
+      "measured_wall_time_seconds": 0.0,
+      "wall_time_seconds": null
+    }
+  },
+  "paired": {
+    "correctness": {
+      "bootstrap_samples": 2000,
+      "conclusion": "inconclusive",
+      "confidence_level": 0.95,
+      "estimate": 0.0,
+      "lower": 0.0,
+      "observation_count": 144,
+      "repository_cluster_count": 6,
+      "task_cluster_count": 36,
+      "upper": 0.0
+    },
+    "cost": {
+      "bootstrap_samples": 2000,
+      "conclusion": "inconclusive",
+      "confidence_level": 0.95,
+      "estimate": 0.0,
+      "lower": 0.0,
+      "observation_count": 144,
+      "repository_cluster_count": 6,
+      "task_cluster_count": 36,
+      "upper": 0.0
+    },
+    "model_tokens": {
+      "bootstrap_samples": 2000,
+      "conclusion": "difference",
+      "confidence_level": 0.95,
+      "estimate": 0.4722222222222222,
+      "lower": 0.25,
+      "observation_count": 144,
+      "repository_cluster_count": 6,
+      "task_cluster_count": 36,
+      "upper": 0.7222222222222222
+    },
+    "wall_time_seconds": {
+      "bootstrap_samples": 2000,
+      "conclusion": "difference",
+      "confidence_level": 0.95,
+      "estimate": 0.2361111111111111,
+      "lower": 0.125,
+      "observation_count": 144,
+      "repository_cluster_count": 6,
+      "task_cluster_count": 36,
+      "upper": 0.3611111111111111
+    }
+  },
+  "paired_correctness": {
+    "bootstrap_samples": 2000,
+    "conclusion": "inconclusive",
+    "confidence_level": 0.95,
+    "estimate": 0.0,
+    "lower": 0.0,
+    "observation_count": 144,
+    "repository_cluster_count": 6,
+    "task_cluster_count": 36,
+    "upper": 0.0
+  },
+  "run_status": "completed",
+  "schema": "agent-outcomes-v1",
+  "stop_reason": null,
+  "synthetic": true,
+  "void_reasons": {
+    "synthetic_dry_run": 72
+  }
+}

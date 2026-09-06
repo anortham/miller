@@ -1,0 +1,7 @@
+{
+  "approved_money_ceiling": null,
+  "completion_usage_soft_ceiling": true,
+  "maximum_run_count": 240,
+  "pricing": null,
+  "status": "unapproved"
+}

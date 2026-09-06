@@ -1,0 +1,105 @@
+{
+  "campaign": {
+    "contract_id": "agent-outcomes-v1",
+    "campaign_id": "miller-full-corpus-dry-2026-09-06",
+    "task_set_sha256": "4124b0f30f39b45ec5d6a5345d4c31270a8e876df3c546932532277d6178783b",
+    "host": {
+      "name": "codex-cli",
+      "version": "0.153.4",
+      "binary_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70"
+    },
+    "model": {
+      "model_id": "UNAVAILABLE-REQUIRES-PAID-CAMPAIGN-APPROVAL",
+      "reasoning": "medium"
+    },
+    "arms": [
+      {"arm_id": "native", "runtime_identity": null, "runtime_qualification_sha256": null},
+      {"arm_id": "native+miller-lexical", "runtime_identity": null, "runtime_qualification_sha256": null}
+    ],
+    "repetition_count": 5,
+    "order_seed": 20260906,
+    "platform_toolchain_image_sha256": "f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+    "network_policy": "denied",
+    "resource_limits": {"max_parallel_runs": 1, "memory_bytes": 8589934592},
+    "approved_total_run_count": 360,
+    "pricing": null,
+    "approved_money_ceiling": null
+  },
+  "execution": {
+    "comparison_mode": "primary",
+    "task_manifest_path": "/home/murphy/source/miller/.worktrees/wal-recurrence/scripts/benchmarks/agent-outcomes/tasks.jsonl",
+    "verifier_manifest_path": "/home/murphy/source/miller/.worktrees/wal-recurrence/scripts/benchmarks/agent-outcomes/verifiers/verifiers.json",
+    "source_roots": {
+      "flask-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "flask-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask-repair-seed",
+      "flask-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/flask",
+      "express-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "express-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express-repair-seed",
+      "express-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/express",
+      "chi-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "chi-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi-repair-seed",
+      "chi-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/chi",
+      "ripgrep-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "ripgrep-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep-repair-seed",
+      "ripgrep-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/ripgrep",
+      "command-line-api-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "command-line-api-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api-repair-seed",
+      "command-line-api-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/command-line-api",
+      "rake-location": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-concept": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-references": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-safe-edit": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake",
+      "rake-repair": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake-repair-seed",
+      "rake-test-selection": "/home/murphy/source/miller-evidence/agent-outcomes-task6/snapshots/rake"
+    },
+    "prepared_environments_path": "/home/murphy/source/miller-evidence/agent-outcomes-task6/runtime/prepared8/prepared-binding-e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1.json",
+    "runtime_qualification_path": null,
+    "semantic_runtime_binding_path": null,
+    "image_reference": "localhost/miller-agent-outcomes@sha256:f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+    "codex_path": "/usr/local/bin/codex",
+    "miller_path": "/opt/miller/miller",
+    "podman_path": "podman",
+    "setup_components": [
+      {
+        "environment_id": "prepared8-f3e39a672f0a",
+        "component_id": "offline-dependency-image",
+        "bucket": "shared",
+        "applies_to_arms": ["native", "native+miller-lexical"],
+        "cost": 0.0,
+        "wall_time_seconds": null,
+        "evidence_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1"
+      }
+    ],
+    "task_ids": [
+      "flask-location", "flask-concept", "flask-references", "flask-safe-edit", "flask-repair", "flask-test-selection",
+      "express-location", "express-concept", "express-references", "express-safe-edit", "express-repair", "express-test-selection",
+      "chi-location", "chi-concept", "chi-references", "chi-safe-edit", "chi-repair", "chi-test-selection",
+      "ripgrep-location", "ripgrep-concept", "ripgrep-references", "ripgrep-safe-edit", "ripgrep-repair", "ripgrep-test-selection",
+      "command-line-api-location", "command-line-api-concept", "command-line-api-references", "command-line-api-safe-edit", "command-line-api-repair", "command-line-api-test-selection",
+      "rake-location", "rake-concept", "rake-references", "rake-safe-edit", "rake-repair", "rake-test-selection"
+    ],
+    "ct_lifecycle": null,
+    "ct_known_changes": null,
+    "sample_size_plan": {
+      "phase": "pilot",
+      "pilot_variance": null,
+      "approved_budget_sha256": "1da1df124624e82fec10d68867e24582a37de588510ca8cefb504e0170d2dc0a"
+    },
+    "provider_transport": null
+  }
+}

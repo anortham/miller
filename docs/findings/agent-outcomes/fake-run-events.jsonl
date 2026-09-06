@@ -1,0 +1,4 @@
+{"thread_id":"fake-thread","type":"thread.started"}
+{"item":{"command":"rg get_debug_flag src","id":"fake-command","type":"command_execution"},"type":"item.completed"}
+{"item":{"id":"fake-answer","text":"{\"path\":\"src/flask/helpers.py\",\"line\":27,\"name\":\"get_debug_flag\",\"signature\":null}","type":"agent_message"},"type":"item.completed"}
+{"type":"turn.completed","usage":{"cached_input_tokens":40,"input_tokens":100,"output_tokens":10,"reasoning_output_tokens":4}}

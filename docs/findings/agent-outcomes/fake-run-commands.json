@@ -1,0 +1,6 @@
+{
+  "native": ["/usr/local/bin/codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--model", "UNAVAILABLE-REQUIRES-PAID-CAMPAIGN-APPROVAL", "--sandbox", "read-only", "--cd", "/workspace", "--output-schema", "/run-config/response-schema.json", "--config", "model_reasoning_effort=\"medium\"", "--config", "approval_policy=\"never\""],
+  "native+miller-lexical": ["/usr/local/bin/codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--model", "UNAVAILABLE-REQUIRES-PAID-CAMPAIGN-APPROVAL", "--sandbox", "read-only", "--cd", "/workspace", "--output-schema", "/run-config/response-schema.json", "--config", "model_reasoning_effort=\"medium\"", "--config", "approval_policy=\"never\"", "--config=mcp_servers.miller.command=\"/opt/miller/miller\"", "--config=mcp_servers.miller.args=[\"serve\"]", "--config=mcp_servers.miller.env.MILLER_SEMANTIC=\"off\"", "--config=mcp_servers.miller.env.MILLER_CT=\"off\""],
+  "prompt_sha256": "fb1688c73588dbace8ab98d0e5932a3b92f1c7b4f8b3f1af5912171b2315d48e",
+  "task_id": "flask-location"
+}

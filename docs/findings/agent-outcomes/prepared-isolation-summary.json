@@ -1,0 +1,28 @@
+{
+  "arms": {
+    "native": 12,
+    "native+miller-lexical": 12
+  },
+  "binding_sha256": "e9523ca4ff8e781c09c570b20b53feb4441c05191bed5f9038add411dba444f1",
+  "check_count": 24,
+  "image_digest": "f3e39a672f0a345d555d42e22483a72156cd2b3d303b30f31527ae0f4a8d07b5",
+  "model_invoked": false,
+  "network_policy": "denied",
+  "passed_count": 24,
+  "provider_configured": false,
+  "raw_summary_path": "/tmp/miller-agent-runtime-evidence.nGFJDI/prepared-qualification-final2/physical-qualification-f3e39a672f0a345d/qualification-summary-cb37e1e82ea697e1c4ba2c102f06ed7dfa7c0814d3c9e33e5bbe0a1581bbbb47.json",
+  "raw_summary_sha256": "cb37e1e82ea697e1c4ba2c102f06ed7dfa7c0814d3c9e33e5bbe0a1581bbbb47",
+  "repositories": [
+    "chi",
+    "command-line-api",
+    "express",
+    "flask",
+    "rake",
+    "ripgrep"
+  ],
+  "schema": "agent-outcomes-prepared-isolation-summary-v1",
+  "workspace_modes": {
+    "read_only": 12,
+    "read_write": 12
+  }
+}
