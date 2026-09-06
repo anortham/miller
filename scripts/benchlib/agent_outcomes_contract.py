@@ -9,7 +9,7 @@ import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -317,9 +317,19 @@ def validate_verifier(mapping: Mapping[str, Any]) -> FrozenVerifier:
         baseline_paths: set[str] = set()
         for item in baseline:
             item = _mapping(item, "baseline file")
-            _exact_fields(item, {"path", "sha256"}, "baseline file")
+            _exact_fields(
+                item,
+                {"path", "sha256", "link_target"},
+                "baseline file",
+                optional={"link_target"},
+            )
             _repo_path(item["path"], "baseline file path")
             _sha256(item["sha256"], "baseline file sha256")
+            if "link_target" in item:
+                _relative_link_target(item["link_target"], "baseline link_target")
+                expected = hashlib.sha256(os.fsencode(item["link_target"])).hexdigest()
+                if item["sha256"] != expected:
+                    raise ValueError("baseline link sha256 must hash link_target bytes")
             if item["path"] in baseline_paths:
                 raise ValueError(f"duplicate baseline file path: {item['path']}")
             baseline_paths.add(item["path"])
@@ -535,11 +545,12 @@ def _verify_mutation(task, result, root, executor, evidence):
     failures: list[str] = []
     try:
         _exact_fields(_mapping(result, "result"), set(), "result")
-        baseline = {item["path"]: item["sha256"] for item in task.verifier.value["baseline_files"]}
-        digest = _inventory_sha256(baseline)
+        baseline_entries = _thaw(task.verifier.value["baseline_files"])
+        baseline = {item["path"]: item for item in baseline_entries}
+        digest = _inventory_sha256(baseline_entries)
         if digest != task.task.snapshot_sha256:
             raise ValueError("frozen baseline inventory does not match task snapshot_sha256")
-        current = _candidate_inventory(root)
+        current = {item["path"]: item for item in source_inventory(root)}
         changed = {path for path in baseline | current if baseline.get(path) != current.get(path)}
         deleted = set(baseline) - set(current)
     except ValueError as exc:
@@ -572,7 +583,7 @@ def _verify_mutation(task, result, root, executor, evidence):
         return ["isolated verification executor is required"]
     with tempfile.TemporaryDirectory(prefix="agent-outcomes-verify-") as directory:
         candidate = Path(directory) / "candidate"
-        shutil.copytree(root, candidate, symlinks=False, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(root, candidate, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         execution = executor.execute(task.verifier.value["test_argv"], candidate, task.task.max_wall_seconds)
         evidence.update({"test_ran": execution.ran, "test_returncode": execution.returncode})
     if not execution.ran:
@@ -582,49 +593,74 @@ def _verify_mutation(task, result, root, executor, evidence):
     return failures
 
 
-def _candidate_inventory(root: Path) -> dict[str, str]:
-    inventory: dict[str, str] = {}
-    for directory, names, files in os.walk(root, followlinks=False):
-        directory_path = Path(directory)
-        if ".git" in names:
-            git_path = directory_path / ".git"
-            if git_path.is_symlink():
-                raise ValueError("candidate contains a symlink: .git")
-            names.remove(".git")
-        if ".git" in files:
-            files.remove(".git")
-        for name in (*names, *files):
-            path = directory_path / name
-            if path.is_symlink():
-                raise ValueError(f"candidate contains a symlink: {path.relative_to(root).as_posix()}")
-        for name in files:
-            path = directory_path / name
-            relative = path.relative_to(root).as_posix()
-            _repo_path(relative, "candidate file path")
-            if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
-                raise ValueError(f"candidate contains a non-regular file: {relative}")
-            inventory[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return inventory
-
-
-def source_snapshot_sha256(root: str | Path) -> str:
+def source_inventory(root: str | Path) -> tuple[Mapping[str, Any], ...]:
     path = Path(root)
     if not path.is_absolute():
         raise ValueError("snapshot root must be absolute")
     try:
         resolved = path.resolve(strict=True)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise ValueError(f"snapshot root is unavailable: {exc}") from exc
     if not resolved.is_dir():
         raise ValueError("snapshot root must be a directory")
-    return _inventory_sha256(_candidate_inventory(resolved))
+    entries: list[dict[str, Any]] = []
+    for directory, names, files in os.walk(resolved, followlinks=False):
+        directory_path = Path(directory)
+        names.sort()
+        files.sort()
+        if ".git" in names:
+            git_path = directory_path / ".git"
+            if git_path.is_symlink():
+                raise ValueError("snapshot .git entry cannot be a symlink")
+            names.remove(".git")
+        if ".git" in files:
+            files.remove(".git")
+        for name in tuple(names):
+            candidate = directory_path / name
+            if candidate.is_symlink():
+                entries.append(_link_inventory_entry(resolved, candidate))
+                names.remove(name)
+        for name in files:
+            candidate = directory_path / name
+            if candidate.is_symlink():
+                entries.append(_link_inventory_entry(resolved, candidate))
+                continue
+            relative = candidate.relative_to(resolved).as_posix()
+            _repo_path(relative, "snapshot file path")
+            if not stat.S_ISREG(candidate.stat(follow_symlinks=False).st_mode):
+                raise ValueError(f"snapshot contains a non-regular file: {relative}")
+            entries.append(
+                {"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()}
+            )
+    entries.sort(key=lambda item: item["path"])
+    return tuple(_freeze(entry) for entry in entries)
 
 
-def _inventory_sha256(inventory: Mapping[str, str]) -> str:
-    canonical = [
-        {"path": path, "sha256": inventory[path]}
-        for path in sorted(inventory)
-    ]
+def _link_inventory_entry(root: Path, link: Path) -> dict[str, str]:
+    relative = link.relative_to(root).as_posix()
+    _repo_path(relative, "snapshot link path")
+    target = os.readlink(link)
+    _relative_link_target(target, f"snapshot link target for {relative}")
+    try:
+        resolved_target = link.resolve(strict=True)
+        target_relative = resolved_target.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"snapshot link is dangling, cyclic, or escaping: {relative}") from exc
+    if ".git" in target_relative.parts:
+        raise ValueError(f"snapshot link targets excluded .git content: {relative}")
+    return {
+        "path": relative,
+        "sha256": hashlib.sha256(os.fsencode(target)).hexdigest(),
+        "link_target": target,
+    }
+
+
+def source_snapshot_sha256(root: str | Path) -> str:
+    return _inventory_sha256(source_inventory(root))
+
+
+def _inventory_sha256(inventory: Sequence[Mapping[str, Any]]) -> str:
+    canonical = sorted((_thaw(item) for item in inventory), key=lambda item: item["path"])
     return hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -757,6 +793,18 @@ def _repo_path(value: Any, label: str) -> str:
         or any(part in {"", ".", ".."} for part in path.parts)
     ):
         raise ValueError(f"{label} must be a safe repository-relative path: {value}")
+    return value
+
+
+def _relative_link_target(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\0" in value
+        or Path(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+    ):
+        raise ValueError(f"{label} must be a non-empty relative path")
     return value
 
 

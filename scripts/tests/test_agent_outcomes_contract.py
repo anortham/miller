@@ -20,6 +20,8 @@ from benchlib.agent_outcomes_contract import (
     validate_task,
     validate_verifier,
     verify_result,
+    source_inventory,
+    source_snapshot_sha256,
 )
 
 
@@ -52,6 +54,23 @@ class CopyExecutor:
 class DidNotRunExecutor:
     def execute(self, argv, candidate_root, timeout_seconds):
         return VerificationExecution(ran=False, returncode=None)
+
+
+class LinkInspectingExecutor:
+    def __init__(self) -> None:
+        self.copied_root = None
+
+    def execute(self, argv, candidate_root, timeout_seconds):
+        self.copied_root = candidate_root
+        file_link = candidate_root / "linked-service.py"
+        directory_link = candidate_root / "linked-src"
+        passed = (
+            file_link.is_symlink()
+            and directory_link.is_symlink()
+            and file_link.resolve().is_relative_to(candidate_root)
+            and directory_link.resolve().is_relative_to(candidate_root)
+        )
+        return VerificationExecution(ran=True, returncode=0 if passed else 1)
 
 
 class AgentOutcomesContractTests(unittest.TestCase):
@@ -340,6 +359,73 @@ class AgentOutcomesContractTests(unittest.TestCase):
             self.location_task(path="src/missing.py"), missing, self.root
         )
         self.assertFalse(checked.correct)
+
+    def test_source_inventory_preserves_safe_internal_links_and_rejects_bad_links(self):
+        os.symlink("src/service.py", self.root / "linked-service.py")
+        os.symlink("src", self.root / "linked-src")
+        inventory = source_inventory(self.root)
+        entries = {entry["path"]: entry for entry in inventory}
+        self.assertEqual("src/service.py", entries["linked-service.py"]["link_target"])
+        self.assertEqual("src", entries["linked-src"]["link_target"])
+        self.assertEqual(
+            hashlib.sha256(b"src/service.py").hexdigest(),
+            entries["linked-service.py"]["sha256"],
+        )
+        before = source_snapshot_sha256(self.root)
+        (self.root / "linked-service.py").unlink()
+        os.symlink("src", self.root / "linked-service.py")
+        self.assertNotEqual(before, source_snapshot_sha256(self.root))
+
+        for name, target in (
+            ("absolute", str((self.root / "src").resolve())),
+            ("escape", "../outside"),
+            ("dangling", "missing"),
+        ):
+            link = self.root / name
+            os.symlink(target, link)
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    source_inventory(self.root)
+            link.unlink()
+        cycle_a = self.root / "cycle-a"
+        cycle_b = self.root / "cycle-b"
+        os.symlink("cycle-b", cycle_a)
+        os.symlink("cycle-a", cycle_b)
+        with self.assertRaises(ValueError):
+            source_inventory(self.root)
+
+    def test_mutation_executor_copy_keeps_internal_links_inside_copy(self):
+        os.symlink("src/service.py", self.root / "linked-service.py")
+        os.symlink("src", self.root / "linked-src")
+        baseline = list(source_inventory(self.root))
+        self.snapshot_sha256 = source_snapshot_sha256(self.root)
+        (self.root / "src" / "service.py").write_text(
+            "def save(value):\n    return str(value)\n",
+            encoding="utf-8",
+        )
+        task = validate_task(
+            self.task_mapping(workflow="safe_edit", verifier_id="edit-linked")
+            | {"allowed_write_paths": ["src/service.py"]}
+        )
+        verifier = validate_verifier(
+            {
+                "verifier_id": "edit-linked",
+                "kind": "mutation",
+                "expected_changed_paths": ["src/service.py"],
+                "acceptance_test_paths": [],
+                "forbidden_public_paths": [],
+                "required_source_fragments": [
+                    {"path": "src/service.py", "text": "return str(value)"}
+                ],
+                "baseline_files": baseline,
+                "test_argv": [sys.executable, "-c", "raise SystemExit(0)"],
+            }
+        )
+        executor = LinkInspectingExecutor()
+        checked = verify_result(
+            bind_verifier(task, verifier), {}, self.root, executor=executor
+        )
+        self.assertTrue(checked.correct, checked.failures)
 
     def test_task_and_result_reject_unknown_fields(self):
         task = self.task_mapping()
