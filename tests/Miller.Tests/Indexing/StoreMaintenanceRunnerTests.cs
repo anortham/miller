@@ -128,4 +128,200 @@ public sealed class StoreMaintenanceRunnerTests
 
         Assert.False(outcome.HasReport);
     }
+
+    [Fact]
+    public void ParseReport_WhenFailed_DoesNotFabricateZeroUsageAndSetsUnavailable()
+    {
+        // Pinned incident replay: julie-extract maintenance raced with coord.db change,
+        // producing failure_class = stale_plan with zeroes in retention fields.
+        string failedJson =
+            """
+            {
+              "action": "inspect",
+              "disposition": "failed",
+              "failure_class": "stale_plan",
+              "error": {
+                "class": "stale_plan",
+                "code": "maintenance_inspection_raced",
+                "message": "coordinator queue changed while planning"
+              },
+              "retention": {
+                "pressure": false,
+                "compaction_required": false,
+                "target_bytes": 0,
+                "retained_logical_bytes": 0,
+                "physical_target_bytes": 0,
+                "physical_current_bytes": 0,
+                "physical_breach_streak": 0,
+                "physical_breach_limit": 10
+              }
+            }
+            """;
+
+        StoreMaintenanceReport report = StoreMaintenanceRunner.ParseReport(failedJson);
+
+        Assert.False(report.IsAvailable);
+        Assert.Equal("stale_plan", report.FailureClass);
+        Assert.Equal("maintenance_inspection_raced: coordinator queue changed while planning", report.ErrorMessage);
+        Assert.Null(report.Retention);
+        Assert.Null(report.Capacity);
+    }
+
+    [Fact]
+    public void ParseReport_WhenSuccessfulWithPressure_ParsesRetentionAndCapacity()
+    {
+        string successJson =
+            """
+            {
+              "action": "inspect",
+              "disposition": "ok",
+              "failure_class": "none",
+              "retention": {
+                "pressure": true,
+                "compaction_required": true,
+                "target_bytes": 50000000,
+                "retained_logical_bytes": 75000000,
+                "ceiling_bytes": 100000000,
+                "physical_current_bytes": 145000000,
+                "physical_baseline_bytes": 80000000,
+                "physical_target_bytes": 100000000,
+                "physical_ceiling_bytes": 200000000,
+                "physical_target_breached": true,
+                "physical_ceiling_breached": false,
+                "physical_breach_streak": 6,
+                "physical_breach_limit": 5
+              },
+              "capacity": {
+                "measured_bytes": 95000000,
+                "free_bytes": 5000000,
+                "store_page_bytes": 4096,
+                "store_freelist_bytes": 0,
+                "store_wal_bytes": 1000000,
+                "staged_generation_bytes": 500000,
+                "gc_fits": true,
+                "promotion_fits": true
+              },
+              "readers": {
+                "protected_reader_count": 2,
+                "definitively_dead_reader_count": 0,
+                "retained_unknown_reader_count": 1,
+                "removed_reader_count": 0,
+                "reader_warnings": [
+                  {
+                    "pin_id": "view-abc",
+                    "warning_code": "long_lived_pin"
+                  }
+                ]
+              }
+            }
+            """;
+
+        StoreMaintenanceReport report = StoreMaintenanceRunner.ParseReport(successJson);
+
+        Assert.True(report.IsAvailable);
+        Assert.Equal("none", report.FailureClass);
+        Assert.Null(report.ErrorMessage);
+        Assert.NotNull(report.Retention);
+        Assert.True(report.Retention.Pressure);
+        Assert.True(report.Retention.CompactionRequired);
+        Assert.Equal(50_000_000, report.Retention.TargetBytes);
+        Assert.Equal(75_000_000, report.Retention.RetainedLogicalBytes);
+        Assert.Equal(100_000_000, report.Retention.PhysicalTargetBytes);
+        Assert.Equal(145_000_000, report.Retention.PhysicalCurrentBytes);
+        Assert.Equal(6, report.Retention.PhysicalBreachStreak);
+        Assert.Equal(5, report.Retention.PhysicalBreachLimit);
+        Assert.NotNull(report.Readers);
+        Assert.Equal(2, report.Readers.ProtectedReaderCount);
+        Assert.Equal(1, report.Readers.RetainedUnknownReaderCount);
+        Assert.Single(report.Readers.ReaderWarnings);
+        Assert.Equal("view-abc", report.Readers.ReaderWarnings[0].PinId);
+        Assert.Equal("long_lived_pin", report.Readers.ReaderWarnings[0].WarningCode);
+
+        Assert.NotNull(report.Capacity);
+        Assert.Equal(95_000_000, report.Capacity.MeasuredBytes);
+        Assert.Equal(5_000_000, report.Capacity.FreeBytes);
+        Assert.True(report.Capacity.GcFits);
+        Assert.True(report.Capacity.PromotionFits);
+    }
+
+    [Fact]
+    public void SnapshotPersistence_CanSaveAndReadRecordedSnapshot()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"miller-snapshot-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            string sampleJson =
+                """
+                {
+                  "action": "inspect",
+                  "disposition": "ok",
+                  "failure_class": "none",
+                  "retention": {
+                    "pressure": false,
+                    "compaction_required": false,
+                    "target_bytes": 10000000,
+                    "retained_logical_bytes": 8000000,
+                    "ceiling_bytes": 20000000,
+                    "physical_current_bytes": 15000000,
+                    "physical_baseline_bytes": 10000000,
+                    "physical_target_bytes": 20000000,
+                    "physical_ceiling_bytes": 30000000,
+                    "physical_target_breached": false,
+                    "physical_ceiling_breached": false,
+                    "physical_breach_streak": 0,
+                    "physical_breach_limit": 5
+                  },
+                  "capacity": {
+                    "measured_bytes": 18000000,
+                    "free_bytes": 12000000,
+                    "store_page_bytes": 4096,
+                    "store_freelist_bytes": 0,
+                    "store_wal_bytes": 0,
+                    "staged_generation_bytes": 0,
+                    "gc_fits": true,
+                    "promotion_fits": true
+                  }
+                }
+                """;
+
+            bool saved = StoreMaintenanceRunner.TrySaveRecordedSnapshot(tempDir, sampleJson);
+            Assert.True(saved);
+
+            StoreMaintenanceReport? loaded = StoreMaintenanceRunner.TryReadRecordedSnapshot(tempDir);
+            Assert.NotNull(loaded);
+            Assert.True(loaded.IsAvailable);
+            Assert.Equal("none", loaded.FailureClass);
+            Assert.NotNull(loaded.Retention);
+            Assert.Equal(10_000_000, loaded.Retention.TargetBytes);
+            Assert.Equal(8_000_000, loaded.Retention.RetainedLogicalBytes);
+            Assert.Equal(20_000_000, loaded.Retention.PhysicalTargetBytes);
+            Assert.Equal(15_000_000, loaded.Retention.PhysicalCurrentBytes);
+            Assert.NotNull(loaded.Capacity);
+            Assert.Equal(18_000_000, loaded.Capacity.MeasuredBytes);
+            Assert.Equal(12_000_000, loaded.Capacity.FreeBytes);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void TryReadRecordedSnapshot_WhenMissingOrCorrupt_ReturnsNull()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"miller-snapshot-corrupt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Assert.Null(StoreMaintenanceRunner.TryReadRecordedSnapshot(tempDir));
+
+            File.WriteAllText(Path.Combine(tempDir, "maintenance-snapshot.json"), "corrupted-non-json-content");
+            Assert.Null(StoreMaintenanceRunner.TryReadRecordedSnapshot(tempDir));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch (IOException) { }
+        }
+    }
 }

@@ -241,4 +241,127 @@ public sealed class RouteNormalizerTests
         Assert.Equal(expectedVerb, result.Verb);
         Assert.True(result.VerbKnown);
     }
+
+    [Fact]
+    public void FromClientCall_PreservesRawRoute()
+    {
+        const string raw = "/api/projects/{0}/builds/{1}/cancel";
+        var result = RouteNormalizer.FromClientCall("axios.post", raw);
+
+        Assert.Equal(raw, result.RawRoute);
+        Assert.Equal("api/projects/{}/builds/{}/cancel", result.Route);
+        Assert.Equal("POST", result.Verb);
+        Assert.True(result.VerbKnown);
+    }
+
+    [Fact]
+    public void FromEndpoint_PreservesRawRoute()
+    {
+        var result = RouteNormalizer.FromEndpoint(
+            verbKey: "httppost",
+            classRoute: "api/projects/{0}",
+            methodRoute: "builds/{1}/cancel",
+            parentClassName: "ProjectsController",
+            methodName: "CancelBuild");
+
+        Assert.Equal("api/projects/{0}/builds/{1}/cancel", result.RawRoute);
+        Assert.Equal("api/projects/{}/builds/{}/cancel", result.Route);
+        Assert.Equal("POST", result.Verb);
+        Assert.True(result.VerbKnown);
+    }
+
+    [Fact]
+    public void NormalizeRoute_PreservesRawRouteAndDerivesCanonical()
+    {
+        const string raw = "/api/projects/{0}/builds/{1}/cancel";
+        var result = RouteNormalizer.NormalizeRoute(raw, "POST");
+
+        Assert.Equal(raw, result.RawRoute);
+        Assert.Equal("api/projects/{}/builds/{}/cancel", result.Route);
+        Assert.Equal("POST", result.Verb);
+        Assert.True(result.VerbKnown);
+    }
+
+    [Fact]
+    public void MultiSegmentRouteTemplate_WithTrailingLiteralSuffix_MatchesClientAndEndpoint()
+    {
+        // Template with positional/indexed placeholders and trailing literal suffix "/cancel"
+        var clientTemplate = RouteNormalizer.FromClientCall("axios.post", "/api/projects/{0}/builds/{1}/cancel");
+        var razorInterpolated = RouteNormalizer.FromClientCall("axios.post", "/api/projects/@project.Id/builds/@build.Id/cancel");
+        var endpoint = RouteNormalizer.FromEndpoint(
+            verbKey: "httppost",
+            classRoute: "api/projects/{projectId}",
+            methodRoute: "builds/{buildId}/cancel",
+            parentClassName: "ProjectsController",
+            methodName: "CancelBuild");
+
+        Assert.Equal("api/projects/{}/builds/{}/cancel", clientTemplate.Route);
+        Assert.Equal("api/projects/{}/builds/{}/cancel", razorInterpolated.Route);
+        Assert.Equal("api/projects/{}/builds/{}/cancel", endpoint.Route);
+        Assert.Equal(clientTemplate.Route, endpoint.Route);
+        Assert.Equal(razorInterpolated.Route, endpoint.Route);
+    }
+
+    [Fact]
+    public void RazorInterpolation_PreservesDistinctTrailingLiteralSuffixes()
+    {
+        // Razor routes with @Esc(id) must preserve their distinct trailing action suffixes (/start, /enable, /run)
+        // rather than truncating at the @ and collapsing into /tests/.
+        var start = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/start");
+        var enable = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/enable");
+        var run = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/run");
+
+        Assert.Equal("tests/{}/start", start.Route);
+        Assert.Equal("tests/{}/enable", enable.Route);
+        Assert.Equal("tests/{}/run", run.Route);
+
+        Assert.NotEqual(start.Route, enable.Route);
+        Assert.NotEqual(start.Route, run.Route);
+        Assert.NotEqual(enable.Route, run.Route);
+    }
+
+    [Fact]
+    public void Adversarial_ComplexMultiSegmentRoutes_PreserveTrailingLiterals_AndDistinctActions()
+    {
+        // Mixed parameter syntaxes in a deep multi-segment route
+        string complexRoute = "/api/v1/tenants/${tenantId}/projects/:projId/builds/{buildId}/artifacts/[artifactType]/download.tar.gz";
+        var norm = RouteNormalizer.NormalizeRoute(complexRoute, "GET");
+
+        Assert.Equal("api/v1/tenants/{}/projects/{}/builds/{}/artifacts/{}/download.tar.gz", norm.Route);
+        Assert.Equal(complexRoute, norm.RawRoute);
+        Assert.Equal("GET", norm.Verb);
+
+        // Razor property chaining and expression with extension
+        string razorChained = "/api/workspaces/@workspace.Project.Id/logs/@(logName).txt";
+        var normRazor = RouteNormalizer.NormalizeRoute(razorChained, "GET");
+        Assert.Equal("api/workspaces/{}/logs/{}.txt", normRazor.Route);
+
+        // Next.js catch-all and optional catch-all with extension
+        string nextCatchAll = "/docs/[...slug]/section/[[...sub]]/export.pdf";
+        var normNext = RouteNormalizer.NormalizeRoute(nextCatchAll, "GET");
+        Assert.Equal("docs/{}/section/{}/export.pdf", normNext.Route);
+
+        // Distinct actions and extensions on same base parameter must NEVER collide
+        var runAction = RouteNormalizer.NormalizeRoute("/v2/reports/{reportId}/run");
+        var csvAction = RouteNormalizer.NormalizeRoute("/v2/reports/{reportId}.csv");
+        var summaryAction = RouteNormalizer.NormalizeRoute("/v2/reports/{reportId}/summary");
+        var baseAction = RouteNormalizer.NormalizeRoute("/v2/reports/{reportId}");
+
+        Assert.Equal("v2/reports/{}/run", runAction.Route);
+        Assert.Equal("v2/reports/{}.csv", csvAction.Route);
+        Assert.Equal("v2/reports/{}/summary", summaryAction.Route);
+        Assert.Equal("v2/reports/{}", baseAction.Route);
+
+        // All 4 must be completely distinct
+        var set = new HashSet<string> { runAction.Route, csvAction.Route, summaryAction.Route, baseAction.Route };
+        Assert.Equal(4, set.Count);
+
+        // Also test Express :param with literal extensions
+        var expressJson = RouteNormalizer.NormalizeRoute("/files/:id.json");
+        var expressZip = RouteNormalizer.NormalizeRoute("/files/:id.tar.gz");
+        Assert.Equal("files/{}.json", expressJson.Route);
+        Assert.Equal("files/{}.tar.gz", expressZip.Route);
+        Assert.NotEqual(expressJson.Route, expressZip.Route);
+    }
 }
+

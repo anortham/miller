@@ -2,7 +2,7 @@
 name: handoff-out
 description: Use when preparing to move active Miller-backed work to another harness, model, or session and the receiving agent needs a self-contained resume packet.
 user-invocable: true
-arguments: "<target harness/model> [goal, next action, session notes, token budget]"
+argument-hint: "<target harness/model> [goal, next action, session notes, token budget]"
 allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, Bash
 ---
 

@@ -48,6 +48,7 @@ public sealed class WorkspaceIndexProvider
     // One background refresh per workspace at a time. See StartBackgroundRefresh. This provider is TRANSIENT, so
     // the gate must be the injected singleton and never an instance field.
     private readonly BackgroundRefreshGate _backgroundRefreshGate;
+    private readonly WorkspaceReadProjectionCache? _projectionCache;
 
     public WorkspaceIndexProvider(
         IndexHolder? holder,
@@ -60,7 +61,8 @@ public sealed class WorkspaceIndexProvider
         BackgroundRefreshGate backgroundRefreshGate,
         IndexBootstrapService? primary = null,
         IJulieStoreClient? readerClient = null,
-        Func<IJulieStoreClient>? readerClientFactory = null)
+        Func<IJulieStoreClient>? readerClientFactory = null,
+        WorkspaceReadProjectionCache? projectionCache = null)
         : this(
             holder,
             currentWorkspace,
@@ -85,7 +87,8 @@ public sealed class WorkspaceIndexProvider
             hasReadableIndex: row => HasReadableIndex(row, storeEnabled: null, readerClient,
                 readerClientFactory ?? currentWorkspace?.ReaderProducerFactory),
             backgroundRefreshGate: backgroundRefreshGate,
-            primary: primary)
+            primary: primary,
+            projectionCache: projectionCache)
     {
     }
 
@@ -114,7 +117,8 @@ public sealed class WorkspaceIndexProvider
         Action<Action>? scheduleBackgroundRefresh = null,
         Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
         BackgroundRefreshGate? backgroundRefreshGate = null,
-        IndexBootstrapService? primary = null)
+        IndexBootstrapService? primary = null,
+        WorkspaceReadProjectionCache? projectionCache = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(refresh);
@@ -161,6 +165,7 @@ public sealed class WorkspaceIndexProvider
             ?? (work => ThreadPool.QueueUserWorkItem(static state => ((Action)state!)(), work));
         _hasReadableIndex = hasReadableIndex ?? (row => HasReadableIndex(row, storeEnabled: null));
         _backgroundRefreshGate = backgroundRefreshGate ?? new BackgroundRefreshGate();
+        _projectionCache = projectionCache;
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
@@ -277,7 +282,11 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
-                    ? () => _loadSessionBridgeGraph(readSession)
+                    ? () => _projectionCache is not null
+                        ? _projectionCache.GetOrAddBridgeGraph(
+                            WorkspaceReadProjectionKey.ForBridge(CurrentWorkspace?.WorkspaceId ?? string.Empty, readSession.Snapshot),
+                            () => _loadSessionBridgeGraph(readSession))
+                        : _loadSessionBridgeGraph(readSession)
                     : () => holderIndex!.BridgeGraph,
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var resolver = new SmartTargetResolver(index);
@@ -497,7 +506,11 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
-                    ? () => _loadSessionBridgeGraph(readSession)
+                    ? () => _projectionCache is not null
+                        ? _projectionCache.GetOrAddBridgeGraph(
+                            WorkspaceReadProjectionKey.ForBridge(row.WorkspaceId, readSession.Snapshot),
+                            () => _loadSessionBridgeGraph(readSession))
+                        : _loadSessionBridgeGraph(readSession)
                     : () => cached!.Index.BridgeGraph,
                 LazyThreadSafetyMode.ExecutionAndPublication);
             SmartTargetResolver resolver = familyStore
@@ -519,7 +532,7 @@ public sealed class WorkspaceIndexProvider
                     ? null
                     : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel)
             {
@@ -568,6 +581,16 @@ public sealed class WorkspaceIndexProvider
     {
         if (completeRecall)
         {
+            if (_projectionCache is not null && workspaceId is not null)
+            {
+                var cacheKey = WorkspaceReadProjectionKey.ForSymbol(workspaceId, readSession.Snapshot);
+                return _projectionCache.GetOrAddSymbolIndex(
+                    cacheKey,
+                    () => MeasureFamilyLookup(
+                        _loadSessionSymbolSearch(readSession),
+                        SymbolLookupBackend.SessionProjection));
+            }
+
             CacheKey completeKey = KeyFor(workspaceId, readSession.Snapshot);
             return GetOrAddSymbolReadCache(
                 completeKey,
@@ -594,6 +617,16 @@ public sealed class WorkspaceIndexProvider
             return MeasureFamilyLookup(
                 LaggingSidecarSymbolLookup.Wrap(sidecarIndex, served.Lagging, readSession),
                 served.Lagging ? SymbolLookupBackend.LaggingSidecar : SymbolLookupBackend.SearchSidecar);
+        }
+
+        if (_projectionCache is not null && workspaceId is not null)
+        {
+            var cacheKey = WorkspaceReadProjectionKey.ForSymbol(workspaceId, readSession.Snapshot);
+            return _projectionCache.GetOrAddSymbolIndex(
+                cacheKey,
+                () => MeasureFamilyLookup(
+                    _loadSessionSymbolSearch(readSession),
+                    SymbolLookupBackend.SessionProjection));
         }
 
         CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
@@ -713,7 +746,7 @@ public sealed class WorkspaceIndexProvider
                     ? null
                     : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IsCurrent: false,
                 IndexLevel: readSession.Snapshot.IndexLevel);
@@ -758,7 +791,7 @@ public sealed class WorkspaceIndexProvider
                     ? null
                     : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IsCurrent: false,
                 IndexLevel: readSession.Snapshot.IndexLevel)
@@ -794,7 +827,7 @@ public sealed class WorkspaceIndexProvider
                     ? null
                     : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel);
         }
@@ -861,7 +894,7 @@ public sealed class WorkspaceIndexProvider
             revision,
             familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
             row.DisplayId);
     }
 
@@ -929,7 +962,7 @@ public sealed class WorkspaceIndexProvider
             revision,
             familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
             row.DisplayId,
             IsCurrent: false);
     }
@@ -1001,7 +1034,7 @@ public sealed class WorkspaceIndexProvider
                 revision,
                 familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
-                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel);
         }
@@ -1044,7 +1077,10 @@ public sealed class WorkspaceIndexProvider
         if (refresh == WorkspaceRefreshMode.Background)
         {
             StartBackgroundRefresh(row);
-            return new RegisteredWorkspaceState(row, RefreshResult: null, RefreshPending: true);
+            BackgroundRefreshOperationSnapshot op = _backgroundRefreshGate.GetSnapshot(row.WorkspaceId);
+            bool refreshPending = op.State is BackgroundRefreshActivityState.Queued or BackgroundRefreshActivityState.Running;
+            WorkspaceRefreshResult? effectiveResult = op.State == BackgroundRefreshActivityState.Finished ? op.Result : null;
+            return new RegisteredWorkspaceState(row, effectiveResult, refreshPending, op);
         }
 
         WorkspaceRefreshResult? refreshResult = null;
@@ -1106,7 +1142,7 @@ public sealed class WorkspaceIndexProvider
     {
         string workspaceId = row.WorkspaceId;
         long revisionBeforeRefresh = row.LastRevision ?? 0;
-        if (!_backgroundRefreshGate.TryEnter(workspaceId))
+        if (!_backgroundRefreshGate.TryEnter(workspaceId, scheduledGeneration: null, scheduledRevision: revisionBeforeRefresh))
             return;
 
         bool scheduled = false;
@@ -1114,9 +1150,19 @@ public sealed class WorkspaceIndexProvider
         {
             _scheduleBackgroundRefresh(() =>
             {
+                _backgroundRefreshGate.RecordRunning(workspaceId);
                 try
                 {
                     WorkspaceRefreshResult result = _refresh(workspaceId);
+
+                    if (result.Status == WorkspaceRefreshStatus.Failed)
+                    {
+                        _backgroundRefreshGate.RecordFailed(workspaceId, result.Error ?? $"Workspace '{workspaceId}' refresh failed.");
+                    }
+                    else
+                    {
+                        _backgroundRefreshGate.RecordFinished(workspaceId, result);
+                    }
 
                     // Same from-scratch-rebuild eviction the blocking arm does: a Refreshed scan whose revision did
                     // not advance replaced the file under cache keys that still name it, so the entries describe a
@@ -1132,7 +1178,7 @@ public sealed class WorkspaceIndexProvider
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                 {
-                    // Reported by the NEXT read's freshness status, which is exactly what this arm promises.
+                    _backgroundRefreshGate.RecordFailed(workspaceId, ex.Message);
                 }
                 finally
                 {
@@ -1140,6 +1186,10 @@ public sealed class WorkspaceIndexProvider
                 }
             });
             scheduled = true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            _backgroundRefreshGate.RecordFailed(workspaceId, "Scheduler failed: " + ex.Message);
         }
         finally
         {
@@ -1885,7 +1935,10 @@ public sealed class WorkspaceIndexProvider
     /// a confirmed-fresh read, so it gets its own freshness word rather than borrowing either.
     /// </param>
     private sealed record RegisteredWorkspaceState(
-        WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult, bool RefreshPending);
+        WorkspaceRegistryRow Row,
+        WorkspaceRefreshResult? RefreshResult,
+        bool RefreshPending,
+        BackgroundRefreshOperationSnapshot? BackgroundOperation = null);
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 

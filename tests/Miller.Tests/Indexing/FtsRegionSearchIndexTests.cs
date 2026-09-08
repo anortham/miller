@@ -185,7 +185,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     {
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// stale"), revision: 6);
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("revision", ex.Message);

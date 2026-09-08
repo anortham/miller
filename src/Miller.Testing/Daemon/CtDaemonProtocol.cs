@@ -15,6 +15,8 @@ public enum CtDaemonCommandState
     Requested,
     Acknowledged,
     Rejected,
+    Completed,
+    Cancelled,
 }
 
 public enum CtDaemonLifecycleState
@@ -83,7 +85,11 @@ public enum CtDaemonActivity
 
     /// <summary>A provider run is in flight.</summary>
     Executing,
+
+    /// <summary>Test selection is computing impact asynchronously in the background.</summary>
+    Selecting,
 }
+
 
 /// <summary>
 /// How lively the running child process is, DERIVED by the daemon from the child's last output so a reader
@@ -195,6 +201,9 @@ public sealed record CtDaemonRunProgress(
 /// wording, for example <c>impact unavailable (moving_cursor)</c>. Null whenever
 /// <see cref="AutoRunsPaused"/> is false, and on a record from a build that predates the field.
 /// </param>
+/// <param name="Selection">
+/// Progress of an in-flight background test selection computation. Null when not selecting.
+/// </param>
 public sealed record CtDaemonStatusRecord(
     CtDaemonLifecycleState State,
     string Reason,
@@ -205,7 +214,21 @@ public sealed record CtDaemonStatusRecord(
     DateTimeOffset? LoopTickAtUtc = null,
     double? LoopAgeSeconds = null,
     bool AutoRunsPaused = false,
-    string? PauseReason = null);
+    string? PauseReason = null,
+    CtDaemonSelectionProgress? Selection = null);
+
+/// <summary>
+/// Progress of an in-flight background test selection computation.
+/// </summary>
+public sealed record CtDaemonSelectionProgress(
+    string WorkspaceId,
+    string ProjectPath,
+    string Phase,
+    CtFreshnessKey Freshness,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset ProgressTimestampUtc,
+    int ItemsProcessed = 0);
+
 
 /// <summary>
 /// File layout for the detached CT control plane under <c>&lt;workspace&gt;/.miller/ct/</c>.
@@ -370,7 +393,7 @@ public static class CtDaemonRouting
             endpointRoot, CtDaemonCommandKind.Run, reason, freshness, targetWorkspaceRoot);
         CtDaemonCommandAck? ack = CtCommandChannel.WaitForAck(
             endpointRoot, request.CommandId, ackTimeout ?? CtCommandChannel.DefaultAckTimeout);
-        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null);
+        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId);
     }
 
     /// <summary>

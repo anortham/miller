@@ -152,6 +152,38 @@ The compact renderer prints the same facts as bounded nested run lines. It never
 `case_names` beyond eight entries. Optional facts are omitted when absent; no provider or selection
 facts are inferred from project paths or private database state.
 
+When the daemon is actively selecting tests in the background (`daemon.activity: "selecting"`), `daemon.selection` is present:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `daemon.selection.workspace_id` | string | Workspace ID undergoing selection. |
+| `daemon.selection.project_path` | string | Project file path whose tests/impact are being selected. |
+| `daemon.selection.phase` | string | Current selection phase (`collect_tests`, `query_impact`, etc.). |
+| `daemon.selection.started_at_utc` | string | ISO-8601 UTC start time of selection computation. |
+| `daemon.selection.progress_timestamp_utc` | string | ISO-8601 UTC timestamp of latest progress update. |
+| `daemon.selection.items_processed` | number | Number of items processed so far. |
+| `daemon.selection.freshness` | object | Index freshness key `{ index_identity, revision }` selection is targeting. |
+
+When continuous testing is disabled on a workspace that contains supported test projects, `tests status --json` includes a static direct-run recipe in `recipe`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `recipe.primary_command` | string | Direct CLI command to run tests immediately without CT enablement. |
+| `recipe.workspace_id` | string | Workspace ID. |
+| `recipe.project_path` | string | Primary test project path. |
+| `recipe.framework` | string | Test framework (`xunit`, `cargo`, `pytest`, `vitest`, etc.). |
+| `recipe.working_directory` | string | Working directory for the runner invocation. |
+| `recipe.scope` | string | `singletest`, `testfile`, `projectsuite`, or `wholesuite`. |
+| `recipe.target_selector` | string \| null | Targeted test selector, or `null`. |
+| `recipe.is_exact` | bool | Whether the selector is exact. |
+| `recipe.unavailable_reason` | string \| null | Why a recipe could not be generated, or `null`. |
+| `recipe.steps[]` | array | Ordered execution steps. |
+| `recipe.steps[].executable` | string | Tool binary to invoke (e.g. `dotnet`, `cargo`). |
+| `recipe.steps[].arguments` | string[] | Array of CLI arguments. |
+| `recipe.steps[].working_directory` | string | Directory to execute step in. |
+| `recipe.steps[].step_kind` | string | Step category (`test`, `build`, etc.). |
+| `recipe.steps[].display_command` | string | Formatted command line string. |
+
 `projects[]` rows:
 
 | Field | Type | Meaning |
@@ -636,6 +668,16 @@ invent provider metadata.
 | `failures[].last_run_revision` | string | Revision recorded for the latest completed run. |
 | `failures[].last_result_status` | string | Last stored provider result status. |
 | `failures[].last_result_at` | string | ISO-8601 UTC time of the last stored result. |
+
+When project discovery fails, synthetic failure test cases are recorded with `classification: "project_discovery_failure"`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `failures[].classification` | string | Optional failure classification. `project_discovery_failure` for synthetic discovery failure rows. |
+| `failures[].project_path` | string | Path of the project that failed discovery. |
+| `failures[].artifact_path` | string | Path to diagnostic attempt artifact (`.miller/ct/discovery-attempts/<attemptId>.json`). |
+| `failures[].outcome` | string | Discovery failure outcome (`failed`, `refused`, `timed_out`). |
+| `failures[].remedy` | string \| null | Actionable remedy to fix discovery or run tests directly. |
 
 `--limit` defaults to 20 and is clamped to 1-200; `--offset` defaults to 0. The ceiling is a page
 size, not the end of the list — `--offset` reaches everything past it. Compact output names the next

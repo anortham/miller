@@ -389,4 +389,43 @@ public sealed class ToolDiagnosticTests : IDisposable
         Assert.Equal(new string('x', ToolDiagnosticText.MaxActionArgumentChars - 1), escaped);
         Assert.False(char.IsSurrogate(escaped[^1]));
     }
+
+    [Theory]
+    [InlineData(SidecarArtifactKind.Search, SidecarRecoveryReason.Missing, "sidecar_search_missing")]
+    [InlineData(SidecarArtifactKind.Search, SidecarRecoveryReason.Stale, "sidecar_search_stale")]
+    [InlineData(SidecarArtifactKind.Search, SidecarRecoveryReason.GenerationMismatch, "sidecar_search_generation_mismatch")]
+    [InlineData(SidecarArtifactKind.Search, SidecarRecoveryReason.Disabled, "sidecar_search_disabled")]
+    [InlineData(SidecarArtifactKind.Search, SidecarRecoveryReason.LogSequenceMismatch, "sidecar_search_log_sequence_mismatch")]
+    [InlineData(SidecarArtifactKind.Content, SidecarRecoveryReason.ClassificationPolicyOutdated, "sidecar_content_classification_outdated")]
+    public void FromException_SidecarUnavailable_RendersUnavailableWithWorkspaceAction(
+        SidecarArtifactKind kind,
+        SidecarRecoveryReason reason,
+        string expectedCode)
+    {
+        var errorWithWs = new SidecarUnavailableException(
+            kind,
+            reason,
+            "Sidecar unavailable test message",
+            workspaceId: "test-ws-id");
+
+        ToolDiagnostic diagWithWs = ToolDiagnostic.FromException(errorWithWs);
+
+        Assert.Equal(expectedCode, diagWithWs.Code);
+        Assert.Equal(ToolDiagnosticClass.Unavailable, diagWithWs.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Error, diagWithWs.Outcome);
+        Assert.Single(diagWithWs.NextActions);
+        Assert.Equal("workspace(operation=\"refresh\", workspace_id=\"test-ws-id\")", diagWithWs.NextActions[0].Call);
+
+        var errorWithoutWs = new SidecarUnavailableException(
+            kind,
+            reason,
+            "Sidecar unavailable test message without workspace ID");
+
+        ToolDiagnostic diagWithoutWs = ToolDiagnostic.FromException(errorWithoutWs);
+
+        Assert.Equal(expectedCode, diagWithoutWs.Code);
+        Assert.Equal(ToolDiagnosticClass.Unavailable, diagWithoutWs.Class);
+        Assert.Single(diagWithoutWs.NextActions);
+        Assert.Equal("workspace(operation=\"refresh\")", diagWithoutWs.NextActions[0].Call);
+    }
 }

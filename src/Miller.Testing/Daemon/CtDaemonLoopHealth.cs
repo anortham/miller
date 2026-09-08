@@ -141,6 +141,43 @@ public static class CtDaemonLoopHealth
         if (record.Activity == CtDaemonActivity.Executing)
             return Executing(record, lag, childStallTimeout);
 
+        if (record.Activity == CtDaemonActivity.Selecting)
+            return Selecting(record, lag, age, loopStallTimeout);
+
+        return age > loopStallTimeout
+            ? new CtLoopHealthVerdict(
+                CtLoopHealth.LoopStalled,
+                lag,
+                $"the daemon kept publishing but its loop has not ticked for {Seconds(lag)}")
+            : new CtLoopHealthVerdict(CtLoopHealth.Healthy, lag, "the loop is ticking");
+    }
+
+    /// <summary>
+    /// A selecting daemon is judged by its selection progress timestamp rather than the main loop lag:
+    /// expensive selection runs asynchronously in the background, and as long as progress is moving,
+    /// the daemon is healthy. Only when selection progress stands still past the bound is a stall reported.
+    /// </summary>
+    private static CtLoopHealthVerdict Selecting(
+        CtDaemonStatusRecord record,
+        int lag,
+        TimeSpan age,
+        TimeSpan loopStallTimeout)
+    {
+        if (record.Selection is { } selection)
+        {
+            TimeSpan progressAge = record.UpdatedAtUtc - selection.ProgressTimestampUtc;
+            if (progressAge < TimeSpan.Zero)
+                progressAge = TimeSpan.Zero;
+            int progressLag = WholeSeconds(progressAge);
+
+            return progressAge > loopStallTimeout
+                ? new CtLoopHealthVerdict(
+                    CtLoopHealth.LoopStalled,
+                    progressLag,
+                    $"the selection worker for {selection.ProjectPath} has not made progress for {Seconds(progressLag)}")
+                : new CtLoopHealthVerdict(CtLoopHealth.Healthy, progressLag, "the daemon is selecting tests");
+        }
+
         return age > loopStallTimeout
             ? new CtLoopHealthVerdict(
                 CtLoopHealth.LoopStalled,

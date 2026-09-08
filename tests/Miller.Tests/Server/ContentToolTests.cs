@@ -708,7 +708,7 @@ public sealed class ContentToolTests : IDisposable
         Assert.DoesNotContain("content read failed:", output, StringComparison.Ordinal);
         Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.ContentMcpMaxBytes);
         Assert.Contains("read truncated_lines=1", output, StringComparison.Ordinal);
-        Assert.EndsWith("…", output, StringComparison.Ordinal);
+        Assert.Contains("continuation: content read", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1226,6 +1226,8 @@ public sealed class ContentToolTests : IDisposable
                 "output_truncated",
                 "more_may_exist",
                 "degraded_workspace_count",
+                "skipped_missing_workspaces",
+                "searched_workspace_count",
                 "diagnostic_code",
                 "degraded_workspaces",
                 "degraded_workspaces_omitted_count",
@@ -2076,10 +2078,220 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(10, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
         Assert.Equal(3, doc.RootElement.GetProperty("degraded_workspaces").GetArrayLength());
         Assert.Equal(7, doc.RootElement.GetProperty("degraded_workspaces_omitted_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("skipped_missing_workspaces").GetInt32());
+        Assert.Equal(10, doc.RootElement.GetProperty("searched_workspace_count").GetInt32());
         Assert.Equal("workspace_search_incomplete", doc.RootElement.GetProperty("diagnostic_code").GetString());
         JsonElement action = Assert.Single(doc.RootElement.GetProperty("next_actions").EnumerateArray());
         Assert.Equal("workspace", action.GetProperty("tool").GetString());
         Assert.Equal("refresh", action.GetProperty("args").GetProperty("operation").GetString());
+    }
+
+    [Fact]
+    public void Content_SearchAll_SkipsMissingRootsWithoutProbingOrDegrading()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-valid", "Valid", "class", "csharp", "src/Valid.cs", "public class Valid", 1, null)],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Valid.cs"] = "public class Valid { public void SearchTarget() {} }",
+            },
+            revisions: [new JulieDbFixture.RevisionRow(1)]);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(_workspace.ExtractDbPath)!);
+        File.Copy(fixture.DbPath, _workspace.ExtractDbPath);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath),
+            _workspace.ExtractDbPath,
+            fixture.WorkspaceRoot,
+            workspaceId: _workspace.WorkspaceId!,
+            revision: 1);
+
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen(_workspace.WorkspaceId!, _workspace.WorkspaceId!, fixture.WorkspaceRoot, _workspace.ExtractDbPath);
+            registry.MarkScanned(_workspace.WorkspaceId!, revision: 1);
+
+            for (int i = 0; i < 3; i++)
+            {
+                string nonExistentRoot = Path.Combine(_dir, $"nonexistent-root-{i}-{Guid.NewGuid():N}");
+                string index = Path.Combine(nonExistentRoot, ".miller", "symbols.db");
+                string workspaceId = $"ws-nonexistent-{i}";
+                registry.UpsertSeen(workspaceId, $"display-nonexistent-{i}", nonExistentRoot, index);
+                registry.MarkScanned(workspaceId, revision: 1);
+            }
+        }
+
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content(
+            "search",
+            query: "SearchTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all",
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(3, doc.RootElement.GetProperty("skipped_missing_workspaces").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("searched_workspace_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("degraded_workspaces").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("returned_count").GetInt32());
+
+        string compact = tool.Content(
+            "search",
+            query: "SearchTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all");
+
+        Assert.Contains("skipped_missing_workspaces=3", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("degraded_workspaces", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace_warning:", compact, StringComparison.Ordinal);
+
+        // Explicit single workspace query for nonexistent root must fast-fail (never silently swallowed)
+        string explicitFailJson = tool.Content(
+            "search",
+            query: "SearchTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "ws-nonexistent-0",
+            format: "json");
+        using JsonDocument failDoc = JsonDocument.Parse(explicitFailJson);
+        Assert.True(failDoc.RootElement.TryGetProperty("error", out var errProp));
+        Assert.Contains("Workspace root", errProp.GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Adversarial_SearchWorkspaces_AllAndRegistered_MultipleRealAndMissing_ZeroSidecars_FastFailOnExplicitMissing()
+    {
+        // 1. Setup two distinct REAL workspaces with content corpus
+        using var fixture1 = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-alpha", "Alpha", "class", "csharp", "src/Alpha.cs", "public class Alpha", 1, null)],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Alpha.cs"] = "public class Alpha { public void RealTarget() { /* alpha */ } }",
+            },
+            revisions: [new JulieDbFixture.RevisionRow(1)]);
+
+        using var fixture2 = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-beta", "Beta", "class", "csharp", "src/Beta.cs", "public class Beta", 1, null)],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Beta.cs"] = "public class Beta { public void RealTarget() { /* beta */ } }",
+            },
+            revisions: [new JulieDbFixture.RevisionRow(1)]);
+
+        string ws1Root = fixture1.WorkspaceRoot;
+        string ws1Db = Path.Combine(ws1Root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(ws1Db)!);
+        File.Copy(fixture1.DbPath, ws1Db, overwrite: true);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(ws1Db),
+            ws1Db,
+            ws1Root,
+            workspaceId: "ws-real-1",
+            revision: 1);
+
+        string ws2Root = fixture2.WorkspaceRoot;
+        string ws2Db = Path.Combine(ws2Root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(ws2Db)!);
+        File.Copy(fixture2.DbPath, ws2Db, overwrite: true);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(ws2Db),
+            ws2Db,
+            ws2Root,
+            workspaceId: "ws-real-2",
+            revision: 1);
+
+        // 2. Register real workspaces and 3 deleted/missing workspaces in the registry
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-real-1", "display-real-1", ws1Root, ws1Db);
+            registry.MarkScanned("ws-real-1", revision: 1);
+
+            registry.UpsertSeen("ws-real-2", "display-real-2", ws2Root, ws2Db);
+            registry.MarkScanned("ws-real-2", revision: 1);
+
+            for (int i = 0; i < 3; i++)
+            {
+                string missingRoot = Path.Combine(_dir, $"deleted-root-{i}-{Guid.NewGuid():N}");
+                string missingIndex = Path.Combine(missingRoot, ".miller", "symbols.db");
+                string missingWsId = $"ws-deleted-{i}";
+                registry.UpsertSeen(missingWsId, $"display-deleted-{i}", missingRoot, missingIndex);
+                registry.MarkScanned(missingWsId, revision: 1);
+            }
+        }
+
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        // 3. Test workspace_id=all: Both real workspaces searched, 3 missing skipped, 0 exceptions
+        string jsonAll = tool.Content(
+            "search",
+            query: "RealTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all",
+            format: "json");
+
+        using JsonDocument docAll = JsonDocument.Parse(jsonAll);
+        Assert.Equal(3, docAll.RootElement.GetProperty("skipped_missing_workspaces").GetInt32());
+        Assert.Equal(2, docAll.RootElement.GetProperty("searched_workspace_count").GetInt32());
+        Assert.Equal(0, docAll.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        Assert.Equal(0, docAll.RootElement.GetProperty("degraded_workspaces").GetArrayLength());
+        Assert.Equal(2, docAll.RootElement.GetProperty("returned_count").GetInt32());
+
+        // 4. Test workspace_id=registered: Equivalent behavior
+        string jsonRegistered = tool.Content(
+            "search",
+            query: "RealTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "registered",
+            format: "json");
+
+        using JsonDocument docReg = JsonDocument.Parse(jsonRegistered);
+        Assert.Equal(3, docReg.RootElement.GetProperty("skipped_missing_workspaces").GetInt32());
+        Assert.Equal(2, docReg.RootElement.GetProperty("searched_workspace_count").GetInt32());
+        Assert.Equal(2, docReg.RootElement.GetProperty("returned_count").GetInt32());
+
+        // 5. Test compact representation renders skipped count and real hits
+        string compactAll = tool.Content(
+            "search",
+            query: "RealTarget",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all");
+
+        Assert.Contains("skipped_missing_workspaces=3", compactAll, StringComparison.Ordinal);
+        Assert.Contains("src/Alpha.cs", compactAll, StringComparison.Ordinal);
+        Assert.Contains("src/Beta.cs", compactAll, StringComparison.Ordinal);
+        Assert.DoesNotContain("degraded_workspaces", compactAll, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace_warning:", compactAll, StringComparison.Ordinal);
+
+        // 6. Explicit single workspace query for nonexistent root must fail fast with informative diagnostic
+        for (int i = 0; i < 3; i++)
+        {
+            string missingId = $"ws-deleted-{i}";
+            string explicitJson = tool.Content(
+                "search",
+                query: "RealTarget",
+                content_kind: TextContentKind.WorkspaceSource,
+                workspace_id: missingId,
+                format: "json");
+
+            using JsonDocument failDoc = JsonDocument.Parse(explicitJson);
+            Assert.True(failDoc.RootElement.TryGetProperty("error", out var errProp), $"Missing workspace {missingId} should return error property in JSON");
+            Assert.Contains("Workspace root", errProp.GetString(), StringComparison.OrdinalIgnoreCase);
+
+            string explicitCompact = tool.Content(
+                "search",
+                query: "RealTarget",
+                content_kind: TextContentKind.WorkspaceSource,
+                workspace_id: missingId);
+
+            Assert.Contains("Workspace root", explicitCompact, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -2301,5 +2513,242 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("external_file:", output, StringComparison.Ordinal);
         Assert.Contains("content list", output, StringComparison.Ordinal);
         Assert.DoesNotContain("AmbiguousAliasMarker", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_Search_WorkspaceAll_WithQualifiedSourceId_RoutesDirectly()
+    {
+        string alphaRoot = Path.Combine(_dir, "alpha");
+        string betaRoot = Path.Combine(_dir, "beta");
+        Directory.CreateDirectory(alphaRoot);
+        Directory.CreateDirectory(betaRoot);
+        string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
+        string betaSymbols = Path.Combine(betaRoot, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(alphaSymbols)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(betaSymbols)!);
+        File.WriteAllText(alphaSymbols, string.Empty);
+        File.WriteAllText(betaSymbols, string.Empty);
+
+        string alphaLog = Path.Combine(alphaRoot, "alpha.log");
+        string betaLog = Path.Combine(betaRoot, "beta.log");
+        File.WriteAllText(alphaLog, "ScopedCrossTarget needle\n");
+        File.WriteAllText(betaLog, "ScopedCrossTarget needle\n");
+
+        var store = new ContentCorpusExternalStore();
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "alpha.log");
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(betaSymbols), betaLog, displayPath: "beta.log");
+
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
+            registry.MarkScanned("ws-alpha", revision: 1);
+            registry.UpsertSeen("ws-beta", "beta", betaRoot, betaSymbols);
+            registry.MarkScanned("ws-beta", revision: 1);
+        }
+
+        var tool = new ContentTool(_workspace, store);
+        string listJson = tool.Content("list", workspace_id: "ws-alpha", format: "json");
+        using var listDoc = JsonDocument.Parse(listJson);
+        string alphaSourceId = listDoc.RootElement.GetProperty("kinds")[0].GetProperty("sources")[0].GetProperty("source_id").GetString()!;
+
+        string qualifiedSourceId = $"alpha:{alphaSourceId}";
+        string searchJson = tool.Content(
+            "search",
+            query: "ScopedCrossTarget",
+            source_id: qualifiedSourceId,
+            workspace_id: "all",
+            format: "json");
+
+        using var searchDoc = JsonDocument.Parse(searchJson);
+        JsonElement[] results = searchDoc.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        Assert.Single(results);
+        Assert.Equal("ws-alpha", results[0].GetProperty("workspace_id").GetString());
+        Assert.Equal("alpha.log", results[0].GetProperty("display_path").GetString());
+    }
+
+    [Fact]
+    public void Content_Search_WorkspaceAll_WithUnqualifiedSourceId_ReturnsTypedRefusal()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string output = tool.Content(
+            "search",
+            query: "target",
+            source_id: "external_file:12345678",
+            workspace_id: "all",
+            format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("unqualified_source_id", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("requires a fully qualified source_id", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_Search_WorkspaceAll_WithMissingOwner_ReturnsTypedExpectedEmpty()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string output = tool.Content(
+            "search",
+            query: "target",
+            source_id: "missing_ws:external_file:12345678",
+            workspace_id: "all",
+            format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("missing_owner", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("no registered workspace matches owner", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_Search_WorkspaceAll_WithAmbiguousShortId_ReturnsTypedAmbiguity()
+    {
+        string rootA = Path.Combine(_dir, "proj-a");
+        string rootB = Path.Combine(_dir, "proj-b");
+        Directory.CreateDirectory(rootA);
+        Directory.CreateDirectory(rootB);
+        string symbolsA = Path.Combine(rootA, "symbols.db");
+        string symbolsB = Path.Combine(rootB, "symbols.db");
+        File.WriteAllText(symbolsA, string.Empty);
+        File.WriteAllText(symbolsB, string.Empty);
+
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-first-a", "shared-name", rootA, symbolsA);
+            registry.MarkScanned("ws-first-a", revision: 1);
+            registry.UpsertSeen("ws-first-b", "shared-name", rootB, symbolsB);
+            registry.MarkScanned("ws-first-b", revision: 1);
+        }
+
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string output = tool.Content(
+            "search",
+            query: "target",
+            source_id: "shared-name:external_file:12345678",
+            workspace_id: "all",
+            format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("ambiguous_short_id", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("ambiguous", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_Read_LongLine_ReturnsTruncatedSliceAndContinuationToken()
+    {
+        string logPath = Path.Combine(_dir, "long-line.log");
+        string fullLine = new string('a', 500);
+        File.WriteAllText(logPath, fullLine + "\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "long-line.log");
+
+        string output = tool.Content(
+            "read",
+            source_id: "long-line.log",
+            line: 1,
+            context_lines: 0,
+            max_line_chars: 100,
+            format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        Assert.True(root.GetProperty("line_truncated").GetBoolean());
+        string token = root.GetProperty("line_continuation_token").GetString()!;
+        Assert.False(string.IsNullOrWhiteSpace(token));
+
+        JsonElement lineElem = Assert.Single(root.GetProperty("lines").EnumerateArray());
+        Assert.True(lineElem.GetProperty("truncated").GetBoolean());
+        Assert.Equal(0, lineElem.GetProperty("char_offset").GetInt32());
+        Assert.Equal(100, lineElem.GetProperty("char_length").GetInt32());
+        Assert.Equal(500, lineElem.GetProperty("total_chars").GetInt32());
+        Assert.Equal(new string('a', 100), lineElem.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void Content_Read_Continuation_ReconstructsFullLineWithoutLosingCharacters()
+    {
+        string logPath = Path.Combine(_dir, "paged-line.log");
+        string part1 = new string('A', 120);
+        string part2 = new string('B', 120);
+        string part3 = new string('C', 110);
+        string expectedFullLine = part1 + part2 + part3;
+        File.WriteAllText(logPath, expectedFullLine + "\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "paged-line.log");
+
+        // Page 1
+        string json1 = tool.Content("read", source_id: "paged-line.log", line: 1, context_lines: 0, max_line_chars: 120, format: "json");
+        using var doc1 = JsonDocument.Parse(json1);
+        Assert.True(doc1.RootElement.GetProperty("line_truncated").GetBoolean());
+        string token1 = doc1.RootElement.GetProperty("line_continuation_token").GetString()!;
+        string slice1 = doc1.RootElement.GetProperty("lines")[0].GetProperty("text").GetString()!;
+        Assert.Equal(120, slice1.Length);
+        Assert.Equal(part1, slice1);
+
+        // Page 2
+        string json2 = tool.Content("read", source_id: "paged-line.log", line: 1, context_lines: 0, max_line_chars: 120, continuation: token1, format: "json");
+        using var doc2 = JsonDocument.Parse(json2);
+        Assert.True(doc2.RootElement.GetProperty("line_truncated").GetBoolean());
+        string token2 = doc2.RootElement.GetProperty("line_continuation_token").GetString()!;
+        string slice2 = doc2.RootElement.GetProperty("lines")[0].GetProperty("text").GetString()!;
+        Assert.Equal(120, slice2.Length);
+        Assert.Equal(part2, slice2);
+
+        // Page 3 (final)
+        string json3 = tool.Content("read", source_id: "paged-line.log", line: 1, context_lines: 0, max_line_chars: 120, continuation: token2, format: "json");
+        using var doc3 = JsonDocument.Parse(json3);
+        Assert.False(doc3.RootElement.TryGetProperty("line_truncated", out _));
+        Assert.False(doc3.RootElement.TryGetProperty("line_continuation_token", out _));
+        string slice3 = doc3.RootElement.GetProperty("lines")[0].GetProperty("text").GetString()!;
+        Assert.Equal(110, slice3.Length);
+        Assert.Equal(part3, slice3);
+
+        // Verify full reconstruction with 0 character loss
+        string reconstructed = slice1 + slice2 + slice3;
+        Assert.Equal(expectedFullLine, reconstructed);
+    }
+
+    [Fact]
+    public void Content_Read_RuneSafeSlicing_DoesNotSplitSurrogatePairs()
+    {
+        string lineWithEmoji = new string('a', 99) + "\uD83D\uDE00" + new string('b', 50);
+        string logPath = Path.Combine(_dir, "emoji-line.log");
+        File.WriteAllText(logPath, lineWithEmoji + "\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "emoji-line.log");
+
+        string json = tool.Content("read", source_id: "emoji-line.log", line: 1, context_lines: 0, max_line_chars: 100, format: "json");
+        using var doc = JsonDocument.Parse(json);
+        string slice = doc.RootElement.GetProperty("lines")[0].GetProperty("text").GetString()!;
+        Assert.Equal(99, slice.Length);
+        Assert.Equal(new string('a', 99), slice);
+        string token = doc.RootElement.GetProperty("line_continuation_token").GetString()!;
+
+        string json2 = tool.Content("read", source_id: "emoji-line.log", line: 1, context_lines: 0, max_line_chars: 100, continuation: token, format: "json");
+        using var doc2 = JsonDocument.Parse(json2);
+        string slice2 = doc2.RootElement.GetProperty("lines")[0].GetProperty("text").GetString()!;
+        Assert.StartsWith("\uD83D\uDE00", slice2, StringComparison.Ordinal);
+        Assert.Equal(lineWithEmoji, slice + slice2);
+    }
+
+    [Fact]
+    public void Content_Read_Continuation_InvalidatedWhenContentHashChanges()
+    {
+        string logPath = Path.Combine(_dir, "hash-change.log");
+        File.WriteAllText(logPath, new string('x', 300) + "\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "hash-change.log");
+
+        string json1 = tool.Content("read", source_id: "hash-change.log", line: 1, context_lines: 0, max_line_chars: 100, format: "json");
+        using var doc1 = JsonDocument.Parse(json1);
+        string token = doc1.RootElement.GetProperty("line_continuation_token").GetString()!;
+
+        // Modify file and re-import
+        File.WriteAllText(logPath, new string('y', 300) + "\n");
+        tool.Content("import", path: logPath, display_path: "hash-change.log");
+
+        // Read with stale token
+        string json2 = tool.Content("read", source_id: "hash-change.log", line: 1, context_lines: 0, continuation: token, format: "json");
+        using var doc2 = JsonDocument.Parse(json2);
+        Assert.Equal("content_modified", doc2.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("content_modified", doc2.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 }

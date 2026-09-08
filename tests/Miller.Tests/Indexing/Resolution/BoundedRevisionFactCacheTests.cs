@@ -216,10 +216,11 @@ public sealed class BoundedRevisionFactCacheTests
         var bounds = new ReferenceEvidenceBounds(ExactLimit: 3, FallbackLimit: 2);
 
         Assert.Equal(Serialize(Read(full, Helper, bounds)), Serialize(Read(bounded, Helper, bounds)));
-        // 40 call sites in Many.cs, one in App.cs, one in Other.cs, one relationship row and one pending row —
+        // 40 call sites in Many.cs, one in App.cs (id-help and pend-help at 10..16 collapse under N2 token-span dedupe),
+        // one in Other.cs, and one relationship row (at 80..86) —
         // well past the 3-row page, so the page and its coverage counts are both exercised.
         Assert.Equal(
-            ManyCallSites + 4,
+            ManyCallSites + 3,
             Read(bounded, Helper, bounds).Inbound.Coverage.ExactAvailable);
     }
 

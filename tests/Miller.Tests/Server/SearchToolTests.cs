@@ -2424,19 +2424,45 @@ public sealed class SearchToolTests
             "  crates/julie-tools/src/search/mod.rs:58 (struct)\n" +
             "  pub struct FastSearchTool",
             compact);
-        Assert.Contains("Other matches:", compact);
-        Assert.Contains("crates/julie-tools/src/lib.rs:26 (import) low_signal", compact);
-        Assert.Contains(
-            "src/tools/mod.rs:\n" +
-            "  :31 (import) low_signal\n" +
-            "  :1 (module) low_signal",
-            compact);
+        Assert.Contains("… 3 other matches", compact);
+        Assert.DoesNotContain("Other matches:", compact);
+        Assert.DoesNotContain("(import) low_signal", compact);
+        Assert.DoesNotContain("(module) low_signal", compact);
         Assert.DoesNotContain("FastSearchTool  import", compact);
         Assert.DoesNotContain("FastSearchTool  module", compact);
         Assert.DoesNotContain("pub use search::FastSearchTool;", compact);
         Assert.DoesNotContain("pub mod search;", compact);
         Assert.Contains("\"signature\":\"pub use search::FastSearchTool;\"", json);
         Assert.Contains("\"signature\":\"pub mod search;\"", json);
+    }
+
+    [Fact]
+    public void Run_Compact_PromotesExactDefinition_KeepsGenuineMatchesAndCollapsesLowSignal()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "struct-row", "FastSearchTool", "struct", "crates/julie-tools/src/search/mod.rs", 58,
+                "pub struct FastSearchTool"), 30.0),
+            (Symbol(1, "fn-row", "FastSearchTool", "function", "crates/julie-tools/src/search/fn.rs", 12,
+                "pub fn FastSearchTool()"), 25.0),
+            (Symbol(2, "import-row", "FastSearchTool", "import", "crates/julie-tools/src/lib.rs", 26,
+                "pub use search::FastSearchTool;"), 20.0),
+            (Symbol(3, "module-row", "search", "module", "src/tools/mod.rs", 1,
+                "pub mod search;"), 10.0));
+
+        string compact = SearchTool.Run(index, "FastSearchTool", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int compactCount);
+
+        Assert.Equal(4, compactCount);
+        Assert.Contains(
+            "Definition found: FastSearchTool\n" +
+            "  crates/julie-tools/src/search/mod.rs:58 (struct)\n" +
+            "  pub struct FastSearchTool",
+            compact);
+        Assert.Contains("Other matches:", compact);
+        Assert.Contains("crates/julie-tools/src/search/fn.rs:12 (function)", compact);
+        Assert.Contains("… 2 other matches", compact);
+        Assert.DoesNotContain("(import) low_signal", compact);
+        Assert.DoesNotContain("(module) low_signal", compact);
     }
 
     [Fact]
@@ -3830,6 +3856,99 @@ public sealed class SearchToolTests
         Assert.Contains("has_doc", compact);
         using var doc = JsonDocument.Parse(json);
         Assert.True(doc.RootElement[0].GetProperty("has_doc").GetBoolean());
+    }
+
+    [Fact]
+    public void Search_CompactClampNotice_EmittedWhenLimitExceedsTen()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            Enumerable.Range(1, 15).Select(i =>
+                new JulieDbFixture.SymbolRow($"c{i:D31}", $"TargetSymbol{i}", "method", "csharp",
+                    $"src/Target{i}.cs", $"void TargetSymbol{i}()", 10, null)).ToArray());
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(fx), fx.DbPath, "current-ws", root));
+        var tool = new SearchTool(provider, provider);
+
+        string compact = tool.Search("TargetSymbol", limit: 25, format: "compact");
+
+        Assert.Contains("note: limit clamped to 10 (requested 25)", compact);
+    }
+
+    [Fact]
+    public void Search_CompactClampNotice_OmittedWhenJsonOrLimitTenOrLess()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            Enumerable.Range(1, 15).Select(i =>
+                new JulieDbFixture.SymbolRow($"c{i:D31}", $"TargetSymbol{i}", "method", "csharp",
+                    $"src/Target{i}.cs", $"void TargetSymbol{i}()", 10, null)).ToArray());
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(fx), fx.DbPath, "current-ws", root));
+        var tool = new SearchTool(provider, provider);
+
+        string json = tool.Search("TargetSymbol", limit: 25, format: "json");
+        Assert.DoesNotContain("note: limit clamped", json);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(10, doc.RootElement.GetArrayLength());
+
+        string compactSmall = tool.Search("TargetSymbol", limit: 6, format: "compact");
+        Assert.DoesNotContain("note: limit clamped", compactSmall);
+    }
+
+    [Fact]
+    public void SearchEmptyDiagnostic_SuggestsFactualMarkerAlternatives()
+    {
+        using var current = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("s0000000000000000000000000000001", "ClassA", "class", "csharp",
+                "src/A.cs", "class ClassA", 1, ParentId: null),
+        });
+        current.AddStructuralFact(
+            "marker-fixme",
+            current.Rows[0].Id,
+            "src/A.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "comment",
+            metadataJson: """{"marker":"FIXME","description":"fix this issue"}""");
+        current.AddStructuralFact(
+            "marker-hack",
+            current.Rows[0].Id,
+            "src/A.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "comment",
+            metadataJson: """{"marker":"HACK","description":"temporary hack"}""");
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root));
+        var tool = new SearchTool(provider, provider, provider);
+
+        string compact = tool.Search("TODO", mode: "markers");
+
+        Assert.Contains("FIXME", compact);
+        Assert.Contains("search(query=\"FIXME\", mode=\"markers\")", compact);
+        Assert.DoesNotContain("find the marker words as literal source text", compact);
+    }
+
+    [Fact]
+    public void SearchEmptyDiagnostic_FallsBackToLiteralSourceWhenNoFacts()
+    {
+        using var current = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("s0000000000000000000000000000001", "ClassA", "class", "csharp",
+                "src/A.cs", "class ClassA", 1, ParentId: null),
+        });
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root));
+        var tool = new SearchTool(provider, provider, provider);
+
+        string compact = tool.Search("TODO", mode: "markers");
+
+        Assert.Contains("find the marker words as literal source text", compact);
+        Assert.Contains("search(query=\"TODO\", mode=\"source\")", compact);
     }
 
     private sealed class RecordingFusionArm(bool serve = false) : ISymbolFusionArm

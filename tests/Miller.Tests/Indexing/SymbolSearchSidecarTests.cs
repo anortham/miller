@@ -886,7 +886,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
             WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "converging");
             var sidecar = new SymbolSearchSidecar(enabled: true);
 
-            InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            SidecarUnavailableException error = Assert.Throws<SidecarUnavailableException>(
                 () => sidecar.OpenStoreRequired(storeRoot, live));
 
             Assert.Contains("Search sidecar for view 'view-a' is missing or stale", error.Message, StringComparison.Ordinal);

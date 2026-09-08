@@ -155,8 +155,10 @@ public sealed class TestsTool
                     output = TestsCore.RenderFailureGroupsWithinByteBudget(
                         result, json, ToolOutputBudget.TestsMcpMaxBytes);
                     hint = result.Groups.Count == 0
-                        ? NextStepHint.Render("tests operation=status", "re-check verdict")
-                        : NextStepHint.Render("inspect", "open a failing test");
+                        ? null
+                        : result.Groups.Any(g => g.SampleTestCaseId.StartsWith("ct-discovery-failure", StringComparison.Ordinal))
+                            ? NextStepHint.Render("view_file", "view discovery diagnostic log")
+                            : NextStepHint.Render("inspect", "open a failing test");
                     break;
                 }
                 case "failures":
@@ -164,9 +166,25 @@ public sealed class TestsTool
                     TestsFailuresResult result = TestsCore.Failures(request, limit, offset);
                     output = TestsCore.RenderFailuresWithinByteBudget(
                         result, json, ToolOutputBudget.TestsMcpMaxBytes);
-                    hint = result.Failures.Count == 0
-                        ? NextStepHint.Render("tests operation=status", "re-check verdict")
-                        : NextStepHint.Render("inspect", "open a failing test");
+                    if (result.Failures.Count == 0)
+                    {
+                        hint = null;
+                    }
+                    else if (result.Failures.FirstOrDefault(f => TestsCore.TryGetDiscoveryFailure(result, f, out _, out _, out string art, out _) && !string.IsNullOrWhiteSpace(art)) is { } discRow
+                        && TestsCore.TryGetDiscoveryFailure(result, discRow, out _, out _, out string artifactPath, out _))
+                    {
+                        hint = NextStepHint.Render($"view_file {artifactPath}", "view discovery diagnostic log");
+                    }
+                    else if (FindDiscoveryArtifactPath(result) is { } discoveryPath)
+                    {
+                        hint = string.IsNullOrWhiteSpace(discoveryPath)
+                            ? NextStepHint.Render("view_file", "view discovery diagnostic log")
+                            : NextStepHint.Render($"view_file {discoveryPath}", "view discovery diagnostic log");
+                    }
+                    else
+                    {
+                        hint = NextStepHint.Render("inspect", "open a failing test");
+                    }
                     break;
                 }
                 case "start":
@@ -305,28 +323,104 @@ public sealed class TestsTool
     {
         if (result.KillSwitchOff)
             return null;
+
+        // 1. Disabled workspace: direct-run recipe is primary
         if (!result.Enabled)
-            return NextStepHint.Render("tests operation=enable", "opt in to continuous testing");
+        {
+            if (result.DirectRunRecipe is { } recipe && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
+            {
+                string reason = result.Projects.Any(p => p.UnsupportedReason is null)
+                    ? "run tests directly (or enable CT: tests operation=enable)"
+                    : "run tests directly (framework unsupported under CT)";
+                return NextStepHint.Render(recipe.PrimaryCommand, reason);
+            }
+            return null;
+        }
+
+        // 2. Stopped daemon on enabled workspace
         if (result.DaemonState == CtDaemonLifecycleState.Stopped)
-            return NextStepHint.Render("tests operation=start", "start the daemon");
+        {
+            return result.Projects.Any(p => p.UnsupportedReason is null)
+                ? NextStepHint.Render("tests operation=start", "start the daemon")
+                : null;
+        }
 
-        // A wedged loop watches nothing while reporting "running", so it outranks every hint below.
-        // Stop is the recovery: it escalates to a process-tree kill after a short unacked wait, and the
-        // next start puts a live loop back on the tree. Miller reports and never kills by itself.
-        if (result.DaemonLoop is { Stalled: true })
-            return NextStepHint.Render("tests operation=stop", "the daemon loop is wedged; stop, then start");
+        // 3. Active selection (CtDaemonActivity.Selecting or DaemonSelection is not null): overrides loop lag!
+        if (result.DaemonActivity == CtDaemonActivity.Selecting || result.DaemonSelection is not null)
+        {
+            if (result.DaemonSelection is { } sel)
+            {
+                int elapsed = (int)Math.Max(0, (DateTimeOffset.UtcNow - sel.StartedAtUtc).TotalSeconds);
+                return NextStepHint.Render("tests operation=status", $"selection in progress (phase={sel.Phase}, elapsed={elapsed}s)");
+            }
+            return NextStepHint.Render("tests operation=status", "selection in progress");
+        }
 
-        // A running daemon on an OLDER release is watching the tree with old code, and start is what
-        // replaces it. Gated on the one verdict that proves a direction, NOT on MayReplace: a
-        // build_differs pair (same release, two commits — two worktrees of this repo) is symmetric,
-        // so each side would read "replace the older daemon" about the other and follow it, and the
-        // takeover kills every suite in flight. Miller must never nudge both sides of a tie.
-        // build_differs stays fully visible in `version_mismatch`, the compact line, and the JSON.
+        // 4. Executing (CtDaemonActivity.Executing or DaemonRun is not null): overrides loop lag!
+        if (result.DaemonActivity == CtDaemonActivity.Executing || result.DaemonRun is not null)
+        {
+            if (result.DaemonRun is { } run)
+            {
+                int elapsed = run.ElapsedSeconds is { } es
+                    ? (int)es
+                    : (int)Math.Max(0, (DateTimeOffset.UtcNow - run.RunStartedAtUtc).TotalSeconds);
+                string projName = !string.IsNullOrEmpty(run.ProjectPath) ? Path.GetFileName(run.ProjectPath) : "test project";
+                return NextStepHint.Render("tests operation=status", $"tests executing ({projName}, elapsed={elapsed}s)");
+            }
+            return NextStepHint.Render("tests operation=status", "tests executing");
+        }
+
+        // 5. Queued: advise tests operation=status
+        if (result.DaemonActivity == CtDaemonActivity.Queued)
+        {
+            return NextStepHint.Render("tests operation=status", "command queued, awaiting execution");
+        }
+
+        // 6. Wedged loop: advise tests operation=stop only when genuinely stalled and not actively selecting/executing
+        if (result.DaemonLoop is { Stalled: true } loop)
+        {
+            return NextStepHint.Render("tests operation=stop", $"daemon loop wedged ({loop.Reason}); stop, then start");
+        }
+
+        // 7. Daemon version mismatch (DaemonOlder)
         if (result.DaemonVersion is { Match: CtDaemonVersionMatch.DaemonOlder })
+        {
             return NextStepHint.Render("tests operation=start", "replace the older daemon");
+        }
+
+        // 8. Red verdict: if discovery failure, advise view_file <artifactPath>; else tests operation=failures
         if (result.Verdict == ContinuousTestVerdict.Red)
+        {
+            if (!string.IsNullOrWhiteSpace(result.DiscoveryFailureArtifactPath))
+                return NextStepHint.Render($"view_file {result.DiscoveryFailureArtifactPath}", "view discovery diagnostic log");
             return NextStepHint.Render("tests operation=failures", "inspect red cases");
-        return NextStepHint.Render("tests operation=failures", "inspect recent results");
+        }
+
+        // 9. Stale/owed cases: advise copyable tests operation=run wait=true with candidate count
+        if (result.StaleCount > 0)
+        {
+            bool broadScope = result.Selected is null
+                || result.Verdict == ContinuousTestVerdict.Unknown
+                || (result.SelectedCount > 0 && result.StaleCount >= (int)(result.SelectedCount * 0.8));
+            string reason = broadScope
+                ? $"execute {result.StaleCount} stale cases (broad project scope)"
+                : $"execute {result.StaleCount} stale cases";
+            return NextStepHint.Render("tests operation=run wait=true", reason);
+        }
+
+        // 10. Auto-runs paused
+        if (result.DaemonAutoRunsPaused)
+        {
+            return NextStepHint.Render("tests operation=status", $"auto-runs paused ({result.DaemonPauseReason ?? "unknown"}); check status");
+        }
+
+        // 11. Green idle: return null (clean termination)
+        if (result.Verdict == ContinuousTestVerdict.Green)
+        {
+            return null;
+        }
+
+        return null;
     }
 
     private static string RequireTestsMcpOutput(string output)
@@ -337,6 +431,35 @@ public sealed class TestsTool
         throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
             "output_metadata_too_large",
             "tests output exceeds the 12 KiB MCP budget; narrow with limit, offset, project, or group=error_class."));
+    }
+
+    private static string? FindDiscoveryArtifactPath(TestsFailuresResult result)
+    {
+        foreach (ContinuousTestStatus row in result.Failures)
+        {
+            if (result.TestCases?.TryGetValue(row.TestCaseId, out ContinuousTestCase? tc) == true)
+            {
+                if (string.Equals(tc.Source, "ct-project-status", StringComparison.Ordinal)
+                    || (tc.Metadata.TryGetValue("kind", out object? kindObj)
+                        && string.Equals(kindObj?.ToString(), "ct-project-discovery-failure", StringComparison.Ordinal)))
+                {
+                    if (tc.Metadata.TryGetValue("artifact_path", out object? pathObj)
+                        && pathObj?.ToString() is { Length: > 0 } path)
+                    {
+                        return path;
+                    }
+
+                    return string.Empty;
+                }
+            }
+
+            if (row.TestCaseId.StartsWith("ct-discovery-failure", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+        }
+
+        return null;
     }
 
     private static string NormalizeOperation(string? operation) =>

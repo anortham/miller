@@ -14,7 +14,9 @@ public enum ReferenceEvidenceSource
 public enum ReferenceResolutionStatus
 {
     Exact,
-    Fallback,
+    Heuristic,
+    Ambiguous,
+    Fallback = Heuristic,
 }
 
 /// <summary>Why the fallback arm did or did not return evidence.</summary>
@@ -74,7 +76,9 @@ public sealed record ReferenceEvidence(
     string? Language,
     string ReferenceSiteId,
     bool IsExact,
-    string SiteProvenance);
+    string SiteProvenance,
+    IReadOnlyList<string>? CandidateTargetIds = null,
+    IReadOnlyList<string>? Provenances = null);
 
 /// <summary>Counts and fallback safety facts for one bounded reference read.</summary>
 public sealed record ReferenceEvidenceCoverage(
@@ -124,7 +128,9 @@ public sealed record OutgoingReferenceEvidence(
     string? Language,
     string ReferenceSiteId,
     bool IsExact,
-    string SiteProvenance);
+    string SiteProvenance,
+    IReadOnlyList<string>? CandidateTargetIds = null,
+    IReadOnlyList<string>? Provenances = null);
 
 /// <summary>Counts for one independently bounded outgoing reference read.</summary>
 public sealed record OutgoingReferenceEvidenceCoverage(

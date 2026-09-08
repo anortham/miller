@@ -60,6 +60,53 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     }
 
     [Fact]
+    public void A_selecting_daemon_with_fresh_progress_is_healthy()
+    {
+        var selection = new CtDaemonSelectionProgress(
+            WorkspaceId: "ws:1",
+            ProjectPath: "test/Project.Tests.csproj",
+            Phase: "selecting",
+            Freshness: new CtFreshnessKey("gen-1", 1),
+            StartedAtUtc: Now - TimeSpan.FromMinutes(2),
+            ProgressTimestampUtc: Now - TimeSpan.FromSeconds(10));
+
+        CtDaemonStatusRecord record = Record(
+            lag: TimeSpan.FromMinutes(2),
+            activity: CtDaemonActivity.Selecting) with { Selection = selection };
+
+        CtLoopHealthVerdict verdict = Evaluate(record);
+
+        Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+        Assert.False(verdict.Stalled);
+        Assert.Equal(10, verdict.LagSeconds);
+        Assert.Contains("selecting tests", verdict.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_selecting_daemon_whose_progress_stands_still_is_loop_stalled()
+    {
+        var selection = new CtDaemonSelectionProgress(
+            WorkspaceId: "ws:1",
+            ProjectPath: "test/Project.Tests.csproj",
+            Phase: "selecting",
+            Freshness: new CtFreshnessKey("gen-1", 1),
+            StartedAtUtc: Now - TimeSpan.FromMinutes(10),
+            ProgressTimestampUtc: Now - TimeSpan.FromMinutes(5));
+
+        CtDaemonStatusRecord record = Record(
+            lag: TimeSpan.FromMinutes(10),
+            activity: CtDaemonActivity.Selecting) with { Selection = selection };
+
+        CtLoopHealthVerdict verdict = Evaluate(record);
+
+        Assert.Equal(CtLoopHealth.LoopStalled, verdict.Health);
+        Assert.True(verdict.Stalled);
+        Assert.Equal(300, verdict.LagSeconds);
+        Assert.Contains("selection worker for test/Project.Tests.csproj has not made progress", verdict.Reason, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
     public void A_loop_that_ticked_within_the_bound_reads_healthy()
     {
         CtLoopHealthVerdict verdict = Evaluate(Record(lag: TimeSpan.FromSeconds(1)));

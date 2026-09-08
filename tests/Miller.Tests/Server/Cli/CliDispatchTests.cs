@@ -1490,6 +1490,50 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Content_SearchAndRead_SupportsSourceIdAndLineContinuation()
+    {
+        string logPath = Path.Combine(_dir, "cli-long-line.log");
+        string part1 = new string('A', 100);
+        string part2 = new string('B', 100);
+        File.WriteAllText(logPath, "CliMarkerStart " + part1 + part2 + "\n");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+
+        var (importCode, importOut, _) = Run(new[] { "content", "import", logPath, "--json" }, ctx);
+        Assert.Equal(0, importCode);
+        using var importDoc = JsonDocument.Parse(importOut);
+        string sourceId = importDoc.RootElement.GetProperty("source_id").GetString()!;
+
+        // 1. Search with --source-id
+        var (searchCode, searchOut, searchErr) = Run(
+            new[] { "content", "search", "CliMarkerStart", "--source-id", sourceId, "--json" },
+            ctx);
+        Assert.Equal(0, searchCode);
+        Assert.Empty(searchErr);
+        using var searchDoc = JsonDocument.Parse(searchOut);
+        Assert.Single(searchDoc.RootElement.EnumerateArray());
+
+        // 2. Read with --max-line-chars
+        var (readCode1, readOut1, readErr1) = Run(
+            new[] { "content", "read", "--source-id", sourceId, "--line", "1", "--max-line-chars", "80", "--context-lines", "0", "--json" },
+            ctx);
+        Assert.Equal(0, readCode1);
+        Assert.Empty(readErr1);
+        using var readDoc1 = JsonDocument.Parse(readOut1);
+        Assert.True(readDoc1.RootElement.GetProperty("line_truncated").GetBoolean());
+        string token = readDoc1.RootElement.GetProperty("line_continuation_token").GetString()!;
+        Assert.False(string.IsNullOrWhiteSpace(token));
+
+        // 3. Read page 2 with --continuation
+        var (readCode2, readOut2, readErr2) = Run(
+            new[] { "content", "read", "--source-id", sourceId, "--line", "1", "--max-line-chars", "80", "--continuation", token, "--context-lines", "0", "--json" },
+            ctx);
+        Assert.Equal(0, readCode2);
+        Assert.Empty(readErr2);
+        using var readDoc2 = JsonDocument.Parse(readOut2);
+        Assert.True(readDoc2.RootElement.GetProperty("line_truncated").GetBoolean());
+    }
+
+    [Fact]
     public void Content_ReadFailure_CompactExitsThreeAndWritesDiagnosticToStderr()
     {
         var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
@@ -3869,7 +3913,8 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("degraded", root.GetProperty("verdict").GetProperty("state").GetString());
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
-        Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Equal("search_sidecar", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Contains(root.GetProperty("warnings").EnumerateArray(), static w => w.GetProperty("code").GetString() == "capability_gaps");
     }
 
     [Fact]

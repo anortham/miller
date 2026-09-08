@@ -93,5 +93,10 @@ public sealed class TextSearchQueryPlan
     }
 
     private static bool QueryRequiresTokenPhrase(string query) =>
-        query.Any(static c => c == '_' || c == ':' || c == '/' || c == '\\');
+        query.Any(static c => c == '_' || c == ':' || c == '/' || c == '\\' || c == '-');
+
+    public string Description =>
+        $"Tokens: [{string.Join(", ", QueryTokens)}], StrictAND: [{string.Join(" AND ", CoverageTerms)}], RequiredCoverage: {RequiredCoverage}/{CoverageTerms.Count}, TokenPhrase: {RequiresTokenPhrase}";
+
+    public override string ToString() => Description;
 }

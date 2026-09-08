@@ -255,19 +255,47 @@ runs normally under `dotnet test`; only continuous testing needs the v3 shape.
 **One environment per jest project.** CT invokes jest once under its default environment. A
 repository whose own `npm test` runs jest twice under two environments is covered for one of them.
 
-**Some detected frameworks are refused with a repair path.** A `Gemfile` with only `minitest` is
-listed as `framework: "minitest"` and refused with reason `Minitest has no per-test machine-readable
-runner surface CT can consume`. The remedy is `Add rspec, or run the suite directly with rake test`.
-A Godot
-project with `gdUnit4` is listed as `framework: "gdunit4"` and refused with reason `gdUnit4 is
-detected; Miller CT does not yet support its runner`. The remedy is
-`run it with its own runner; CT support is planned`. A Godot project that has GUT evidence below the supported floor is listed as
-`framework: "gut-unsupported"` and refused with reason `Godot 4 with GUT 9 was not detected`.
-The remedy is `Upgrade or configure Godot 4 with GUT 9, or run GUT directly`.
+### Unsupported project classifications and remedies
+
+Some detected test frameworks are refused with an actionable repair path and alternative direct-run recipe. Miller never silently ignores detected test projects:
+
+| Framework / Classification | Detected From | Reason CT Cannot Run It | Actionable Remedy | Direct Run Alternative |
+|---|---|---|---|---|
+| `xunit-v2` | `.csproj` naming xUnit v2 packages (`xunit`, `xunit.core`, etc.) without `xunit.v3` | Builds a DLL + `testhost.exe`; CT requires the self-executing test executable introduced in v3 | Migrate project to xUnit v3 (add `xunit.v3` package) | `dotnet test <project>` |
+| `minitest` | `Gemfile` containing only `minitest` | Minitest lacks a per-test machine-readable runner protocol consumable by CT | Add RSpec (`gem 'rspec'`), or run directly | `bundle exec rake test` |
+| `gdunit4` | `project.godot` with gdUnit4 addon (`addons/gdUnit4`) | gdUnit4 runner protocol is not yet supported in CT | Run via gdUnit4 test runner; CT support is planned | Run via Godot editor or gdUnit4 CLI runner |
+| `gut-unsupported` | Godot project with GUT version < 9 or Godot engine < 4 | CT requires Godot 4 with GUT 9 | Upgrade or configure Godot 4 with GUT 9 | Run GUT directly via Godot CLI |
+| Missing toolchain | Project manifest exists but required CLI (`dotnet`, `cargo`, `pytest`, `vitest`, etc.) is absent from PATH | CT cannot spawn provider processes without the ecosystem runner | Install the missing SDK or toolchain, or install dependencies (e.g. `composer install`, `npm install`, `bundle install`) | Install toolchain and run via standard CLI |
 
 Inventory ignores a bare `project.godot` with neither test addon. When both addons are present, a
 supported GUT project remains runnable as `framework: "gut"`; the `gdunit4` refusal reason and
 remedy remain in the project metadata.
+
+### Selecting vs. stalled states
+
+Miller's CT daemon distinguishes between active test selection in progress and a stalled event loop:
+
+- **Active selection (`daemon.activity: "selecting"`, `daemon.selection` is non-null):** The daemon is actively computing reverse reachability, impact analysis, and fresh-verdict keep-sets for an advance or run. During large selections, the monotonic main loop tick stands still while the background selection task turns. This represents healthy, active computation, not a wedged loop. Next-step hints report active progress: `tests operation=status — selection in progress (phase=<phase>, elapsed=<N>s)`.
+- **Active execution (`daemon.activity: "executing"`, `daemon.run` is non-null):** Test processes are executing. Next-step hints report execution progress with project name and elapsed runtime: `tests operation=status — tests executing (<project>, elapsed=<N>s)`.
+- **Stalled loop (`daemon.loop_stalled: true`):** A genuine loop wedge is diagnosed only when `daemon.activity` is `idle` or `queued` AND the monotonic loop age (`loop_age_seconds`) exceeds `MILLER_CT_LOOP_STALL_TIMEOUT` (default 90s). If the daemon is actively selecting or executing, loop lag is expected and suppressed. When genuinely stalled, next-step advice instructs the agent: `tests operation=stop — daemon loop wedged (<reason>); stop, then start`.
+
+### Command correlation (`command_id`)
+
+Every mutation or run request to the CT daemon generates a unique, traceable `command_id` (e.g., `cmd-9f8e7d6c`).
+
+- The daemon acknowledges submission via `.miller/ct/cmd-<commandId>.ack` transitioning across lifecycle states: `requested` -> `acknowledged` -> `completed` (or `cancelled` / `rejected`).
+- `tests run --wait` correlates progress directly against the submitted `command_id`. If a run is already executing or queued, callers wait against that specific command's lifecycle rather than polling global daemon state.
+- When daemon stops or detaches, active in-flight commands transition to `cancelled`, terminating waits cleanly without hanging.
+
+### Project discovery failure attempt artifacts
+
+When project discovery probes fail (e.g. build failure during test listing, missing project references, or syntax errors in test suites):
+
+- **Durable diagnostic artifacts:** The daemon writes full standard output, standard error, and environment diagnostics to `<workspace>/.miller/ct/discovery-attempts/<attemptId>.json` (bounded to 32 KiB per stream to prevent unbounded disk growth).
+- **Discovery ledger:** A summary entry is appended to `<workspace>/.miller/ct-discovery.json`.
+- **Synthetic failure test cases:** CT registers a synthetic test case (`ct-discovery-failure:<project_path>`) with `classification: "project_discovery_failure"`, pointing directly to the attempt artifact.
+- **Failures output & next-step advice:** `tests failures` renders `- [project discovery failed] <project_path>: <summary>` along with `log: <artifact_path>` and suggested remedy. Next-step advice recommends reading the diagnostic: `next: view_file <artifactPath> — view discovery diagnostic log`.
+- **Loop elimination:** On file-watcher auto-runs, same-revision failed or refused discovery attempts are skipped, preventing infinite discovery rebuild loops. Explicit runs (`tests run`) re-probe unconditionally.
 
 **Expensive MSBuild build hooks still run.** CT builds a .NET test project with
 `--artifacts-path` pointed at the supervised build root (see "Where CT builds"), which the watcher

@@ -3439,4 +3439,83 @@ public sealed class InspectToolTests
 
         public void Dispose() => _inner.Dispose();
     }
+
+    [Fact]
+    public void Inspect_CleanCompactDocComment_StripsXmlPresentationTags_PreservesGenericTypesAndCref()
+    {
+        string rawDoc = "/// <summary>\n" +
+                        "/// Processes a <see cref=\"T:System.Collections.Generic.List{T}\"/> and returns <c>var x = 1;</c>.\n" +
+                        "/// Supports List<string> and Dictionary<string, object> without tag mangling.\n" +
+                        "/// </summary>\n" +
+                        "/// <param name=\"input\">The input value.</param>\n" +
+                        "/// <returns>A new <see cref=\"MyTarget\">Target Class</see>.</returns>";
+
+        string cleaned = InspectTool.CleanCompactDocComment(rawDoc);
+
+        Assert.DoesNotContain("<summary>", cleaned);
+        Assert.DoesNotContain("</summary>", cleaned);
+        Assert.DoesNotContain("<param", cleaned);
+        Assert.DoesNotContain("</param>", cleaned);
+        Assert.DoesNotContain("<returns>", cleaned);
+        Assert.DoesNotContain("</returns>", cleaned);
+        Assert.DoesNotContain("<c>", cleaned);
+        Assert.DoesNotContain("</c>", cleaned);
+        Assert.DoesNotContain("<see", cleaned);
+        Assert.DoesNotContain("</see>", cleaned);
+
+        Assert.Contains("var x = 1;", cleaned);
+        Assert.Contains("Target Class", cleaned);
+        Assert.Contains("List<string>", cleaned);
+        Assert.Contains("Dictionary<string, object>", cleaned);
+        Assert.Contains("The input value.", cleaned);
+    }
+
+    [Fact]
+    public void Inspect_CompleteConstant_OmitsMisleadingUnavailableBody()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000001", "MaxItems", "constant", "csharp", "src/Config.cs", "public const int MaxItems = 100;", 5, null),
+        });
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-const", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("MaxItems", depth: "full");
+
+        Assert.Contains("# MaxItems  (constant)", output);
+        Assert.Contains("value_declaration_complete: true", output);
+        Assert.DoesNotContain("## body", output);
+        Assert.DoesNotContain("body unavailable", output);
+    }
+
+    [Fact]
+    public void Inspect_Overview_RanksPublicAndProtectedBeforePrivateFields_HintsViewMembers()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("p00000000000000000000000000000001", "OrderManager", "class", "csharp", "src/OrderManager.cs", "public class OrderManager", 1, null),
+            new JulieDbFixture.SymbolRow("f00000000000000000000000000000001", "_cache", "field", "csharp", "src/OrderManager.cs", "private int _cache;", 5, "p00000000000000000000000000000001") { Visibility = "private" },
+            new JulieDbFixture.SymbolRow("f00000000000000000000000000000002", "_logger", "field", "csharp", "src/OrderManager.cs", "private object _logger;", 6, "p00000000000000000000000000000001") { Visibility = "private" },
+            new JulieDbFixture.SymbolRow("m00000000000000000000000000000001", "Execute", "method", "csharp", "src/OrderManager.cs", "public void Execute()", 20, "p00000000000000000000000000000001") { Visibility = "public" },
+            new JulieDbFixture.SymbolRow("m00000000000000000000000000000002", "Validate", "method", "csharp", "src/OrderManager.cs", "protected void Validate()", 35, "p00000000000000000000000000000001") { Visibility = "protected" },
+        });
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-overview", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("OrderManager", depth: "overview");
+
+        Assert.Contains("## children", output);
+        int pubIdx = output.IndexOf("Execute", StringComparison.Ordinal);
+        int protIdx = output.IndexOf("Validate", StringComparison.Ordinal);
+        int privIdx1 = output.IndexOf("_cache", StringComparison.Ordinal);
+        int privIdx2 = output.IndexOf("_logger", StringComparison.Ordinal);
+
+        Assert.True(pubIdx >= 0 && protIdx >= 0 && privIdx1 >= 0 && privIdx2 >= 0);
+        Assert.True(pubIdx < privIdx1, "Public Execute should appear before private _cache");
+        Assert.True(protIdx < privIdx1, "Protected Validate should appear before private _cache");
+    }
 }

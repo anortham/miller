@@ -622,8 +622,11 @@ public sealed class CrossWorkspaceRefreshService
                 ArtifactId: null);
         }
 
+        bool isLeaderAlive = Hosting.LeaderIdentityFile.TryRead(millerDir) is { } leader
+            && Hosting.LeaderIdentityFile.IsProcessAlive(leader);
+        bool queued = force && requestWarning is null && isLeaderAlive;
         return new WorkspaceRefreshResult(
-            WorkspaceRefreshStatus.LockBusy,
+            queued ? WorkspaceRefreshStatus.Queued : WorkspaceRefreshStatus.LockBusy,
             row.WorkspaceId,
             row.CanonicalRoot,
             row.IndexDbPath,
@@ -834,8 +837,13 @@ public sealed class CrossWorkspaceRefreshService
                       "was not confirmed before serving the latest readable DB."
                 : "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB."))
             + " " + DescribeLockHolder(millerDir);
+
+        bool isLeaderAlive = Hosting.LeaderIdentityFile.TryRead(millerDir) is { } leader
+            && Hosting.LeaderIdentityFile.IsProcessAlive(leader);
+        bool queued = force && requestWarning is null && isLeaderAlive && !unconfirmedForceAdvance;
+
         return new WorkspaceRefreshResult(
-            WorkspaceRefreshStatus.LockBusy,
+            queued ? WorkspaceRefreshStatus.Queued : WorkspaceRefreshStatus.LockBusy,
             row.WorkspaceId,
             row.CanonicalRoot,
             row.IndexDbPath,

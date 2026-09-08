@@ -156,7 +156,8 @@ internal sealed class ContextQueryService
                         ref phaseStart,
                         context.ReadTelemetry,
                         counts),
-                    retrieval));
+                    retrieval,
+                    context.WorkspaceRoot));
 
             string output = ReadToolWorkspaceRouting.PrefixCompact(result.Output, compactBanner);
             ToolDiagnostic? diagnostic = null;
@@ -255,7 +256,8 @@ internal sealed class ContextQueryService
             request.ReadOutgoingMany,
             request.CancellationToken,
             phase => request.PhaseObserver?.Invoke(phase, null),
-            request.Retrieval);
+            request.Retrieval,
+            request.WorkspaceRoot);
         if (built.Candidates.Count == 0)
         {
             return new ContextResolvedQueryResult(
@@ -313,7 +315,8 @@ internal sealed class ContextQueryService
                 request.Json),
             request.CancellationToken,
             phase => request.PhaseObserver?.Invoke(phase, null),
-            request.Retrieval);
+            request.Retrieval,
+            request.WorkspaceRoot);
         if (built.Candidates.Count == 0)
         {
             return new ContextResolvedQueryResult(
@@ -597,7 +600,8 @@ internal sealed record ContextResolvedQueryRequest(
     Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? ReadMany,
     CancellationToken CancellationToken,
     Action<string, ContextReferenceReadCounts?>? PhaseObserver,
-    ContextQueryRetrieval? Retrieval = null);
+    ContextQueryRetrieval? Retrieval = null,
+    string? WorkspaceRoot = null);
 
 internal sealed record ContextResolvedQueryResult(string Output, int SelectedCount, int CandidatesExamined);
 

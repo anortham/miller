@@ -19,6 +19,15 @@ public sealed record CtIdleDrainObservation(
     DateTimeOffset? LastDrainAt);
 
 /// <summary>
+/// Structured decision from <see cref="CtIdleDrainPolicy.Evaluate"/> explaining why a context may or may not drain.
+/// </summary>
+public sealed record CtIdleDrainDecision(
+    bool ShouldDrain,
+    string Reason,
+    DateTimeOffset? NextEligibleAtUtc = null,
+    int? RemainingCooldownSeconds = null);
+
+/// <summary>
 /// Decides when an idle daemon may convert store staleness back into ONE scheduled run — the
 /// convergence half of the Unknown fail-safe. An Unknown selection still executes nothing at the
 /// moment it lands; this policy fires LATER, under healthy settled conditions, and the drain it
@@ -53,17 +62,42 @@ public sealed class CtIdleDrainPolicy
         _quietPeriod = quietPeriod;
     }
 
-    public bool ShouldDrain(CtIdleDrainObservation observation)
+    public CtIdleDrainDecision Evaluate(CtIdleDrainObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
-        return observation.StaleCount > 0
-            && !observation.QueueHasPendingWork
-            && !observation.RunExecuting
-            && observation.PollSettled
-            && !observation.AutoRunsPaused
-            && (observation.LastActivityAt is not { } activity
-                || observation.Now - activity >= _quietPeriod)
-            && (observation.LastDrainAt is not { } drained
-                || observation.Now - drained >= Cooldown);
+
+        if (observation.AutoRunsPaused)
+            return new CtIdleDrainDecision(false, "auto_runs_paused");
+
+        if (observation.RunExecuting)
+            return new CtIdleDrainDecision(false, "run_executing");
+
+        if (observation.QueueHasPendingWork)
+            return new CtIdleDrainDecision(false, "pending_work");
+
+        if (!observation.PollSettled)
+            return new CtIdleDrainDecision(false, "poll_unsettled");
+
+        if (observation.StaleCount <= 0)
+            return new CtIdleDrainDecision(false, "no_stale_cases");
+
+        if (observation.LastActivityAt is { } activity && observation.Now - activity < _quietPeriod)
+        {
+            DateTimeOffset nextEligible = activity + _quietPeriod;
+            return new CtIdleDrainDecision(false, "waiting_quiet", nextEligible);
+        }
+
+        if (observation.LastDrainAt is { } drained && observation.Now - drained < Cooldown)
+        {
+            DateTimeOffset nextEligible = drained + Cooldown;
+            TimeSpan remaining = nextEligible - observation.Now;
+            int remainingSec = (int)Math.Ceiling(Math.Max(0, remaining.TotalSeconds));
+            return new CtIdleDrainDecision(false, "cooldown", nextEligible, remainingSec);
+        }
+
+        return new CtIdleDrainDecision(true, "eligible");
     }
+
+    public bool ShouldDrain(CtIdleDrainObservation observation) =>
+        Evaluate(observation).ShouldDrain;
 }

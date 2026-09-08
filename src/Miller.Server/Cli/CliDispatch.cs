@@ -1071,7 +1071,7 @@ public static class CliDispatch
         {
             query = o.Query;
             if (string.IsNullOrWhiteSpace(query))
-                return Usage(err, "miller content search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]");
+                return Usage(err, "miller content search <query> [--kind KIND] [--source-id ID] [--workspace-id all|SELECTOR] [--limit N] [--json]");
         }
 
         var store = new ContentCorpusExternalStore();
@@ -1165,7 +1165,10 @@ public static class CliDispatch
             o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
             o.Int("limit", SearchTool.DefaultLimit),
             LongOption(o, "max-bytes"),
-            json ? "json" : "compact");
+            json ? "json" : "compact",
+            outputByteBudget: null,
+            maxLineChars: o.Has("max-line-chars") ? o.Int("max-line-chars", 160) : null,
+            continuation: o.Value("continuation"));
 
         if (result.IsError)
         {

@@ -2,7 +2,7 @@
 name: miller-orientation
 description: Use when starting a Miller task, choosing a Miller tool, or choosing a Miller search mode.
 user-invocable: true
-arguments: "<what you want to find or do>"
+argument-hint: "<what you want to find or do>"
 allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit, mcp__miller__tests
 ---
 
@@ -77,7 +77,7 @@ workspace(workspace_id="<id>", operation="refresh")
 - `trace` empty results include `Next:` / JSON `next_actions`; follow them before treating a missing path or ref as proof.
 - `content(operation="read")` should use the `source_id` from `content(operation="search")` or `content(operation="list")`; pass the hit's `workspace_id` for cross-workspace reads.
 - `patterns` list and no-match results include `Next:` / JSON `next_actions`; run `patterns(operation="list")` before raw route/HTML/JSON/YAML/Markdown greps.
-- `trace mode=bridge` is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; on another stack use `mode=refs`/`path`, and use `inspect depth=full` for callers and callees.
+- `trace mode=bridge` is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; on another stack use `mode=refs`/`path`, and use `inspect depth=overview` for callers and callees (escalating to `depth=full` only for complete bodies or full relation lists).
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
 - `tests` is opt-in per workspace. `enabled: false` in status lists the test projects it found; run those with
   the project's test runner for a one-off answer. `enable` then `start` only when you want ongoing verdicts.

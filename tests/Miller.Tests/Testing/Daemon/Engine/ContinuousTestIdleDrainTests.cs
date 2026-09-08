@@ -126,7 +126,51 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
     }
 
     [Fact]
+    public void Evaluate_reports_structured_reasons_and_cooldown_times()
+    {
+        var policy = new CtIdleDrainPolicy(Quiet);
+
+        CtIdleDrainDecision eligible = policy.Evaluate(AllGuardsMet());
+        Assert.True(eligible.ShouldDrain);
+        Assert.Equal("eligible", eligible.Reason);
+
+        CtIdleDrainDecision paused = policy.Evaluate(AllGuardsMet() with { AutoRunsPaused = true });
+        Assert.False(paused.ShouldDrain);
+        Assert.Equal("auto_runs_paused", paused.Reason);
+
+        CtIdleDrainDecision executing = policy.Evaluate(AllGuardsMet() with { RunExecuting = true });
+        Assert.False(executing.ShouldDrain);
+        Assert.Equal("run_executing", executing.Reason);
+
+        CtIdleDrainDecision pending = policy.Evaluate(AllGuardsMet() with { QueueHasPendingWork = true });
+        Assert.False(pending.ShouldDrain);
+        Assert.Equal("pending_work", pending.Reason);
+
+        CtIdleDrainDecision unsettled = policy.Evaluate(AllGuardsMet() with { PollSettled = false });
+        Assert.False(unsettled.ShouldDrain);
+        Assert.Equal("poll_unsettled", unsettled.Reason);
+
+        CtIdleDrainDecision noStale = policy.Evaluate(AllGuardsMet() with { StaleCount = 0 });
+        Assert.False(noStale.ShouldDrain);
+        Assert.Equal("no_stale_cases", noStale.Reason);
+
+        DateTimeOffset activity = T0 - TimeSpan.FromSeconds(1);
+        CtIdleDrainDecision waitingQuiet = policy.Evaluate(AllGuardsMet() with { LastActivityAt = activity });
+        Assert.False(waitingQuiet.ShouldDrain);
+        Assert.Equal("waiting_quiet", waitingQuiet.Reason);
+        Assert.Equal(activity + Quiet, waitingQuiet.NextEligibleAtUtc);
+
+        DateTimeOffset drainTime = T0 - TimeSpan.FromMinutes(2);
+        CtIdleDrainDecision inCooldown = policy.Evaluate(AllGuardsMet() with { LastDrainAt = drainTime });
+        Assert.False(inCooldown.ShouldDrain);
+        Assert.Equal("cooldown", inCooldown.Reason);
+        Assert.Equal(drainTime + CtIdleDrainPolicy.Cooldown, inCooldown.NextEligibleAtUtc);
+        Assert.Equal(180, inCooldown.RemainingCooldownSeconds);
+    }
+
+    [Fact]
     public async Task An_idle_drain_executes_only_the_stale_cases_as_explicit_ids()
+
     {
         var workspace = EngineTestSupport.Workspace(_root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));

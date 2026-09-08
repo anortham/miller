@@ -82,7 +82,7 @@ public sealed class WorkspaceEditContextFactory
     }
 
     /// <summary>Build a service whose read, lock, disk, and convergence paths all use the selected workspace.</summary>
-    public WorkspaceEditContext Create(string? workspaceId)
+    public WorkspaceEditContext Create(string? workspaceId, bool completeRecall = true)
     {
         WorkspaceRegistryRow? row = null;
         WorkspaceSymbolReadContext readContext;
@@ -90,7 +90,9 @@ public sealed class WorkspaceEditContextFactory
 
         if (string.IsNullOrWhiteSpace(workspaceId))
         {
-            readContext = _symbolReads.ResolveCompleteCurrentSymbolRead();
+            readContext = completeRecall
+                ? _symbolReads.ResolveCompleteCurrentSymbolRead()
+                : _symbolReads.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
             targetWorkspaceId = readContext.WorkspaceId
                 ?? throw new InvalidOperationException("The current workspace has no resolved workspace ID.");
         }
@@ -104,7 +106,9 @@ public sealed class WorkspaceEditContextFactory
                 throw new DirectoryNotFoundException($"Workspace root not found: {row.CanonicalRoot}");
             WorkspaceRootSafety.RejectSensitiveRoot(row.CanonicalRoot, fromCwd: false);
             targetWorkspaceId = row.WorkspaceId;
-            readContext = _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
+            readContext = completeRecall
+                ? _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None)
+                : _symbolReads.ResolveSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
         }
 
         try
@@ -151,8 +155,12 @@ public sealed class WorkspaceEditContextFactory
                     _fallbackRefresh,
                     _logger);
             Func<WorkspaceSymbolReadContext> resolveFreshContext = string.IsNullOrWhiteSpace(workspaceId)
-                ? _symbolReads.ResolveCompleteCurrentSymbolRead
-                : () => _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
+                ? () => completeRecall
+                    ? _symbolReads.ResolveCompleteCurrentSymbolRead()
+                    : _symbolReads.ResolveSymbolRead(null, WorkspaceRefreshMode.None)
+                : () => completeRecall
+                    ? _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None)
+                    : _symbolReads.ResolveSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
             var service = new EditService(
                 readContext.Index,
                 new SmartTargetResolver(readContext.Index),

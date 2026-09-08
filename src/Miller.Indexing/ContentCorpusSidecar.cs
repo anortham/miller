@@ -40,12 +40,16 @@ public sealed class ContentCorpusSidecar
             BuiltFromCurrentArtifact(contentDbPath, symbolsDbPath) &&
             WorkspaceSourcesAgree(contentDbPath, symbolsDbPath))
         {
+            ContentCorpusWriter.MigrateTestClassifications(contentDbPath);
             return false;
         }
 
         ContentCorpusWriter.Write(contentDbPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
         return true;
     }
+
+    public static int EnsureClassificationsCurrent(string contentDbPath) =>
+        ContentCorpusWriter.MigrateTestClassifications(contentDbPath);
 
     public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session) =>
         EnsureStoreCurrentDetailed(storeRoot, session).DidWork;
@@ -72,7 +76,10 @@ public sealed class ContentCorpusSidecar
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, session.Snapshot);
         string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, session.Snapshot.ViewId);
         if (StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
+        {
+            ContentCorpusWriter.MigrateTestClassifications(contentDbPath);
             return new(SidecarConvergencePath.Current, SidecarConvergenceReason.None, false);
+        }
 
         if (cursor is not null)
         {
@@ -100,13 +107,17 @@ public sealed class ContentCorpusSidecar
                         measurement),
                 measurement))
         {
+            ContentCorpusWriter.MigrateTestClassifications(contentDbPath);
             return new(SidecarConvergencePath.EmptyDelta, SidecarConvergenceReason.None, true);
         }
 
         SidecarConvergenceReason reason = TryApplyStoreDelta(
             contentDbPath, expected, session, measurement, out bool applied);
         if (applied)
+        {
+            ContentCorpusWriter.MigrateTestClassifications(contentDbPath);
             return new(SidecarConvergencePath.Incremental, SidecarConvergenceReason.None, true);
+        }
         ContentCorpusWriter.WriteStoreView(
             contentDbPath, session, writeLockTimeout: null, measurement);
         return new(SidecarConvergencePath.Full, reason, true);
@@ -362,13 +373,20 @@ public sealed class ContentCorpusSidecar
         string contentDbPath = ContentDbPathFor(symbolsDbPath);
         if (!File.Exists(contentDbPath))
         {
-            throw new InvalidOperationException(
-                $"Content corpus sidecar is missing at '{contentDbPath}'. Run `miller workspace refresh` to rebuild it.");
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Content,
+                SidecarRecoveryReason.Missing,
+                $"Content corpus sidecar is missing at '{contentDbPath}'. Run `miller workspace refresh` to rebuild it.",
+                artifactPath: contentDbPath);
         }
 
         try
         {
             return OpenGenerationChecked(contentDbPath, symbolsDbPath, expectedRevision);
+        }
+        catch (SidecarUnavailableException)
+        {
+            throw;
         }
         catch (InvalidOperationException)
         {
@@ -378,10 +396,13 @@ public sealed class ContentCorpusSidecar
             ex is FileNotFoundException or SqliteException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            throw new InvalidOperationException(
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Content,
+                SidecarRecoveryReason.Missing,
                 $"Content corpus sidecar at '{contentDbPath}' could not be opened. " +
                 "Run `miller workspace refresh` to rebuild it.",
-                ex);
+                artifactPath: contentDbPath,
+                innerException: ex);
         }
     }
 
@@ -403,9 +424,12 @@ public sealed class ContentCorpusSidecar
         FtsTextContentSearchIndex index = FtsTextContentSearchIndex.Open(contentDbPath, expectedRevision);
         if (!ReadGateArtifactAgrees(contentDbPath, symbolsDbPath))
         {
-            throw new InvalidOperationException(
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Content,
+                SidecarRecoveryReason.GenerationMismatch,
                 $"Content corpus sidecar at '{contentDbPath}' is stale: it was built from a different index " +
-                "generation (the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
+                "generation (the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.",
+                artifactPath: contentDbPath);
         }
 
         return index;
@@ -418,9 +442,14 @@ public sealed class ContentCorpusSidecar
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
         string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
         StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(contentDbPath, expected, snapshot)
-            ?? throw new InvalidOperationException(
+            ?? throw new SidecarUnavailableException(
+                SidecarArtifactKind.Content,
+                SidecarRecoveryReason.Missing,
                 $"Content sidecar for view '{snapshot.ViewId}' is missing or stale. " +
-                "Run `miller workspace refresh` to converge it.");
+                "Run `miller workspace refresh` to converge it.",
+                workspaceId: snapshot.WorkspaceId,
+                workspaceRoot: snapshot.WorkspaceRoot,
+                artifactPath: contentDbPath);
         return FtsTextContentSearchIndex.Open(contentDbPath, serve.StoreLogSequence);
     }
 

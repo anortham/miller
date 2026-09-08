@@ -314,7 +314,7 @@ public sealed class TraceToolTests
         using var document = JsonDocument.Parse(tool.Trace("Alpha", mode: "path", to: "Delta", format: "json"));
         JsonElement root = document.RootElement;
 
-        Assert.Equal(1, graph.ShortestPathWithEvidenceCalls);
+        Assert.Equal(2, graph.ShortestPathWithEvidenceCalls);
         Assert.Contains("No path from 'Alpha' to 'Delta'", root.GetProperty("note").GetString());
         Assert.DoesNotContain("reverse path exists", root.GetProperty("note").GetString());
         JsonElement swapped = root.GetProperty("next_actions").EnumerateArray().First();
@@ -976,7 +976,7 @@ public sealed class TraceToolTests
         Assert.Contains("Alpha  method  src/A.cs:1", outp);
         Assert.Contains(
             "src/Caller.cs:10  call  in=CallerMethod  [fallback source=name_fallback " +
-            "site=site:file:src/Caller.cs:1000:1001 provenance=target_token confidence=0.50]",
+            "provenance=target_token confidence=0.50]",
             outp);
         Assert.DoesNotContain("containing=", outp);
         Assert.DoesNotContain("src/Types.cs", outp);
@@ -4212,5 +4212,341 @@ public sealed class TraceToolTests
         Assert.Equal("high", link.GetProperty("confidence").GetString());
         Assert.Equal(0.9, link.GetProperty("score").GetDouble(), precision: 5);
         Assert.Empty(link.GetProperty("flags").EnumerateArray());
+    }
+
+    // =========================================================================
+    // N3: Route diagnostics, file target slash routing, member expansion & fallback
+    // =========================================================================
+
+    [Fact]
+    public void Bridge_UnobservedRoute_ReturnsRouteNotObservedDiagnostic()
+    {
+        // Setup: Bridge index with an unrelated route (/api/users)
+        string endpointId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "/api/users");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [endpointId] = new BridgeNode(endpointId, BridgeNodeKind.Endpoint, "/api/users", "server/api/users.ts", 1),
+        };
+        var index = BuildBridgeIndex([], [], extra);
+
+        // Act 1: Query unobserved route in JSON format
+        string jsonOutput = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "/zzz/nope",
+            mode: "bridge",
+            to: null,
+            depth: 2,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(jsonOutput);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("diagnostics", out var diagElem));
+        var firstDiag = diagElem.EnumerateArray().First();
+        Assert.Equal("route_not_observed", firstDiag.GetProperty("code").GetString());
+        Assert.Contains("no frontend or backend route facts observed for /zzz/nope", firstDiag.GetProperty("message").GetString(), StringComparison.Ordinal);
+
+        // Act 2: Query unobserved route in compact format
+        string compactOutput = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "/zzz/nope",
+            mode: "bridge",
+            to: null,
+            depth: 2,
+            limit: 10,
+            fullFormat: false,
+            json: false,
+            out emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("no frontend or backend route facts observed for /zzz/nope", compactOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("facts exist", compactOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("route_no_bridge_link", compactOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bridge_FileTargetWithSlashes_PreservesFileDiagnosticWithoutRouteHijack()
+    {
+        // Setup: An indexed file target with slashes that has no bridge edges
+        IndexedSymbol[] symbols =
+        [
+            new(0, "file-1", "src/Orders/OrderService.cs", "file", "file", "csharp", "src/Orders/OrderService.cs", 1, 100, null, false),
+            new(1, "sym-order-svc", "OrderService", "class OrderService", "class", "csharp", "src/Orders/OrderService.cs", 5, 50, "file-1", false),
+        ];
+        var bridge = BridgeGraph.Build([], new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+        var index = MillerRepositoryIndex.Build(symbols, [], bridge);
+
+        // Act: Run in bridge mode with slash-containing file target
+        string jsonOutput = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "src/Orders/OrderService.cs",
+            mode: "bridge",
+            to: null,
+            depth: 2,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(jsonOutput);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("diagnostics", out var diagElem));
+        string? diagCode = diagElem.EnumerateArray().FirstOrDefault().GetProperty("code").GetString();
+
+        // Must NOT be hijacked into HTTP route diagnostics
+        Assert.NotEqual("route_not_observed", diagCode);
+        Assert.NotEqual("route_no_backend_match", diagCode);
+        Assert.NotEqual("route_no_frontend_match", diagCode);
+        Assert.NotEqual("route_no_bridge_link", diagCode);
+
+        string note = root.GetProperty("note").GetString()!;
+        Assert.Contains("OrderService.cs", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Path_ClassTarget_ExpandsMembersUpTo100_WithTruncationNoticeAndWinningMember()
+    {
+        // Case A: Class with 2 members, shortest path goes through Multiply
+        IndexedSymbol[] symbolsA =
+        [
+            new(0, "class-calc", "Calculator", "class Calculator", "class", "csharp", "calc.cs", 1, 20, null, false),
+            new(1, "method-add", "Add", "int Add(int a, int b)", "method", "csharp", "calc.cs", 5, 8, "class-calc", false),
+            new(2, "method-mul", "Multiply", "int Multiply(int a, int b)", "method", "csharp", "calc.cs", 10, 15, "class-calc", false),
+            new(3, "sym-sink", "ResultSink", "void ResultSink(int v)", "method", "csharp", "sink.cs", 1, 5, null, false),
+        ];
+        var indexA = MillerRepositoryIndex.Build(symbolsA, [new GraphEdge("method-mul", "sym-sink", "calls")]);
+
+        string compactA = TraceTool.Run(
+            indexA,
+            ResolverFor(indexA),
+            target: "Calculator",
+            mode: "path",
+            to: "ResultSink",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: false,
+            out int emittedA,
+            out _);
+
+        Assert.Equal(2, emittedA);
+        Assert.Contains("# trace path Calculator (via Multiply) -> ResultSink (1 hop(s))", compactA, StringComparison.Ordinal);
+
+        string jsonA = TraceTool.Run(
+            indexA,
+            ResolverFor(indexA),
+            target: "Calculator",
+            mode: "path",
+            to: "ResultSink",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            out emittedA,
+            out _);
+
+        using (var docA = JsonDocument.Parse(jsonA))
+        {
+            var rootA = docA.RootElement;
+            Assert.Equal(1, rootA.GetProperty("hops").GetInt32());
+            Assert.Equal("Multiply", rootA.GetProperty("from_member").GetString());
+            Assert.Equal("method-mul", rootA.GetProperty("from_member_id").GetString());
+            Assert.False(rootA.TryGetProperty("start_members_truncated", out _));
+        }
+
+        // Case B: Class with 105 callable members, member 50 connects to target
+        var symbols105 = new List<IndexedSymbol>
+        {
+            new(0, "class-huge", "HugeService", "class HugeService", "class", "csharp", "huge.cs", 1, 500, null, false),
+            new(1, "target-sink", "FinalSink", "void FinalSink()", "method", "csharp", "sink.cs", 1, 5, null, false),
+        };
+        for (int i = 1; i <= 105; i++)
+        {
+            string id = $"method-{i:D3}";
+            string name = $"Method{i:D3}";
+            symbols105.Add(new(i + 1, id, name, $"void {name}()", "method", "csharp", "huge.cs", i + 10, i + 12, "class-huge", false));
+        }
+        var edges105 = new List<GraphEdge>
+        {
+            new("method-050", "target-sink", "calls"),
+            new("method-105", "target-sink", "calls"),
+        };
+        var indexHuge = MillerRepositoryIndex.Build(symbols105, edges105);
+
+        string compactHuge = TraceTool.Run(
+            indexHuge,
+            ResolverFor(indexHuge),
+            target: "HugeService",
+            mode: "path",
+            to: "FinalSink",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: false,
+            out int emittedHuge,
+            out _);
+
+        Assert.Equal(2, emittedHuge);
+        Assert.Contains("# trace path HugeService (via Method050) -> FinalSink", compactHuge, StringComparison.Ordinal);
+        Assert.Contains("[callable members truncated: 100 of 105 examined]", compactHuge, StringComparison.Ordinal);
+
+        string jsonHuge = TraceTool.Run(
+            indexHuge,
+            ResolverFor(indexHuge),
+            target: "HugeService",
+            mode: "path",
+            to: "FinalSink",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            out emittedHuge,
+            out _);
+
+        using (var docHuge = JsonDocument.Parse(jsonHuge))
+        {
+            var rootHuge = docHuge.RootElement;
+            Assert.Equal(1, rootHuge.GetProperty("hops").GetInt32());
+            Assert.Equal("Method050", rootHuge.GetProperty("from_member").GetString());
+            Assert.True(rootHuge.GetProperty("start_members_truncated").GetBoolean());
+            Assert.Equal(105, rootHuge.GetProperty("start_members_total").GetInt32());
+            Assert.Equal(100, rootHuge.GetProperty("start_members_examined").GetInt32());
+        }
+    }
+
+    [Fact]
+    public void Path_ClassTarget_RetainsClassSymbolInStartSet_WhenClassHasDirectEdge()
+    {
+        // Verify class symbol itself connects directly to target without false (via ...) annotation
+        IndexedSymbol[] symbols =
+        [
+            new(0, "class-parent", "ParentComponent", "class ParentComponent", "class", "qml", "Parent.qml", 1, 50, null, false),
+            new(1, "method-helper", "Helper", "void Helper()", "method", "qml", "Parent.qml", 5, 10, "class-parent", false),
+            new(2, "class-child", "class-child", "class ChildComponent", "class", "qml", "Child.qml", 1, 30, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols, [new GraphEdge("class-parent", "class-child", "instantiates")]);
+
+        string compact = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "ParentComponent",
+            scope: null,
+            mode: "path",
+            to: "class-child",
+            depth: 2,
+            limit: 10,
+            fullFormat: false,
+            json: false,
+            pathKind: "dependency",
+            out int emitted,
+            out _);
+
+        Assert.Equal(2, emitted);
+        Assert.Contains("# trace path ParentComponent -> class-child (1 hop(s))", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("(via ", compact, StringComparison.Ordinal);
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "ParentComponent",
+            scope: null,
+            mode: "path",
+            to: "class-child",
+            depth: 2,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            pathKind: "dependency",
+            out emitted,
+            out _);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(1, root.GetProperty("hops").GetInt32());
+        Assert.False(root.TryGetProperty("from_member", out _));
+        Assert.Equal("ParentComponent", root.GetProperty("resolved_target").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void Path_DependencyFallback_WhenCallPathsAreEmpty()
+    {
+        // ServiceClient --type_usage--> IContract --calls--> OrderHandler
+        IndexedSymbol[] symbols =
+        [
+            new(0, "sym-client", "ServiceClient", "void Run()", "method", "csharp", "client.cs", 1, 10, null, false),
+            new(1, "sym-contract", "IContract", "interface IContract", "interface", "csharp", "contract.cs", 1, 5, null, false),
+            new(2, "sym-target", "OrderHandler", "void Handle()", "method", "csharp", "handler.cs", 1, 10, null, false),
+        ];
+        var edges = new List<GraphEdge>
+        {
+            new("sym-client", "sym-contract", "type_usage"),
+            new("sym-contract", "sym-target", "calls"),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+
+        // Strict call mode should return no path, but advise dependency fallback
+        string jsonOutput = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "ServiceClient",
+            scope: null,
+            mode: "path",
+            to: "OrderHandler",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            pathKind: "call",
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        using (var doc = JsonDocument.Parse(jsonOutput))
+        {
+            var root = doc.RootElement;
+            Assert.True(root.TryGetProperty("diagnostics", out var diagElem));
+            var diag = diagElem.EnumerateArray().First();
+            Assert.Equal("no_call_path", diag.GetProperty("code").GetString());
+            Assert.Equal(2, root.GetProperty("dependency_path_hops").GetInt32());
+            Assert.True(root.GetProperty("hops").ValueKind == JsonValueKind.Null);
+
+            // Next actions suggest path_kind=dependency
+            Assert.True(root.TryGetProperty("next_actions", out var nextElem));
+            string allActions = nextElem.ToString();
+            Assert.Contains("dependency", allActions, StringComparison.Ordinal);
+        }
+
+        // Dependency mode successfully traverses the path
+        string depJson = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "ServiceClient",
+            scope: null,
+            mode: "path",
+            to: "OrderHandler",
+            depth: 3,
+            limit: 10,
+            fullFormat: false,
+            json: true,
+            pathKind: "dependency",
+            out int depEmitted,
+            out _);
+
+        Assert.Equal(3, depEmitted);
+        using (var depDoc = JsonDocument.Parse(depJson))
+        {
+            var depRoot = depDoc.RootElement;
+            Assert.Equal(2, depRoot.GetProperty("hops").GetInt32());
+        }
     }
 }

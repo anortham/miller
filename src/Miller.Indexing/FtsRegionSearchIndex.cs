@@ -49,20 +49,26 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
     {
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
-        InvalidOperationException? lastMismatch = null;
+        Exception? lastMismatch = null;
         for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
         {
             StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
-                ?? throw new InvalidOperationException(
+                ?? throw new SidecarUnavailableException(
+                    SidecarArtifactKind.Search,
+                    SidecarRecoveryReason.Missing,
                     $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
-                    "Run `miller workspace refresh` to converge it.");
+                    "Run `miller workspace refresh` to converge it.",
+                    workspaceId: snapshot.WorkspaceId,
+                    workspaceRoot: snapshot.WorkspaceRoot,
+                    artifactPath: searchDbPath);
             try
             {
                 return Open(searchDbPath, serve.StoreLogSequence, _ => true);
             }
-            catch (InvalidOperationException ex) when (
+            catch (Exception ex) when (
                 attempt + 1 < StoreSidecarCatalog.ReadableOpenAttempts
-                && ex.Message.Contains("stale: revision", StringComparison.Ordinal))
+                && (ex is SidecarUnavailableException { Reason: SidecarRecoveryReason.Stale }
+                    || (ex is InvalidOperationException && ex.Message.Contains("stale: revision", StringComparison.Ordinal))))
             {
                 lastMismatch = ex;
             }
@@ -101,15 +107,23 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
         }
         if (meta.Revision != expectedRevision)
         {
-            throw new InvalidOperationException(
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.Stale,
                 $"search.db at '{absPath}' is stale: revision {meta.Revision}, expected {expectedRevision}. " +
-                "Refresh or rebuild the search index.");
+                "Refresh or rebuild the search index.",
+                artifactPath: absPath,
+                expectedRevision: expectedRevision,
+                actualRevision: meta.Revision);
         }
         if (!generationMatches(connection))
         {
-            throw new InvalidOperationException(
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.GenerationMismatch,
                 $"search.db at '{absPath}' was built from a different index generation (the workspace was " +
-                "fully rebuilt). Refresh or rebuild the search index.");
+                "fully rebuilt). Refresh or rebuild the search index.",
+                artifactPath: absPath);
         }
 
         EnsureRegionSchema(connection, absPath);

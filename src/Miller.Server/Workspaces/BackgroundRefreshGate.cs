@@ -2,6 +2,24 @@ using System.Collections.Concurrent;
 
 namespace Miller.Server.Workspaces;
 
+public enum BackgroundRefreshActivityState
+{
+    Queued,
+    Running,
+    Finished,
+    Failed,
+    Unknown,
+}
+
+public sealed record BackgroundRefreshOperationSnapshot(
+    string WorkspaceId,
+    string? ScheduledGeneration,
+    long? ScheduledRevision,
+    BackgroundRefreshActivityState State,
+    DateTimeOffset ObservedAtUtc,
+    WorkspaceRefreshResult? Result = null,
+    string? FailureMessage = null);
+
 /// <summary>
 /// The PROCESS-WIDE coalescing guard behind serve-then-refresh cross-workspace reads
 /// (<see cref="WorkspaceRefreshMode.Background"/>).
@@ -29,9 +47,7 @@ public sealed class BackgroundRefreshGate
     /// </summary>
     public static readonly TimeSpan DefaultCooldown = TimeSpan.FromSeconds(5);
 
-    private const long InFlight = long.MinValue;
-
-    private readonly ConcurrentDictionary<string, long> _state = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, WorkspaceGateState> _state = new(StringComparer.Ordinal);
     private readonly Func<long> _nowMilliseconds;
     private readonly long _cooldownMilliseconds;
 
@@ -59,32 +75,98 @@ public sealed class BackgroundRefreshGate
     /// finished inside the cooldown — either way the caller starts nothing and serves the pinned view.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="workspaceId"/> is null, empty, or whitespace.</exception>
-    public bool TryEnter(string workspaceId)
+    public bool TryEnter(string workspaceId) =>
+        TryEnter(workspaceId, scheduledGeneration: null, scheduledRevision: null);
+
+    /// <summary>
+    /// Claim the right to start a background refresh for this workspace with scheduled revision/generation metadata.
+    /// </summary>
+    public bool TryEnter(string workspaceId, string? scheduledGeneration, long? scheduledRevision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         long now = _nowMilliseconds();
-        bool entered = false;
-        _state.AddOrUpdate(
-            workspaceId,
-            _ =>
+        WorkspaceGateState entry = _state.GetOrAdd(workspaceId, static id => new WorkspaceGateState(id));
+        lock (entry)
+        {
+            if (entry.InFlight || (entry.LastFinishedMilliseconds.HasValue && now - entry.LastFinishedMilliseconds.Value < _cooldownMilliseconds))
             {
-                entered = true;
-                return InFlight;
-            },
-            (_, existing) =>
-            {
-                // Every factory invocation reassigns the flag: AddOrUpdate re-runs its factories when the compare
-                // and swap loses, and a stale `true` from a losing attempt would admit a second refresh.
-                if (existing == InFlight || now - existing < _cooldownMilliseconds)
-                {
-                    entered = false;
-                    return existing;
-                }
+                return false;
+            }
 
-                entered = true;
-                return InFlight;
-            });
-        return entered;
+            entry.InFlight = true;
+            entry.Snapshot = new BackgroundRefreshOperationSnapshot(
+                workspaceId,
+                scheduledGeneration,
+                scheduledRevision,
+                BackgroundRefreshActivityState.Queued,
+                DateTimeOffset.UtcNow);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Transition the operation state to running once the background worker begins execution.
+    /// </summary>
+    public void RecordRunning(string workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (_state.TryGetValue(workspaceId, out WorkspaceGateState? entry))
+        {
+            lock (entry)
+            {
+                if (entry.InFlight)
+                {
+                    entry.Snapshot = entry.Snapshot with
+                    {
+                        State = BackgroundRefreshActivityState.Running,
+                        ObservedAtUtc = DateTimeOffset.UtcNow,
+                    };
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Record successful completion of a background refresh and retain its result evidence.
+    /// </summary>
+    public void RecordFinished(string workspaceId, WorkspaceRefreshResult result)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        long now = _nowMilliseconds();
+        WorkspaceGateState entry = _state.GetOrAdd(workspaceId, static id => new WorkspaceGateState(id));
+        lock (entry)
+        {
+            entry.InFlight = false;
+            entry.LastFinishedMilliseconds = now;
+            entry.Snapshot = entry.Snapshot with
+            {
+                State = BackgroundRefreshActivityState.Finished,
+                ObservedAtUtc = DateTimeOffset.UtcNow,
+                Result = result,
+                FailureMessage = null,
+            };
+        }
+    }
+
+    /// <summary>
+    /// Record failure of a background refresh and retain its failure detail for subsequent reads.
+    /// </summary>
+    public void RecordFailed(string workspaceId, string failureMessage)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        long now = _nowMilliseconds();
+        WorkspaceGateState entry = _state.GetOrAdd(workspaceId, static id => new WorkspaceGateState(id));
+        lock (entry)
+        {
+            entry.InFlight = false;
+            entry.LastFinishedMilliseconds = now;
+            entry.Snapshot = entry.Snapshot with
+            {
+                State = BackgroundRefreshActivityState.Failed,
+                ObservedAtUtc = DateTimeOffset.UtcNow,
+                FailureMessage = failureMessage,
+            };
+        }
     }
 
     /// <summary>
@@ -95,6 +177,62 @@ public sealed class BackgroundRefreshGate
     public void Release(string workspaceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        _state[workspaceId] = _nowMilliseconds();
+        long now = _nowMilliseconds();
+        WorkspaceGateState entry = _state.GetOrAdd(workspaceId, static id => new WorkspaceGateState(id));
+        lock (entry)
+        {
+            entry.InFlight = false;
+            entry.LastFinishedMilliseconds = now;
+            if (entry.Snapshot.State is BackgroundRefreshActivityState.Queued or BackgroundRefreshActivityState.Running)
+            {
+                entry.Snapshot = entry.Snapshot with
+                {
+                    State = BackgroundRefreshActivityState.Finished,
+                    ObservedAtUtc = DateTimeOffset.UtcNow,
+                };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Return the bounded operation snapshot for this workspace. Returns unknown state if unobserved.
+    /// </summary>
+    public BackgroundRefreshOperationSnapshot GetSnapshot(string workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (_state.TryGetValue(workspaceId, out WorkspaceGateState? entry))
+        {
+            lock (entry)
+            {
+                return entry.Snapshot;
+            }
+        }
+
+        return new BackgroundRefreshOperationSnapshot(
+            workspaceId,
+            ScheduledGeneration: null,
+            ScheduledRevision: null,
+            BackgroundRefreshActivityState.Unknown,
+            DateTimeOffset.UtcNow);
+    }
+
+    private sealed class WorkspaceGateState
+    {
+        public WorkspaceGateState(string workspaceId)
+        {
+            WorkspaceId = workspaceId;
+            Snapshot = new BackgroundRefreshOperationSnapshot(
+                workspaceId,
+                ScheduledGeneration: null,
+                ScheduledRevision: null,
+                BackgroundRefreshActivityState.Unknown,
+                DateTimeOffset.UtcNow);
+        }
+
+        public string WorkspaceId { get; }
+        public bool InFlight { get; set; }
+        public long? LastFinishedMilliseconds { get; set; }
+        public BackgroundRefreshOperationSnapshot Snapshot { get; set; }
     }
 }
+

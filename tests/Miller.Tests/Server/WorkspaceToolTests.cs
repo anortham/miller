@@ -1501,7 +1501,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(1, root.GetProperty("telemetry").GetProperty("error_count").GetInt64());
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostic_count").GetInt64());
-        Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Equal("content_corpus", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Contains(root.GetProperty("warnings").EnumerateArray(), static w => w.GetProperty("code").GetString() == "capability_gaps");
     }
 
     [Fact]
@@ -2696,6 +2697,42 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal("workspace_refresh_failed", diagnostic.GetProperty("code").GetString());
         Assert.Equal("unavailable", diagnostic.GetProperty("class").GetString());
         Assert.Equal("error", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public void Full_RegisteredWorkspaceQueued_ReturnsQueuedRefusal()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        int currentPid = Environment.ProcessId;
+        Miller.Server.Hosting.LeaderIdentityFile.Write(
+            Path.GetDirectoryName(other.DbPath)!,
+            new Miller.Server.Hosting.LeaderIdentity(
+                currentPid, "9.9.9-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => null);
+        harness.Registry.UpsertSeen(
+            OtherWs,
+            "other-111111111111",
+            otherRoot,
+            other.DbPath,
+            WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "full",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal("queued", doc.RootElement.GetProperty("status").GetString());
+        JsonElement diagnostic = doc.RootElement.GetProperty("diagnostic");
+        Assert.Equal("workspace_full_queued", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
     }
 
     [Fact]

@@ -269,7 +269,7 @@ internal static class ContextBundleRenderer
                 return empty.ToString();
             empty.Append('\n');
             AppendAnchorDiagnosticsCompact(empty, anchorDiagnostics);
-            ContextEvidenceDisposition emptyDisposition = ContextBundleBuilder.DispositionFor(selected);
+            ContextEvidenceDisposition emptyDisposition = ContextBundleBuilder.DispositionFor(selected, anchorDiagnostics, query);
             empty.Append("## disposition\n")
                 .Append("evidence=")
                 .Append(emptyDisposition.Status)
@@ -344,7 +344,7 @@ internal static class ContextBundleRenderer
 
         }
 
-        ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionFor(selected);
+        ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionFor(selected, anchorDiagnostics, query);
         sb.Append("## disposition\n")
             .Append("evidence=")
             .Append(disposition.Status)
@@ -540,7 +540,7 @@ internal static class ContextBundleRenderer
             }
             w.WriteEndArray();
             WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
-            ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionFor(selected);
+            ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionFor(selected, anchorDiagnostics, query);
             WriteDispositionJson(w, disposition);
             if (disposition.Status != "sufficient")
             {
@@ -607,7 +607,7 @@ internal static class ContextBundleRenderer
                 return empty.ToString();
             empty.Append('\n');
             AppendAnchorDiagnosticsCompact(empty, anchorDiagnostics);
-            ContextEvidenceDisposition emptyDisposition = ContextBundleBuilder.DispositionForReference(selected);
+            ContextEvidenceDisposition emptyDisposition = ContextBundleBuilder.DispositionForReference(selected, anchorDiagnostics, query);
             empty.Append("## disposition\n")
                 .Append("evidence=")
                 .Append(emptyDisposition.Status)
@@ -636,7 +636,7 @@ internal static class ContextBundleRenderer
         }
 
         AppendAnchorDiagnosticsCompact(sb, anchorDiagnostics);
-        ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionForReference(selected);
+        ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionForReference(selected, anchorDiagnostics, query);
         sb.Append("## disposition\n")
             .Append("evidence=")
             .Append(disposition.Status)
@@ -714,7 +714,7 @@ internal static class ContextBundleRenderer
             }
             w.WriteEndArray();
             WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
-            ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionForReference(selected);
+            ContextEvidenceDisposition disposition = ContextBundleBuilder.DispositionForReference(selected, anchorDiagnostics, query);
             WriteDispositionJson(w, disposition);
             if (disposition.Status != "sufficient")
             {

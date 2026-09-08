@@ -31,7 +31,15 @@ public static class EditPlanner
     /// Rejects a symbol with no body span (decision log #7).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
-    public static EditPlan ReplaceSymbolBody(SymbolEditSpan span, string newText)
+    public static EditPlan ReplaceSymbolBody(SymbolEditSpan span, string newText) =>
+        ReplaceSymbolBody(content: null, span, newText);
+
+    /// <summary>
+    /// Plan a symbol body replacement over <c>[body_start_byte, body_end_byte)</c> (verified facts #1).
+    /// Rejects a symbol with no body span (decision log #7) and guards against duplicate declaration headers (Task N5).
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
+    public static EditPlan ReplaceSymbolBody(string? content, SymbolEditSpan span, string newText)
     {
         ArgumentNullException.ThrowIfNull(span);
         ArgumentNullException.ThrowIfNull(newText);
@@ -41,12 +49,35 @@ public static class EditPlanner
         if (newText.Length == 0)
             return EmptyNewText("replace_symbol_body");
 
+        // Task N5: guard against duplicate declaration headers.
+        if (content is not null && span.StartByte >= 0 && span.StartByte < bodyStart)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
+            if (bodyStart <= bytes.Length)
+            {
+                string declHeader = Encoding.UTF8.GetString(bytes, span.StartByte, bodyStart - span.StartByte);
+                string declTrimmed = declHeader.Trim();
+                if (!string.IsNullOrWhiteSpace(declTrimmed))
+                {
+                    string newTrimmed = newText.TrimStart();
+                    if (newTrimmed.StartsWith(declTrimmed, StringComparison.Ordinal))
+                    {
+                        return EditPlan.Failure(new EditError(
+                            EditErrorKind.DuplicateDeclaration,
+                            $"new_text duplicates the declaration header (\"{declTrimmed}\"). " +
+                            "replace_symbol_body replaces only the body block. Provide only the body (e.g. \"{ ... }\")."));
+                    }
+                }
+            }
+        }
+
         return EditPlan.Success([new TextEdit(bodyStart, bodyEnd, newText)]);
     }
 
     /// <summary>
     /// Plan a symbol signature replacement over <c>[start_byte, body_start_byte)</c> (verified facts #1).
     /// Rejects a symbol with no body span (the signature span's exclusive end is undefined without it).
+    /// Preserves original trailing whitespace/line-breaks before <c>body_start</c> unless caller explicitly supplies separation (Task N5).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
     public static EditPlan ReplaceSymbolSignature(string content, SymbolEditSpan span, string newText)
@@ -61,14 +92,26 @@ public static class EditPlanner
             return EmptyNewText("replace_symbol_signature");
 
         byte[] bytes = Encoding.UTF8.GetBytes(content);
+        string trailingWs = string.Empty;
         if (span.StartByte >= 0 && bodyStart <= bytes.Length && span.StartByte <= bodyStart)
         {
             string current = Encoding.UTF8.GetString(bytes, span.StartByte, bodyStart - span.StartByte);
             if (string.Equals(newText.TrimEnd(), current.TrimEnd(), StringComparison.Ordinal))
                 return EditPlan.Success([]);
+
+            int wsIndex = current.Length;
+            while (wsIndex > 0 && char.IsWhiteSpace(current[wsIndex - 1]))
+                wsIndex--;
+            trailingWs = current[wsIndex..];
         }
 
-        return EditPlan.Success([new TextEdit(span.StartByte, bodyStart, newText)]);
+        // Preserve original trailing whitespace/line-breaks before body_start unless caller explicitly supplies separation.
+        bool callerSuppliedSeparation = newText.Length > 0 && char.IsWhiteSpace(newText[^1]);
+        string effectiveNewText = (!callerSuppliedSeparation && trailingWs.Length > 0)
+            ? newText + trailingWs
+            : newText;
+
+        return EditPlan.Success([new TextEdit(span.StartByte, bodyStart, effectiveNewText)]);
     }
 
     /// <summary>

@@ -36,13 +36,48 @@ public static class WorkspaceRegistryPrune
         string Root,
         StoreViewRetirementOutcome Outcome);
 
+    public enum PruneBlockReason
+    {
+        UnconfirmedWorktreeRemoval,
+        IntentRecordFailed,
+        ProducerCaptureFailed,
+        ProducerRetirementFailed,
+        ProducerRetirementDeferred,
+    }
+
+    public sealed record BlockedEntry(
+        string WorkspaceId,
+        string DisplayId,
+        string Root,
+        PruneBlockReason Reason,
+        string Message,
+        string? SuggestedAction = null)
+    {
+        public string ReasonCode => Reason switch
+        {
+            PruneBlockReason.UnconfirmedWorktreeRemoval => "unconfirmed_worktree_removal",
+            PruneBlockReason.IntentRecordFailed => "intent_record_failed",
+            PruneBlockReason.ProducerCaptureFailed => "producer_capture_failed",
+            PruneBlockReason.ProducerRetirementFailed => "producer_retirement_failed",
+            PruneBlockReason.ProducerRetirementDeferred => "producer_retirement_deferred",
+            _ => "unknown",
+        };
+    }
+
     public sealed record Result(
         bool DryRun,
         IReadOnlyList<Entry> Pruned,
         int Kept,
         StoreSidecarReclaimResult SidecarReclaim = default,
         StoreMaintenanceOutcome StoreMaintenance = default,
-        IReadOnlyList<RetirementFailure> RetirementFailures = null!);
+        IReadOnlyList<RetirementFailure> RetirementFailures = null!,
+        int RetirementOwed = 0,
+        IReadOnlyList<BlockedEntry>? Blocked = null)
+    {
+        public int RemovedCount => DryRun ? 0 : Pruned.Count;
+        public int WouldRemoveCount => DryRun ? Pruned.Count : 0;
+        public int BlockedCount => Blocked?.Count ?? RetirementFailures?.Count ?? 0;
+    }
 
     public static Result Run(
         WorkspaceRegistry registry,
@@ -60,9 +95,11 @@ public static class WorkspaceRegistryPrune
 
         var pruned = new List<Entry>();
         var retirementFailures = new List<RetirementFailure>();
+        var blocked = new List<BlockedEntry>();
         var blockedFamilies = new HashSet<Guid>();
         var reclaimed = StoreSidecarReclaimResult.None;
         int kept = 0;
+        int retirementOwed = 0;
         int producerRetirements = 0;
         foreach (WorkspaceRegistryRow row in registry.List())
         {
@@ -88,8 +125,13 @@ public static class WorkspaceRegistryPrune
                     row.DisplayId,
                     row.CanonicalRoot,
                     captureFailure));
+                blocked.Add(new BlockedEntry(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    row.CanonicalRoot,
+                    PruneBlockReason.ProducerCaptureFailed,
+                    captureFailure.Error ?? "Failed to capture family-store view for workspace"));
                 blockedFamilies.Add(captureFailure.FamilyId);
-                kept++;
                 continue;
             }
 
@@ -98,13 +140,20 @@ public static class WorkspaceRegistryPrune
             {
                 if (!HasConfirmedLinkedWorktreeRemoval(registry, row, target))
                 {
+                    StoreViewRetirementOutcome unconfirmedOutcome = UnconfirmedLinkedWorktreeRemoval(target);
                     retirementFailures.Add(new RetirementFailure(
                         row.WorkspaceId,
                         row.DisplayId,
                         row.CanonicalRoot,
-                        UnconfirmedLinkedWorktreeRemoval(target)));
+                        unconfirmedOutcome));
+                    blocked.Add(new BlockedEntry(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        PruneBlockReason.UnconfirmedWorktreeRemoval,
+                        unconfirmedOutcome.Error ?? "Linked worktree removal could not be confirmed",
+                        $"workspace remove path={row.CanonicalRoot}"));
                     blockedFamilies.Add(target.FamilyId);
-                    kept++;
                     continue;
                 }
 
@@ -112,13 +161,19 @@ public static class WorkspaceRegistryPrune
                 {
                     if (producerRetirements >= maxProducerRetirements)
                     {
+                        StoreViewRetirementOutcome deferredOutcome = DeferredProducerRetirement(target);
                         retirementFailures.Add(new RetirementFailure(
                             row.WorkspaceId,
                             row.DisplayId,
                             row.CanonicalRoot,
-                            DeferredProducerRetirement(target)));
+                            deferredOutcome));
+                        blocked.Add(new BlockedEntry(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            PruneBlockReason.ProducerRetirementDeferred,
+                            deferredOutcome.Error ?? "Producer view retirement deferred"));
                         blockedFamilies.Add(target.FamilyId);
-                        kept++;
                         continue;
                     }
 
@@ -130,10 +185,16 @@ public static class WorkspaceRegistryPrune
                             row.DisplayId,
                             row.CanonicalRoot,
                             intentFailure));
+                        blocked.Add(new BlockedEntry(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            PruneBlockReason.IntentRecordFailed,
+                            intentFailure.Error ?? "Failed to record reclaim intent before view retirement"));
                         blockedFamilies.Add(target.FamilyId);
-                        kept++;
                         continue;
                     }
+
                     if (!WorkspaceRemoval.TryRetireView(
                             target,
                             retireView,
@@ -145,14 +206,19 @@ public static class WorkspaceRegistryPrune
                             row.DisplayId,
                             row.CanonicalRoot,
                             outcome));
+                        blocked.Add(new BlockedEntry(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            PruneBlockReason.ProducerRetirementFailed,
+                            outcome.Error ?? "Producer view retirement failed"));
                         blockedFamilies.Add(target.FamilyId);
-                        kept++;
                         continue;
                     }
 
                     producerRetirements++;
                 }
-                }
+            }
 
             if (dryRun)
             {
@@ -160,18 +226,24 @@ public static class WorkspaceRegistryPrune
                 continue;
             }
 
-            if (!awaitProducerRetirement && !StoreSidecarReclaim.RecordIntent(target))
+            if (!awaitProducerRetirement && target is not null && !StoreSidecarReclaim.RecordIntent(target))
             {
-                StoreViewRetirementOutcome intentFailure = IntentFailure(target!);
+                StoreViewRetirementOutcome intentFailure = IntentFailure(target);
                 retirementFailures.Add(new RetirementFailure(
                     row.WorkspaceId,
                     row.DisplayId,
                     row.CanonicalRoot,
                     intentFailure));
-                blockedFamilies.Add(target!.FamilyId);
-                kept++;
+                blocked.Add(new BlockedEntry(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    row.CanonicalRoot,
+                    PruneBlockReason.IntentRecordFailed,
+                    intentFailure.Error ?? "Failed to record reclaim intent before unregistering"));
+                blockedFamilies.Add(target.FamilyId);
                 continue;
             }
+
             registry.Remove(row.WorkspaceId);
             if (awaitProducerRetirement)
             {
@@ -181,6 +253,7 @@ public static class WorkspaceRegistryPrune
             }
             else if (target is not null)
             {
+                retirementOwed++;
                 onRetirementOwed?.Invoke(target);
             }
             pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
@@ -193,7 +266,7 @@ public static class WorkspaceRegistryPrune
             reclaimed = StoreSidecarReclaimResult.Combine(reclaimed, discharged);
         }
 
-        return new Result(dryRun, pruned, kept, reclaimed, maintained, retirementFailures);
+        return new Result(dryRun, pruned, kept, reclaimed, maintained, retirementFailures, retirementOwed, blocked);
     }
 
     /// <summary>

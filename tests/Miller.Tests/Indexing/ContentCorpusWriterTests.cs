@@ -370,4 +370,104 @@ public sealed class ContentCorpusWriterTests : IDisposable
         command.CommandText = sql;
         return Assert.IsType<string>(command.ExecuteScalar());
     }
+
+    [Fact]
+    public void Write_SetsUserVersionTo1()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null),
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = "public class Api {}",
+            });
+
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", 1);
+
+        using SqliteConnection connection = OpenRead();
+        Assert.Equal(1L, ScalarLong(connection, "PRAGMA user_version;"));
+    }
+
+    [Fact]
+    public void Write_ClassifiesInspectToolAndTestsCoreAsNonTest_AndTestsDirAsTest()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow("sym-inspect", "InspectTool", "class", "csharp", "src/InspectTool.cs", "public class InspectTool", 1, null),
+                new JulieDbFixture.SymbolRow("sym-tests-core", "TestsCore", "class", "csharp", "src/TestsCore.cs", "public class TestsCore", 1, null),
+                new JulieDbFixture.SymbolRow("sym-my-tests", "MyServiceTests", "class", "csharp", "tests/MyServiceTests.cs", "public class MyServiceTests", 1, null),
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/InspectTool.cs"] = "public class InspectTool {}",
+                ["src/TestsCore.cs"] = "public class TestsCore {}",
+                ["tests/MyServiceTests.cs"] = "public class MyServiceTests {}",
+            });
+
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", 1);
+
+        using SqliteConnection connection = OpenRead();
+        Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_sources WHERE path = 'src/InspectTool.cs'"));
+        Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_sources WHERE path = 'src/TestsCore.cs'"));
+        Assert.Equal(1L, ScalarLong(connection, "SELECT is_test FROM content_sources WHERE path = 'tests/MyServiceTests.cs'"));
+
+        Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_chunks WHERE path = 'src/InspectTool.cs'"));
+        Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_chunks WHERE path = 'src/TestsCore.cs'"));
+        Assert.Equal(1L, ScalarLong(connection, "SELECT is_test FROM content_chunks WHERE path = 'tests/MyServiceTests.cs'"));
+    }
+
+    [Fact]
+    public void MigrateTestClassifications_UpdatesMismatchedRows_AndSetsUserVersionTo1()
+    {
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _contentDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = ContentCorpusSchema.SchemaDdl;
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = """
+                INSERT INTO content_sources
+                    (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                     language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
+                VALUES
+                    ('src1', 'workspace_source', 'ws-1', 1, 'src/InspectTool.cs', NULL, 'src/InspectTool.cs', 'csharp', 'hash1', 100, 10, 1, 'active', '2026-01-01T00:00:00Z'),
+                    ('src2', 'workspace_source', 'ws-1', 1, 'tests/FooTests.cs', NULL, 'tests/FooTests.cs', 'csharp', 'hash2', 100, 10, 1, 'active', '2026-01-01T00:00:00Z');
+                INSERT INTO content_chunks
+                    (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
+                     line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
+                     containing_symbol_id, containing_symbol_name)
+                VALUES
+                    ('chk1', 'src1', 'workspace_source', 'src/InspectTool.cs', NULL, 'src/InspectTool.cs', 'csharp', 1, 10, 0, 100, 'code', 10, 1, 100, NULL, NULL),
+                    ('chk2', 'src2', 'workspace_source', 'tests/FooTests.cs', NULL, 'tests/FooTests.cs', 'csharp', 1, 10, 0, 100, 'code', 10, 1, 100, NULL, NULL);
+                PRAGMA user_version = 0;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        int updated = ContentCorpusWriter.MigrateTestClassifications(_contentDbPath);
+        Assert.Equal(1, updated);
+
+        using (SqliteConnection connection = OpenRead())
+        {
+            Assert.Equal(1L, ScalarLong(connection, "PRAGMA user_version;"));
+            Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_sources WHERE source_id = 'src1'"));
+            Assert.Equal(1L, ScalarLong(connection, "SELECT is_test FROM content_sources WHERE source_id = 'src2'"));
+            Assert.Equal(0L, ScalarLong(connection, "SELECT is_test FROM content_chunks WHERE chunk_id = 'chk1'"));
+            Assert.Equal(1L, ScalarLong(connection, "SELECT is_test FROM content_chunks WHERE chunk_id = 'chk2'"));
+        }
+
+        int secondRun = ContentCorpusWriter.MigrateTestClassifications(_contentDbPath);
+        Assert.Equal(0, secondRun);
+    }
 }

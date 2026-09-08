@@ -1132,12 +1132,16 @@ public static class DashboardData
         string registryDbPath,
         string telemetryDbPath,
         string? workspaceId,
-        string? preferredWorkspaceRoot = null)
-        => ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot, readerClientFactory: null);
+        string? preferredWorkspaceRoot = null,
+        DateTimeOffset? anchor = null,
+        TimeProvider? timeProvider = null)
+        => ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot, readerClientFactory: null, anchor, timeProvider);
 
     internal static DashboardSnapshot ReadSnapshot(
         string registryDbPath, string telemetryDbPath, string? workspaceId,
-        string? preferredWorkspaceRoot, Func<IJulieStoreClient>? readerClientFactory)
+        string? preferredWorkspaceRoot, Func<IJulieStoreClient>? readerClientFactory,
+        DateTimeOffset? anchor = null,
+        TimeProvider? timeProvider = null)
     {
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
@@ -1178,7 +1182,7 @@ public static class DashboardData
                 : ReadPatternInventoryPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
             DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
                 ? null
-                : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath, storeSession);
+                : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath, storeSession, anchor, timeProvider);
             DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
                 ? null
                 : ReadLocalMetricsPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
@@ -1460,16 +1464,23 @@ public static class DashboardData
         }
     }
 
-    private static DashboardWorkspaceOnboardingPanel? ReadWorkspaceOnboardingPanel(
+    internal static DashboardWorkspaceOnboardingPanel? ReadWorkspaceOnboardingPanel(
         DashboardWorkspaceRow workspace,
         DashboardWorkspaceFacts dashboardFacts,
         string telemetryDbPath,
-        IWorkspaceReadSession? storeSession)
+        IWorkspaceReadSession? storeSession,
+        DateTimeOffset? anchor = null,
+        TimeProvider? timeProvider = null)
     {
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
-            TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspace.WorkspaceId);
+            TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(
+                telemetryDbPath,
+                workspace.WorkspaceId,
+                windowDays: 7,
+                timeProvider: timeProvider,
+                anchor: anchor);
             IReadOnlyList<RecoveredTargetHash> targets = storeSession is not null
                 ? ResolveDashboardTargets(storeSession, telemetry.TargetHashes)
                 : dashboardFacts.Store is not null

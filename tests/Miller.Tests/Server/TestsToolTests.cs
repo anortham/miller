@@ -523,7 +523,7 @@ public sealed class TestsToolTests : IDisposable
 
         Assert.Contains("enabled: false", compact, StringComparison.Ordinal);
         Assert.Contains("daemon: stopped", compact, StringComparison.Ordinal);
-        Assert.Contains("next: tests operation=enable", compact, StringComparison.Ordinal);
+        Assert.Contains("no test projects found", compact, StringComparison.Ordinal);
         Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
         Assert.Null(CtDaemonLease.TryRead(_root));
     }
@@ -702,12 +702,16 @@ public sealed class TestsToolTests : IDisposable
     [Fact]
     public void CompactOutput_CarriesNextStepHint_JsonDoesNot()
     {
+        File.WriteAllText(
+            Path.Combine(_root, "Sample.Tests.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><PackageReference Include=\"xunit.v3\" Version=\"1.0.0\" /></ItemGroup></Project>");
+
         TestsTool tool = CreateTool();
 
         string compact = tool.Tests(operation: "status", format: "compact");
         string json = tool.Tests(operation: "status", format: "json");
 
-        Assert.Contains(NextStepHint.Render("tests operation=enable", "opt in to continuous testing"), compact);
+        Assert.Contains("next: dotnet test", compact, StringComparison.Ordinal);
         Assert.DoesNotContain("next:", json, StringComparison.Ordinal);
     }
 
@@ -860,6 +864,72 @@ public sealed class TestsToolTests : IDisposable
         string coreJson = TestsCore.Failures(CoreRequest(), maxItems: 5, offset: 20).Render(json: true);
 
         Assert.Equal(coreJson, toolJson);
+    }
+
+    [Fact]
+    public void Failures_WithDiscoveryFailure_EmitsViewFileNextStepHint()
+    {
+        string workspaceId = _workspace.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_root);
+        string caseId = "ct-discovery-failure-sample";
+        string runId = "ct_discovery_failure_run-1";
+        string artifactPath = Path.Combine(_root, ".miller", "ct", "discovery-attempts", "ct-disc-test.json");
+
+        using (var store = new ContinuousTestStore(CtSchema.DbPathFor(_root)))
+        {
+            store.PutTestCase(new ContinuousTestCase(
+                Id: caseId,
+                WorkspaceId: workspaceId,
+                Name: "Project discovery failed",
+                QualifiedName: "Project discovery failed: Sample.Tests.csproj",
+                Selector: $"project-discovery::{_root}/Sample.Tests.csproj",
+                Framework: "xunit",
+                Source: "ct-project-status",
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["kind"] = "ct-project-discovery-failure",
+                    ["artifact_path"] = artifactPath,
+                    ["outcome"] = "failed",
+                }));
+
+            store.StartContinuousTestRun(
+                new ContinuousTestRun(
+                    Id: runId,
+                    WorkspaceId: workspaceId,
+                    Status: "running",
+                    SelectedRevision: "1",
+                    IndexIdentity: "gen-1",
+                    Revision: 1),
+                [caseId]);
+
+            store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+                WorkspaceId: workspaceId,
+                TestRunId: runId,
+                SelectedRevision: "1",
+                CurrentRevision: "1",
+                IndexIdentity: "gen-1",
+                Revision: 1,
+                Status: "failed",
+                EndedAt: DateTimeOffset.UtcNow,
+                Results:
+                [
+                    new ContinuousTestResult(
+                        Id: "result:disc-1",
+                        WorkspaceId: workspaceId,
+                        TestCaseId: caseId,
+                        TestRunId: runId,
+                        Status: "failed",
+                        ResultRevision: "1",
+                        IndexIdentity: "gen-1",
+                        Revision: 1,
+                        FailureSummary: "Discovery crashed"),
+                ]));
+        }
+
+        TestsTool tool = CreateTool();
+        string output = tool.Tests(operation: "failures");
+
+        Assert.Contains($"next: view_file {artifactPath} — view discovery diagnostic log", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("next: inspect", output, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1068,6 +1138,337 @@ public sealed class TestsToolTests : IDisposable
             </Project>
             """);
         return path;
+    }
+
+    private static TestsStatusResult CreateStatusResult(
+        bool enabled = true,
+        ContinuousTestVerdict verdict = ContinuousTestVerdict.Green,
+        IReadOnlyList<TestsStatusProject>? projects = null,
+        CtDaemonLifecycleState daemonState = CtDaemonLifecycleState.Running,
+        string daemonReason = "idle",
+        CtDaemonActivity daemonActivity = CtDaemonActivity.Idle,
+        CtDaemonSelectionProgress? daemonSelection = null,
+        CtDaemonRunProgress? daemonRun = null,
+        CtDaemonVersionVerdict? daemonVersion = null,
+        CtLoopHealthVerdict? daemonLoop = null,
+        bool daemonAutoRunsPaused = false,
+        string? daemonPauseReason = null,
+        int staleCount = 0,
+        int selectedCount = 0,
+        CtFreshnessKey? selected = null,
+        ContinuousTestRunRecipe? directRunRecipe = null,
+        string? discoveryFailureArtifactPath = null,
+        bool killSwitchOff = false)
+    {
+        return new TestsStatusResult(
+            Enabled: enabled,
+            KillSwitchOff: killSwitchOff,
+            Projects: projects ?? [],
+            DaemonState: daemonState,
+            DaemonReason: daemonReason,
+            Verdict: verdict,
+            Selected: selected,
+            StaleCount: staleCount,
+            SelectedCount: selectedCount,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonActivity: daemonActivity,
+            DaemonRun: daemonRun,
+            DaemonVersion: daemonVersion,
+            DaemonLoop: daemonLoop,
+            DaemonAutoRunsPaused: daemonAutoRunsPaused,
+            DaemonPauseReason: daemonPauseReason,
+            DaemonSelection: daemonSelection,
+            DirectRunRecipe: directRunRecipe,
+            DiscoveryFailureArtifactPath: discoveryFailureArtifactPath);
+    }
+
+    [Fact]
+    public void StatusHint_Disabled_WithDirectRunRecipe_AndSupportedProjects()
+    {
+        var recipe = new ContinuousTestRunRecipe(
+            WorkspaceId: "ws",
+            ProjectPath: "tests/A.csproj",
+            Framework: "xunit",
+            WorkingDirectory: _root,
+            Steps: [new TestRunStep("dotnet", ["test"], _root)],
+            Scope: TestSelectorScope.ProjectSuite);
+        var result = CreateStatusResult(
+            enabled: false,
+            projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit", "dotnet test", true, [], UnsupportedReason: null)],
+            directRunRecipe: recipe);
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.NotNull(hint);
+        Assert.Contains("dotnet test", hint, StringComparison.Ordinal);
+        Assert.Contains("run tests directly (or enable CT: tests operation=enable)", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StatusHint_Disabled_WithDirectRunRecipe_AndUnsupportedProjects()
+    {
+        var recipe = new ContinuousTestRunRecipe(
+            WorkspaceId: "ws",
+            ProjectPath: "tests/A.csproj",
+            Framework: "xunit-v2",
+            WorkingDirectory: _root,
+            Steps: [new TestRunStep("dotnet", ["test"], _root)],
+            Scope: TestSelectorScope.ProjectSuite);
+        var result = CreateStatusResult(
+            enabled: false,
+            projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit-v2", "dotnet test", true, [], UnsupportedReason: "xUnit v2 is unsupported")],
+            directRunRecipe: recipe);
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.NotNull(hint);
+        Assert.Contains("dotnet test", hint, StringComparison.Ordinal);
+        Assert.Contains("run tests directly (framework unsupported under CT)", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StatusHint_Disabled_NoRecipe_ReturnsNull()
+    {
+        var result = CreateStatusResult(enabled: false, directRunRecipe: null);
+        Assert.Null(TestsTool.StatusHint(result));
+    }
+
+    [Fact]
+    public void StatusHint_Enabled_Stopped_ReturnsStartDaemon()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonState: CtDaemonLifecycleState.Stopped,
+            projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit", "dotnet test", true, [])]);
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=start", "start the daemon"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_Enabled_Stopped_UnsupportedOnly_ReturnsNull()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonState: CtDaemonLifecycleState.Stopped,
+            projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit-v2", "dotnet test", true, [], UnsupportedReason: "xUnit v2 unsupported")]);
+
+        Assert.Null(TestsTool.StatusHint(result));
+    }
+
+    [Fact]
+    public void StatusHint_ActiveSelection_OverridesLoopLag()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonActivity: CtDaemonActivity.Selecting,
+            daemonSelection: new CtDaemonSelectionProgress("ws", "tests/A.csproj", "collect_tests", new CtFreshnessKey("gen", 1), DateTimeOffset.UtcNow.AddSeconds(-3), DateTimeOffset.UtcNow),
+            daemonLoop: new CtLoopHealthVerdict(CtLoopHealth.LoopStalled, 120, "heartbeat lag"));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.NotNull(hint);
+        Assert.Contains("tests operation=status", hint, StringComparison.Ordinal);
+        Assert.Contains("selection in progress (phase=collect_tests", hint, StringComparison.Ordinal);
+        Assert.DoesNotContain("wedged", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StatusHint_ActiveExecution_OverridesLoopLag()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonActivity: CtDaemonActivity.Executing,
+            daemonRun: new CtDaemonRunProgress("tests/Sample.Tests.csproj", "r1", 1, DateTimeOffset.UtcNow.AddSeconds(-5), CtRunActivity.Active, ElapsedSeconds: 5),
+            daemonLoop: new CtLoopHealthVerdict(CtLoopHealth.LoopStalled, 120, "heartbeat lag"));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.NotNull(hint);
+        Assert.Contains("tests operation=status", hint, StringComparison.Ordinal);
+        Assert.Contains("tests executing (Sample.Tests.csproj, elapsed=5s)", hint, StringComparison.Ordinal);
+        Assert.DoesNotContain("wedged", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StatusHint_Queued_AdvisesStatus()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonActivity: CtDaemonActivity.Queued);
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=status", "command queued, awaiting execution"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_WedgedLoop_WhenIdle_AdvisesStop()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonActivity: CtDaemonActivity.Idle,
+            daemonLoop: new CtLoopHealthVerdict(CtLoopHealth.LoopStalled, 120, "heartbeat lag 120s > 90s"));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.NotNull(hint);
+        Assert.Contains("tests operation=stop", hint, StringComparison.Ordinal);
+        Assert.Contains("daemon loop wedged", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StatusHint_DaemonOlder_AdvisesStart()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonVersion: CtDaemonVersion.Evaluate("1.10.0+bbb", "1.9.0+aaa"));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=start", "replace the older daemon"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_RedVerdict_SyntheticDiscoveryFailure_AdvisesViewFileWithArtifact()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            verdict: ContinuousTestVerdict.Red,
+            discoveryFailureArtifactPath: ".miller/ct/discovery-attempts/attempt-123.json");
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("view_file .miller/ct/discovery-attempts/attempt-123.json", "view discovery diagnostic log"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_RedVerdict_NormalFailure_AdvisesInspectRedCases()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            verdict: ContinuousTestVerdict.Red,
+            discoveryFailureArtifactPath: null);
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=failures", "inspect red cases"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_StaleCases_ReportsCandidateCount()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            verdict: ContinuousTestVerdict.Green,
+            staleCount: 4,
+            selectedCount: 10,
+            selected: new CtFreshnessKey("gen", 1));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=run wait=true", "execute 4 stale cases"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_StaleCases_BroadScope_ReportsBroadProjectScope()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            verdict: ContinuousTestVerdict.Green,
+            staleCount: 9,
+            selectedCount: 10,
+            selected: new CtFreshnessKey("gen", 1));
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=run wait=true", "execute 9 stale cases (broad project scope)"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_AutoRunsPaused_AdvisesStatusWithReason()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            daemonAutoRunsPaused: true,
+            daemonPauseReason: "indexer degraded");
+
+        string? hint = TestsTool.StatusHint(result);
+        Assert.Equal(NextStepHint.Render("tests operation=status", "auto-runs paused (indexer degraded); check status"), hint);
+    }
+
+    [Fact]
+    public void StatusHint_GreenIdle_ReturnsNull()
+    {
+        var result = CreateStatusResult(
+            enabled: true,
+            verdict: ContinuousTestVerdict.Green,
+            staleCount: 0);
+
+        Assert.Null(TestsTool.StatusHint(result));
+    }
+
+    [Fact]
+    public void Failures_WhenZeroFailures_ReturnsHintNull_BreakingPingPong()
+    {
+        var tool = CreateTool();
+        string compact = tool.Tests(operation: "failures", format: "compact");
+        Assert.Contains("# tests failures (0)", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("next:", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Failures_WhenSyntheticDiscoveryFailure_AdvisesViewFile()
+    {
+        string workspaceId = _workspace.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_root);
+        string artifactPath = Path.Combine(_root, ".miller", "ct", "discovery-attempts", "attempt-foo.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        File.WriteAllText(artifactPath, "{}");
+
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.Transaction(() =>
+        {
+            string caseId = "ct-discovery-failure:testproj";
+            string runId = "run:discovery";
+            store.PutTestCase(new ContinuousTestCase(
+                Id: caseId,
+                WorkspaceId: workspaceId,
+                Name: caseId,
+                QualifiedName: caseId,
+                Selector: caseId,
+                FilePath: "tests/Suite.cs",
+                Framework: "xunit",
+                Source: "ct-project-status",
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["artifact_path"] = artifactPath,
+                    ["kind"] = "ct-project-discovery-failure",
+                }));
+            store.StartContinuousTestRun(
+                new ContinuousTestRun(
+                    Id: runId,
+                    WorkspaceId: workspaceId,
+                    Status: "running",
+                    SelectedRevision: "1",
+                    IndexIdentity: "id",
+                    Revision: 1),
+                [caseId]);
+            store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+                WorkspaceId: workspaceId,
+                TestRunId: runId,
+                SelectedRevision: "1",
+                CurrentRevision: "1",
+                IndexIdentity: "id",
+                Revision: 1,
+                Status: "failed",
+                Results:
+                [
+                    new ContinuousTestResult(
+                        Id: runId + ":" + caseId,
+                        WorkspaceId: workspaceId,
+                        TestCaseId: caseId,
+                        TestRunId: runId,
+                        Status: "failed",
+                        ResultRevision: "1",
+                        IndexIdentity: "id",
+                        Revision: 1,
+                        FailureSummary: "Failed to discover tests. Attempt artifact: " + artifactPath),
+                ]));
+        });
+
+        var tool = CreateTool();
+        string compact = tool.Tests(operation: "failures", format: "compact");
+        Assert.Contains("next: view_file " + artifactPath, compact, StringComparison.Ordinal);
     }
 
     private static void AssertStatusContractShape(JsonElement root)

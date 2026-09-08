@@ -784,15 +784,18 @@ public sealed class TraceTool
                 : message;
         }
 
-        if (!ResolveSymbol(
+        if (!ResolvePathStarts(
                 index,
                 resolver,
                 target,
                 scope,
-                out string fromId,
+                out IReadOnlyList<string> startIds,
+                out IndexedSymbol? rootSymbol,
+                out bool isExpanded,
+                out bool wasTruncated,
+                out int totalExpanded,
                 out string? fromNote,
                 out IReadOnlyList<TraceNextAction> fromNextActions,
-                mode: ModePath,
                 to: to,
                 pathKind: normalizedPathKind,
                 depth: depth))
@@ -809,45 +812,100 @@ public sealed class TraceTool
             IReadOnlyList<TraceNextAction> destinationActions =
                 DestinationNextActions(resolver, target, to, depth, normalizedPathKind, scope);
             return json
-                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
+                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited,
+                    fromId: startIds.Count > 0 ? startIds[0] : null, toId: null, path: null,
                     normalizedPathKind,
-                    note: destinationNote, diagnosticCode: DiagnosticCode(toNote!), nextActions: destinationActions)
+                    note: destinationNote, diagnosticCode: DiagnosticCode(toNote!), nextActions: destinationActions,
+                    rootSymbol: rootSymbol, isExpanded: isExpanded, wasTruncated: wasTruncated, totalExpanded: totalExpanded)
                 : AppendNextActions(destinationNote, destinationActions);
         }
 
         bool broadDependencyPath = normalizedPathKind == "dependency";
         Func<GraphNeighbour, bool> edgeFilter = broadDependencyPath ? static _ => true : IsCallLikePathEdge;
-        GraphPath? graphPath = graph.ShortestPathWithEvidence(fromId, toId, depth, edgeFilter);
+        GraphPath? graphPath = graph.ShortestPathWithEvidence(startIds, toId, depth, edgeFilter);
         if (graphPath is null)
         {
-            string message =
+            if (normalizedPathKind == "call")
+            {
+                GraphPath? depPath = graph.ShortestPathWithEvidence(startIds, toId, depth, static _ => true);
+                if (depPath is not null)
+                {
+                    int depHops = depPath.Nodes.Count - 1;
+                    string message =
+                        $"No path from '{target}' to '{to}' (call mode) within {depth} hop(s). " +
+                        $"A dependency path exists ({depHops} hop(s)), but contains non-call edges (e.g. type usage or reference) and is not an execution path. " +
+                        $"Use path_kind=dependency to inspect it.";
+                    var nextActions = new List<TraceNextAction>
+                    {
+                        NextAction(
+                            "trace",
+                            $"inspect the {depHops}-hop dependency path (not a call path)",
+                            TraceArgs(
+                                target,
+                                scope,
+                                ("mode", ModePath),
+                                ("to", to),
+                                ("path_kind", "dependency"),
+                                ("depth", depth.ToString(CultureInfo.InvariantCulture)))),
+                    };
+                    nextActions.AddRange(NoPathNextActions(target, to, depth, normalizedPathKind, scope));
+                    return json
+                        ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited,
+                            fromId: startIds[0], toId, path: null, normalizedPathKind,
+                            note: message, diagnosticCode: "no_call_path", nextActions: nextActions,
+                            rootSymbol: rootSymbol, isExpanded: isExpanded, wasTruncated: wasTruncated, totalExpanded: totalExpanded,
+                            dependencyPathHops: depHops)
+                        : AppendNextActions(message, nextActions);
+                }
+            }
+
+            string noPathMessage =
                 $"No path from '{target}' to '{to}' within {depth} hop(s) using path_kind={normalizedPathKind}." +
                 " The search walks caller -> callee edges only, and unresolved call sites can hide a real path.";
             IReadOnlyList<TraceNextAction> noPathNextActions =
                 NoPathNextActions(target, to, depth, normalizedPathKind, scope);
             return json
-                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
+                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited,
+                    fromId: startIds[0], toId, path: null,
                     normalizedPathKind,
-                    note: message, diagnosticCode: "no_path", nextActions: noPathNextActions)
-                : AppendNextActions(message, noPathNextActions);
+                    note: noPathMessage, diagnosticCode: "no_path", nextActions: noPathNextActions,
+                    rootSymbol: rootSymbol, isExpanded: isExpanded, wasTruncated: wasTruncated, totalExpanded: totalExpanded)
+                : AppendNextActions(noPathMessage, noPathNextActions);
         }
 
         // The path is from..to inclusive (ShortestPath includes both endpoints). Hops = path.Count - 1.
         IReadOnlyList<string> path = graphPath.Nodes;
         nodesVisited = path.Count;
+        string winningFromId = path[0];
+        IndexedSymbol? winningMember = isExpanded && (rootSymbol is null || !string.Equals(winningFromId, rootSymbol.SymbolId, StringComparison.Ordinal))
+            ? index.FindBySymbolId(winningFromId)
+            : null;
+
         if (json)
         {
             int shownCount = Math.Min(path.Count, limit);
             emitted = shownCount;
-            return RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, graphPath,
+            return RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited,
+                fromId: winningFromId, toId, graphPath,
                 normalizedPathKind,
                 note: shownCount < path.Count ? "path truncated by limit." : null,
-                diagnosticCode: shownCount < path.Count ? "limit_truncated" : null);
+                diagnosticCode: shownCount < path.Count ? "limit_truncated" : null,
+                rootSymbol: rootSymbol,
+                winningMember: winningMember,
+                isExpanded: isExpanded,
+                wasTruncated: wasTruncated,
+                totalExpanded: totalExpanded);
         }
 
         var sb = new StringBuilder();
-        sb.Append("# trace path ").Append(target).Append(" -> ").Append(to)
-          .Append(" (").Append(path.Count - 1).Append(" hop(s))\n");
+        sb.Append("# trace path ").Append(target);
+        if (isExpanded && winningMember is not null)
+            sb.Append(" (via ").Append(winningMember.Name).Append(')');
+        sb.Append(" -> ").Append(to);
+        sb.Append(" (").Append(path.Count - 1).Append(" hop(s))");
+        if (wasTruncated)
+            sb.Append(" [callable members truncated: 100 of ").Append(totalExpanded).Append(" examined]");
+        sb.Append('\n');
 
         int shown = 0;
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, path);
@@ -877,10 +935,127 @@ public sealed class TraceTool
         edge.EdgeKind.ToLowerInvariant() is "calls" or "call" or "invokes" or "instantiates";
 
     private static bool IsTypeKind(string kind) =>
-        kind is "class" or "struct" or "interface" or "enum" or "record" or "type";
+        kind is "class" or "struct" or "interface" or "enum" or "record" or "type" or "trait" or "module";
+
+    private static bool IsCallableKind(string kind) =>
+        kind is "method" or "function" or "constructor" or "property" or "destructor" or "operator" or "lambda" or "closure";
 
     private static bool IsMemberCallableKind(string kind) =>
         kind is "method" or "function" or "constructor";
+
+    private static bool ResolvePathStarts(
+        ISymbolLookupIndex index,
+        SmartTargetResolver resolver,
+        string target,
+        string? scope,
+        out IReadOnlyList<string> startIds,
+        out IndexedSymbol? rootSymbol,
+        out bool isExpanded,
+        out bool wasTruncated,
+        out int totalExpanded,
+        out string? note,
+        out IReadOnlyList<TraceNextAction> nextActions,
+        string? to = null,
+        string? pathKind = null,
+        int depth = 3)
+    {
+        startIds = [];
+        rootSymbol = null;
+        isExpanded = false;
+        wasTruncated = false;
+        totalExpanded = 0;
+        note = null;
+        nextActions = [];
+
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            note = "trace: a target symbol is required.";
+            return false;
+        }
+
+        TargetResolution resolution = resolver.Resolve(target, scope);
+        switch (resolution)
+        {
+            case TargetResolution.Symbol sym:
+                rootSymbol = sym.Value;
+                if (IsTypeKind(sym.Value.Kind))
+                {
+                    var callableChildren = index.FindChildren(sym.Value.SymbolId)
+                        .Where(s => IsCallableKind(s.Kind))
+                        .OrderBy(s => s.StartLine)
+                        .ThenBy(s => s.Name, StringComparer.Ordinal)
+                        .ThenBy(s => s.SymbolId, StringComparer.Ordinal)
+                        .ToList();
+
+                    if (callableChildren.Count == 0)
+                    {
+                        startIds = [sym.Value.SymbolId];
+                        return true;
+                    }
+
+                    isExpanded = true;
+                    totalExpanded = callableChildren.Count;
+                    var starts = new List<string>(Math.Min(callableChildren.Count, 100) + 1)
+                    {
+                        sym.Value.SymbolId
+                    };
+                    if (callableChildren.Count > 100)
+                    {
+                        wasTruncated = true;
+                        starts.AddRange(callableChildren.Take(100).Select(s => s.SymbolId));
+                    }
+                    else
+                    {
+                        starts.AddRange(callableChildren.Select(s => s.SymbolId));
+                    }
+                    startIds = starts;
+                    return true;
+                }
+
+                startIds = [sym.Value.SymbolId];
+                return true;
+
+            case TargetResolution.File file:
+                var fileSymbols = index.FindByFilePath(file.Path)
+                    .Where(s => IsCallableKind(s.Kind))
+                    .OrderBy(s => s.StartLine)
+                    .ThenBy(s => s.Name, StringComparer.Ordinal)
+                    .ThenBy(s => s.SymbolId, StringComparer.Ordinal)
+                    .ToList();
+
+                if (fileSymbols.Count == 0)
+                {
+                    note = $"'{target}' is a file with no callable members to search execution paths from.";
+                    return false;
+                }
+
+                isExpanded = true;
+                totalExpanded = fileSymbols.Count;
+                if (fileSymbols.Count > 100)
+                {
+                    wasTruncated = true;
+                    startIds = fileSymbols.Take(100).Select(s => s.SymbolId).ToArray();
+                }
+                else
+                {
+                    startIds = fileSymbols.Select(s => s.SymbolId).ToArray();
+                }
+                return true;
+
+            case TargetResolution.Candidates cands:
+                nextActions = AmbiguousTargetNextActions(target, cands.Matches, ModePath, to, pathKind, depth);
+                note = RenderCandidatesNote(target, cands.Matches);
+                return false;
+
+            case TargetResolution.NotFound nf:
+                note = nf.RenderMessage();
+                return false;
+
+            default:
+                note = "trace: unrecognized target resolution.";
+                return false;
+        }
+    }
 
     private static ReferenceEvidenceSet CollectReferenceEvidence(
         ISymbolLookupIndex index,
@@ -1299,7 +1474,6 @@ public sealed class TraceTool
             sb.Append("  in=").Append(containing.Name);
         sb.Append("  [").Append(reference.ResolutionStatus == ReferenceResolutionStatus.Exact ? "exact" : "fallback")
               .Append(" source=").Append(EvidenceSourceLabel(reference.Source))
-              .Append(" site=").Append(reference.ReferenceSiteId)
               .Append(" provenance=").Append(reference.SiteProvenance)
               .Append(" confidence=").Append(reference.Confidence.ToString("0.00", CultureInfo.InvariantCulture));
         if (reference.ResolutionTier is { } tier)
@@ -1347,7 +1521,9 @@ public sealed class TraceTool
 
         if (!ResolveBridgeStart(index, bridgeGraph, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
         {
-            if (target.Contains('/', StringComparison.Ordinal) &&
+            bool isFileTarget = IsFileTarget(index, resolver, target, scope, note);
+            if (!isFileTarget &&
+                target.Contains('/', StringComparison.Ordinal) &&
                 TryBuildRouteDiagnostic(bridgeGraph, target, out var routeDiagnostic))
             {
                 IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
@@ -1551,10 +1727,12 @@ public sealed class TraceTool
                 return true;
         }
 
-        if (!frontendPresent && frontendRoutes.Length == 0 && backendRoutes.Length == 0)
+        if (frontendPresent && backendPresent)
         {
-            diagnostic = new BridgeRouteDiagnostic("route_not_observed", $"no frontend or backend route facts observed for {targetRoute}.");
-            return false;
+            diagnostic = new BridgeRouteDiagnostic(
+                "route_no_bridge_link",
+                $"frontend and backend route facts exist for {targetRoute}, but no bridge link was built for that route.");
+            return true;
         }
 
         if (frontendPresent && !backendPresent)
@@ -1576,8 +1754,8 @@ public sealed class TraceTool
         }
 
         diagnostic = new BridgeRouteDiagnostic(
-            "route_no_bridge_link",
-            $"frontend and backend route facts exist for {targetRoute}, but no bridge link was built for that route.");
+            "route_not_observed",
+            $"no frontend or backend route facts observed for {targetRoute}.");
         return true;
     }
 
@@ -2019,6 +2197,20 @@ public sealed class TraceTool
             sb.Append('\n');
         }
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static bool IsFileTarget(ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope, string? note)
+    {
+        if (note is not null && (note.Contains("is a file, but no symbols", StringComparison.OrdinalIgnoreCase) || note.Contains("Multiple bridge-connected symbols", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (target.StartsWith("./", StringComparison.Ordinal) || target.StartsWith("../", StringComparison.Ordinal))
+            return true;
+        if (index.IsIndexedFilePath(target) || index.ResolveIndexedFilePath(target) is not null)
+            return true;
+        string ext = Path.GetExtension(target);
+        if (ext.Length > 1 && index.KnownExtensions.Contains(ext))
+            return true;
+        return false;
     }
 
     private static bool ResolveBridgeFileStart(
@@ -2703,7 +2895,13 @@ public sealed class TraceTool
     private static string RenderPathJson(
         ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
         string? fromId, string? toId, GraphPath? path, string pathKind, string? note, string? diagnosticCode,
-        IReadOnlyList<TraceNextAction>? nextActions = null)
+        IReadOnlyList<TraceNextAction>? nextActions = null,
+        IndexedSymbol? rootSymbol = null,
+        IndexedSymbol? winningMember = null,
+        bool isExpanded = false,
+        bool wasTruncated = false,
+        int totalExpanded = 0,
+        int? dependencyPathHops = null)
     {
         var ids = new List<string>();
         if (fromId is not null)
@@ -2717,6 +2915,7 @@ public sealed class TraceTool
         symbolsById.TryGetValue(fromId ?? string.Empty, out IndexedSymbol? fromSymbol);
         symbolsById.TryGetValue(toId ?? string.Empty, out IndexedSymbol? toSymbol);
         int shownCount = path is null ? 0 : Math.Min(path.Nodes.Count, limit);
+        IndexedSymbol? effectiveTarget = rootSymbol ?? fromSymbol;
 
         return RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
             nextActions: nextActions,
@@ -2727,8 +2926,23 @@ public sealed class TraceTool
                     w.WriteNull("hops");
                 else
                     w.WriteNumber("hops", path.Nodes.Count - 1);
+                if (isExpanded && winningMember is not null)
+                {
+                    w.WriteString("from_member", winningMember.Name);
+                    w.WriteString("from_member_id", winningMember.SymbolId);
+                }
+                if (wasTruncated)
+                {
+                    w.WriteBoolean("start_members_truncated", true);
+                    w.WriteNumber("start_members_total", totalExpanded);
+                    w.WriteNumber("start_members_examined", 100);
+                }
+                if (dependencyPathHops is not null)
+                {
+                    w.WriteNumber("dependency_path_hops", dependencyPathHops.Value);
+                }
             },
-            writeResolvedTarget: w => WriteSymbolOrNull(w, fromSymbol),
+            writeResolvedTarget: w => WriteSymbolOrNull(w, effectiveTarget),
             writeResolvedTo: w => WriteSymbolOrNull(w, toSymbol),
             writeNodes: w =>
             {
@@ -3260,6 +3474,9 @@ public sealed class TraceTool
     {
         if (note.StartsWith("trace: a target symbol is required.", StringComparison.Ordinal))
             return "missing_target";
+        if (note.Contains("has no callable members", StringComparison.Ordinal) ||
+            note.Contains("no callable members", StringComparison.Ordinal))
+            return "no_callable_members";
         if (note.Contains("Multiple candidates", StringComparison.Ordinal) ||
             note.Contains("Multiple bridge", StringComparison.Ordinal))
             return "ambiguous_target";

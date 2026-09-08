@@ -221,6 +221,7 @@ public static class MillerServiceRegistration
         // provider below is transient (one tool call builds several instances), so a guard living on the instance
         // would coalesce nothing.
         services.AddSingleton<BackgroundRefreshGate>();
+        services.AddSingleton<WorkspaceReadProjectionCache>();
         services.AddTransient<WorkspaceIndexProvider>(sp =>
             new WorkspaceIndexProvider(
                 holder: null,
@@ -232,7 +233,8 @@ public static class MillerServiceRegistration
                 factCacheStore: sp.GetRequiredService<RevisionFactCacheStore>(),
                 backgroundRefreshGate: sp.GetRequiredService<BackgroundRefreshGate>(),
                 primary: sp.GetRequiredService<IndexBootstrapService>(),
-                readerClientFactory: () => JulieStoreClient.Locate(sp.GetRequiredService<MillerHostPaths>().ToolsRoot)));
+                readerClientFactory: () => JulieStoreClient.Locate(sp.GetRequiredService<MillerHostPaths>().ToolsRoot),
+                projectionCache: sp.GetRequiredService<WorkspaceReadProjectionCache>()));
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

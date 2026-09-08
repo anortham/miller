@@ -59,6 +59,7 @@ public enum WorkspaceRefreshStatus
 {
     Refreshed,
     Unchanged,
+    Queued,
     LockBusy,
     MissingRoot,
     MissingIndex,
@@ -96,6 +97,7 @@ public sealed record WorkspaceRefreshResult(
         {
             WorkspaceRefreshStatus.Refreshed => "refreshed",
             WorkspaceRefreshStatus.Unchanged => "unchanged",
+            WorkspaceRefreshStatus.Queued => "queued",
             WorkspaceRefreshStatus.LockBusy => "lock_busy",
             WorkspaceRefreshStatus.MissingRoot => "missing_root",
             WorkspaceRefreshStatus.MissingIndex => "missing_index",

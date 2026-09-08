@@ -1,3 +1,5 @@
+using Miller.Core.References;
+
 namespace Miller.Core.Graph;
 
 internal static class GraphTraversal
@@ -88,6 +90,7 @@ internal static class GraphTraversal
         ReachedNode[] ordered = reached.Values
             .Where(static node => node.Hop > 0)
             .OrderBy(static node => node.Hop)
+            .ThenBy(static node => CertaintyPriority(node.PathCertainty))
             .ThenBy(static node => ImpactRanker.RelationshipPriority(node.EdgeKind))
             .ThenBy(static node => ImpactRanker.SourcePriority(node.EdgeSource))
             .ThenByDescending(static node => node.EdgeConfidence)
@@ -135,8 +138,15 @@ internal static class GraphTraversal
             {
                 IReadOnlyList<GraphNeighbour> adjacent =
                     adjacentById.GetValueOrDefault(current, []);
+                ReferenceResolutionStatus currentCertainty =
+                    reached.TryGetValue(current, out ReachedNode? currentNode)
+                        ? currentNode.PathCertainty
+                        : ReferenceResolutionStatus.Exact;
                 foreach (GraphNeighbour neighbour in adjacent)
                 {
+                    ReferenceResolutionStatus edgeCertainty = EdgeCertainty(neighbour.EdgeSource);
+                    ReferenceResolutionStatus candidatePathCertainty = CombineCertainty(currentCertainty, edgeCertainty);
+
                     var candidate = new ReachedNode(
                         neighbour.Id,
                         nextHop,
@@ -145,7 +155,8 @@ internal static class GraphTraversal
                         neighbour.EdgeConfidence,
                         neighbour.EdgeSource,
                         neighbour.Centrality,
-                        neighbour.Visibility);
+                        neighbour.Visibility,
+                        candidatePathCertainty);
                     if (!reached.TryGetValue(neighbour.Id, out ReachedNode? existing))
                     {
                         reached[neighbour.Id] = candidate;
@@ -178,11 +189,47 @@ internal static class GraphTraversal
             truncatedByDepth = frontier.Any(current =>
                 neighbours!(current, direction).Any(neighbour => !reachedIds.Contains(neighbour.Id)));
         }
+
         return reached;
     }
 
+    private static ReferenceResolutionStatus EdgeCertainty(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+            return ReferenceResolutionStatus.Heuristic;
+
+        if (source.Contains("ambiguous", StringComparison.OrdinalIgnoreCase))
+            return ReferenceResolutionStatus.Ambiguous;
+
+        if (ImpactRanker.IsExactSource(source))
+            return ReferenceResolutionStatus.Exact;
+
+        return ReferenceResolutionStatus.Heuristic;
+    }
+
+    private static ReferenceResolutionStatus CombineCertainty(ReferenceResolutionStatus current, ReferenceResolutionStatus edge)
+    {
+        if (current == ReferenceResolutionStatus.Ambiguous || edge == ReferenceResolutionStatus.Ambiguous)
+            return ReferenceResolutionStatus.Ambiguous;
+        if (current == ReferenceResolutionStatus.Heuristic || edge == ReferenceResolutionStatus.Heuristic)
+            return ReferenceResolutionStatus.Heuristic;
+        return ReferenceResolutionStatus.Exact;
+    }
+
+    private static int CertaintyPriority(ReferenceResolutionStatus certainty) => certainty switch
+    {
+        ReferenceResolutionStatus.Exact => 0,
+        ReferenceResolutionStatus.Heuristic => 1,
+        ReferenceResolutionStatus.Ambiguous => 2,
+        _ => 3,
+    };
+
     private static bool BetterEvidence(ReachedNode candidate, ReachedNode current)
     {
+        int certainty = CertaintyPriority(candidate.PathCertainty).CompareTo(
+            CertaintyPriority(current.PathCertainty));
+        if (certainty != 0)
+            return certainty < 0;
         int kind = ImpactRanker.RelationshipPriority(candidate.EdgeKind).CompareTo(
             ImpactRanker.RelationshipPriority(current.EdgeKind));
         if (kind != 0)
@@ -318,25 +365,52 @@ internal static class GraphTraversal
         int maxDepth,
         Func<string, bool> contains,
         Func<string, IEnumerable<GraphNeighbour>> dependencies,
+        Func<GraphNeighbour, bool> edgeFilter) =>
+        ShortestPathWithEvidence([from], to, maxDepth, contains, dependencies, edgeFilter);
+
+    public static GraphPath? ShortestPathWithEvidence(
+        IEnumerable<string> fromNodes,
+        string to,
+        int maxDepth,
+        Func<string, bool> contains,
+        Func<string, IEnumerable<GraphNeighbour>> dependencies,
         Func<GraphNeighbour, bool> edgeFilter)
     {
-        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(fromNodes);
         ArgumentNullException.ThrowIfNull(to);
         ArgumentNullException.ThrowIfNull(contains);
         ArgumentNullException.ThrowIfNull(dependencies);
         ArgumentNullException.ThrowIfNull(edgeFilter);
 
-        if (!contains(from) || !contains(to))
+        if (!contains(to))
             return null;
-        if (string.Equals(from, to, StringComparison.Ordinal))
-            return new GraphPath([from], []);
+
+        var fromList = new List<string>();
+        var fromSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string node in fromNodes)
+        {
+            if (node is not null && contains(node) && fromSet.Add(node))
+                fromList.Add(node);
+        }
+
+        if (fromList.Count == 0)
+            return null;
+
+        if (fromSet.Contains(to))
+            return new GraphPath([to], []);
+
         if (maxDepth <= 0)
             return null;
 
         var parent = new Dictionary<string, (string Parent, GraphNeighbour Edge)>(StringComparer.Ordinal);
-        var depth = new Dictionary<string, int>(StringComparer.Ordinal) { [from] = 0 };
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal);
         var frontier = new Queue<string>();
-        frontier.Enqueue(from);
+
+        foreach (string from in fromList)
+        {
+            depth[from] = 0;
+            frontier.Enqueue(from);
+        }
 
         while (frontier.Count > 0)
         {
@@ -353,7 +427,7 @@ internal static class GraphTraversal
                 depth[neighbour.Id] = currentDepth + 1;
                 parent[neighbour.Id] = (current, neighbour);
                 if (string.Equals(neighbour.Id, to, StringComparison.Ordinal))
-                    return ReconstructWithEvidence(parent, from, to);
+                    return ReconstructWithEvidence(parent, fromSet, to);
                 frontier.Enqueue(neighbour.Id);
             }
         }
@@ -367,24 +441,49 @@ internal static class GraphTraversal
         int maxDepth,
         Func<string, bool> contains,
         Func<IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>>> batchDependencies,
+        Func<GraphNeighbour, bool> edgeFilter) =>
+        ShortestPathWithEvidenceBatched([from], to, maxDepth, contains, batchDependencies, edgeFilter);
+
+    public static GraphPath? ShortestPathWithEvidenceBatched(
+        IEnumerable<string> fromNodes,
+        string to,
+        int maxDepth,
+        Func<string, bool> contains,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>>> batchDependencies,
         Func<GraphNeighbour, bool> edgeFilter)
     {
-        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(fromNodes);
         ArgumentNullException.ThrowIfNull(to);
         ArgumentNullException.ThrowIfNull(contains);
         ArgumentNullException.ThrowIfNull(batchDependencies);
         ArgumentNullException.ThrowIfNull(edgeFilter);
 
-        if (!contains(from) || !contains(to))
+        if (!contains(to))
             return null;
-        if (string.Equals(from, to, StringComparison.Ordinal))
-            return new GraphPath([from], []);
+
+        var fromList = new List<string>();
+        var fromSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string node in fromNodes)
+        {
+            if (node is not null && contains(node) && fromSet.Add(node))
+                fromList.Add(node);
+        }
+
+        if (fromList.Count == 0)
+            return null;
+
+        if (fromSet.Contains(to))
+            return new GraphPath([to], []);
+
         if (maxDepth <= 0)
             return null;
 
         var parent = new Dictionary<string, (string Parent, GraphNeighbour Edge)>(StringComparer.Ordinal);
-        var depth = new Dictionary<string, int>(StringComparer.Ordinal) { [from] = 0 };
-        var frontier = new List<string> { from };
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (string from in fromList)
+            depth[from] = 0;
+
+        var frontier = new List<string>(fromList);
 
         while (frontier.Count > 0)
         {
@@ -405,7 +504,7 @@ internal static class GraphTraversal
                     depth[neighbour.Id] = currentDepth + 1;
                     parent[neighbour.Id] = (current, neighbour);
                     if (string.Equals(neighbour.Id, to, StringComparison.Ordinal))
-                        return ReconstructWithEvidence(parent, from, to);
+                        return ReconstructWithEvidence(parent, fromSet, to);
                     nextFrontier.Add(neighbour.Id);
                 }
             }
@@ -417,13 +516,13 @@ internal static class GraphTraversal
 
     private static GraphPath ReconstructWithEvidence(
         IReadOnlyDictionary<string, (string Parent, GraphNeighbour Edge)> parent,
-        string from,
+        HashSet<string> fromSet,
         string to)
     {
         var reversedNodes = new List<string> { to };
         var reversedEdges = new List<GraphPathEdge>();
         string node = to;
-        while (!string.Equals(node, from, StringComparison.Ordinal))
+        while (!fromSet.Contains(node))
         {
             (string previous, GraphNeighbour edge) = parent[node];
             reversedEdges.Add(new GraphPathEdge(
@@ -439,6 +538,12 @@ internal static class GraphTraversal
         reversedEdges.Reverse();
         return new GraphPath(reversedNodes, reversedEdges);
     }
+
+    private static GraphPath ReconstructWithEvidence(
+        IReadOnlyDictionary<string, (string Parent, GraphNeighbour Edge)> parent,
+        string from,
+        string to) =>
+        ReconstructWithEvidence(parent, new HashSet<string>(StringComparer.Ordinal) { from }, to);
 
     private static IReadOnlyList<string> Reconstruct(
         IReadOnlyDictionary<string, string> parent,

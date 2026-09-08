@@ -137,4 +137,37 @@ public sealed class ContextPivotRankerTests
             ["first", "other-file", "duplicate"],
             ranked.Select(static pivot => pivot.SymbolId));
     }
+
+    [Fact]
+    public void Rank_UnanchoredTestCannotDisplaceProductionEvidence()
+    {
+        ContextPivot[] ranked = [.. ContextPivotRanker.Rank(
+            [
+                new ContextPivotSignal("test-unanchored-1", 1, 10, 30, 1, DiversityKey: "test1", FilePath: "a.test", IsTest: true),
+                new ContextPivotSignal("test-unanchored-2", 2, 9, 25, 2, DiversityKey: "test2", FilePath: "b.test", IsTest: true),
+                new ContextPivotSignal("production-1", 3, 8, 20, 3, DiversityKey: "prod1", FilePath: "src1.cs"),
+                new ContextPivotSignal("production-2", 4, 7, 10, 4, DiversityKey: "prod2", FilePath: "src2.cs"),
+            ],
+            3)];
+
+        Assert.Equal(
+            ["test-unanchored-1", "production-1", "production-2"],
+            ranked.Select(static pivot => pivot.SymbolId));
+    }
+
+    [Fact]
+    public void Rank_ExplicitTestAnchorCompetesWithoutExclusion()
+    {
+        ContextPivot[] ranked = [.. ContextPivotRanker.Rank(
+            [
+                new ContextPivotSignal("failing-test-1", 1, 10, 80, 1, DiversityKey: "ftest1", FilePath: "a.test", IsTest: true),
+                new ContextPivotSignal("failing-test-2", 2, 9, 80, 2, DiversityKey: "ftest2", FilePath: "b.test", IsTest: true),
+                new ContextPivotSignal("production", 3, 8, 50, 3, DiversityKey: "prod", FilePath: "src.cs"),
+            ],
+            3)];
+
+        Assert.Contains("failing-test-1", ranked.Select(static pivot => pivot.SymbolId));
+        Assert.Contains("failing-test-2", ranked.Select(static pivot => pivot.SymbolId));
+        Assert.Contains("production", ranked.Select(static pivot => pivot.SymbolId));
+    }
 }

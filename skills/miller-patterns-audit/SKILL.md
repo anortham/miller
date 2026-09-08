@@ -2,7 +2,7 @@
 name: miller-patterns-audit
 description: Use when an agent needs extractor-recognized code-shape facts such as routes, htmx attributes, Alpine directives, SQL DDL/DML, or data-document structure.
 user-invocable: true
-arguments: "<pattern family, path, language, or metadata filter>"
+argument-hint: "<pattern family, path, language, or metadata filter>"
 allowed-tools: mcp__miller__patterns, mcp__miller__search, mcp__miller__inspect, mcp__miller__workspace
 ---
 

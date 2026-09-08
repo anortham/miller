@@ -2,7 +2,7 @@
 name: miller-cross-workspace
 description: Use when querying another registered workspace with Miller, comparing repos, opening a workspace, or routing search/inspect/context/impact/trace through workspace_id.
 user-invocable: true
-arguments: "<workspace path, display id, or cross-repo task>"
+argument-hint: "<workspace path, display id, or cross-repo task>"
 allowed-tools: mcp__miller__workspace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__impact, mcp__miller__trace
 ---
 

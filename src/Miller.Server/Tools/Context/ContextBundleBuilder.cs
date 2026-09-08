@@ -79,7 +79,8 @@ internal static partial class ContextBundleBuilder
         Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>>? readOutgoingMany,
         CancellationToken cancellationToken,
         Action<string>? phaseObserver,
-        ContextQueryRetrieval? retrieval)
+        ContextQueryRetrieval? retrieval,
+        string? workspaceRoot = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> candidates = BuildCandidates(
@@ -99,7 +100,8 @@ internal static partial class ContextBundleBuilder
             out int candidatesExamined,
             cancellationToken,
             phaseObserver,
-            retrieval);
+            retrieval,
+            workspaceRoot);
         phaseObserver?.Invoke("candidate_build");
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
         phaseObserver?.Invoke("pivot_bodies");
@@ -130,7 +132,8 @@ internal static partial class ContextBundleBuilder
             renderTokenEstimator,
         CancellationToken cancellationToken,
         Action<string>? phaseObserver,
-        ContextQueryRetrieval? retrieval)
+        ContextQueryRetrieval? retrieval,
+        string? workspaceRoot = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(index);
@@ -164,7 +167,8 @@ internal static partial class ContextBundleBuilder
             out int candidatesExamined,
             cancellationToken,
             phaseObserver,
-            retrieval);
+            retrieval,
+            workspaceRoot);
         phaseObserver?.Invoke("candidate_build");
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
         phaseObserver?.Invoke("pivot_bodies");
@@ -446,7 +450,8 @@ internal static partial class ContextBundleBuilder
         out int candidatesExamined,
         CancellationToken cancellationToken = default,
         Action<string>? phaseObserver = null,
-        ContextQueryRetrieval? retrieval = null)
+        ContextQueryRetrieval? retrieval = null,
+        string? workspaceRoot = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         retrieval = ContextQueryRetrieval.For(index, retrieval);
@@ -607,6 +612,7 @@ internal static partial class ContextBundleBuilder
 
         if (editedFiles is not null)
         {
+            var publicSymbolIds = new List<string>();
             foreach (string editedFile in editedFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -626,7 +632,41 @@ internal static partial class ContextBundleBuilder
                     continue;
                 }
                 foreach (IndexedSymbol match in actionable)
+                {
                     AddSignal(match, NoRetrievalRank, 0, 85, "edited_file");
+                    if (IsPublicSymbol(match))
+                        publicSymbolIds.Add(match.SymbolId);
+                }
+            }
+
+            if (publicSymbolIds.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                IReadOnlyList<ReachedNode> callers = graph.Reach(
+                    publicSymbolIds,
+                    maxDepth: 1,
+                    limit: SearchSeedLimit,
+                    Direction.Reverse);
+                if (callers.Count > 0)
+                {
+                    IReadOnlyDictionary<string, IndexedSymbol> callerSymbols =
+                        SymbolLookupBatch.FindBySymbolIds(index, callers.Select(static c => c.Id));
+                    foreach (ReachedNode caller in callers)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (callerSymbols.TryGetValue(caller.Id, out IndexedSymbol? callerSymbol) &&
+                            IsQueryPivot(callerSymbol))
+                        {
+                            callerSymbol = PreferDefinitionPivot(index, callerSymbol);
+                            AddSignal(
+                                callerSymbol,
+                                NoRetrievalRank,
+                                0,
+                                75,
+                                "edited_file_caller");
+                        }
+                    }
+                }
             }
         }
 
@@ -656,14 +696,56 @@ internal static partial class ContextBundleBuilder
         foreach ((string file, int line) in stackFrames)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string? resolvedPath = index.ResolveIndexedFilePath(file);
-            IReadOnlyList<IndexedSymbol> matches = resolvedPath is null
-                ? index.FindByFilePathFragment(file, SearchSeedLimit)
-                : index.FindByFilePath(resolvedPath);
-            foreach (IndexedSymbol match in matches
-                         .Where(static symbol => IsQueryPivot(symbol))
-                         .OrderBy(symbol => LineDistance(symbol, line))
-                         .Take(2))
+            string normalizedFile = NormalizeStackFramePath(file, workspaceRoot, out bool isOutsideWorkspace);
+            if (isOutsideWorkspace)
+            {
+                diagnostics.Add(new ContextAnchorDiagnostic("stack_frame", $"{file}:{line}", "outside_workspace"));
+                continue;
+            }
+
+            string? resolvedPath = index.ResolveIndexedFilePath(normalizedFile);
+            IReadOnlyList<IndexedSymbol> matches;
+            if (resolvedPath is not null)
+            {
+                matches = index.FindByFilePath(resolvedPath);
+            }
+            else
+            {
+                IReadOnlyList<IndexedSymbol> fragmentMatches =
+                    index.FindByFilePathFragment(normalizedFile, SearchSeedLimit);
+                var distinctFiles = fragmentMatches
+                    .Select(static m => m.FilePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (distinctFiles.Length > 1)
+                {
+                    diagnostics.Add(new ContextAnchorDiagnostic("stack_frame", $"{file}:{line}", "ambiguous"));
+                    continue;
+                }
+                if (distinctFiles.Length == 1)
+                {
+                    matches = fragmentMatches;
+                }
+                else
+                {
+                    diagnostics.Add(new ContextAnchorDiagnostic("stack_frame", $"{file}:{line}", "not_indexed"));
+                    continue;
+                }
+            }
+
+            var pivotMatches = matches
+                .Where(static symbol => IsQueryPivot(symbol))
+                .OrderBy(symbol => LineDistance(symbol, line))
+                .Take(2)
+                .ToArray();
+
+            if (pivotMatches.Length == 0)
+            {
+                diagnostics.Add(new ContextAnchorDiagnostic("stack_frame", $"{file}:{line}", "no_symbol_match"));
+                continue;
+            }
+
+            foreach (IndexedSymbol match in pivotMatches)
             {
                 stackMatched = true;
                 AddSignal(
@@ -1208,7 +1290,7 @@ internal static partial class ContextBundleBuilder
         return frames
             .Take(AnchorStackFrameLimit)
             .Select(static frame => (
-                frame.Groups["file"].Value,
+                frame.Groups["file"].Value.Trim(),
                 int.Parse(
                     frame.Groups["line"].Value,
                     System.Globalization.CultureInfo.InvariantCulture)))
@@ -1642,7 +1724,7 @@ internal static partial class ContextBundleBuilder
     private static partial Regex IdentifierPattern();
 
     [GeneratedRegex(
-        @"(?<file>(?:[A-Za-z]:)?[^()\s]+?\.[A-Za-z0-9]+):(?:line\s+)?(?<line>\d+)",
+        @"(?:(?:\bin|\bat)\s+)?(?<file>(?:[A-Za-z]:|[\\/]{2}[^\r\n:]+|[\\/])?[^():\r\n]+?\.[A-Za-z0-9]+):(?:line\s+)?(?<line>\d+)",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex StackFramePattern();
 
@@ -1705,29 +1787,97 @@ internal static partial class ContextBundleBuilder
         };
 
 
-    internal static ContextEvidenceDisposition DispositionFor(IReadOnlyList<Candidate> selected)
+    internal static string NormalizeStackFramePath(
+        string file,
+        string? workspaceRoot,
+        out bool isOutsideWorkspace)
     {
-        if (selected.Any(static candidate =>
+        isOutsideWorkspace = false;
+        string clean = file.Replace('\\', '/').Trim();
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            return clean;
+
+        string cleanRoot = workspaceRoot.Replace('\\', '/').TrimEnd('/');
+        bool isRooted = clean.StartsWith('/') ||
+            (clean.Length >= 2 && char.IsAsciiLetter(clean[0]) && clean[1] == ':') ||
+            clean.StartsWith("//");
+
+        if (!isRooted)
+            return clean;
+
+        if (clean.StartsWith(cleanRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            if (clean.Length == cleanRoot.Length)
+                return string.Empty;
+            if (clean[cleanRoot.Length] == '/')
+                return clean.Substring(cleanRoot.Length + 1);
+        }
+
+        isOutsideWorkspace = true;
+        return clean;
+    }
+
+    private static bool IsPublicSymbol(IndexedSymbol symbol) =>
+        symbol.Visibility is null or "public" or "export" or "exported";
+
+    private static readonly HashSet<string> UnmatchedAnchorReasons = new(
+    [
+        "not_found",
+        "not_indexed",
+        "no_symbol_match",
+        "no_symbol_match_truncated",
+        "no_frame_match",
+        "no_frame_match_truncated",
+        "outside_workspace",
+        "ambiguous",
+        "ambiguous_truncated",
+    ], StringComparer.Ordinal);
+
+    private static bool HasUnmatchedAnchor(IReadOnlyList<ContextAnchorDiagnostic>? anchorDiagnostics)
+    {
+        if (anchorDiagnostics is null || anchorDiagnostics.Count == 0)
+            return false;
+        return anchorDiagnostics.Any(static d => UnmatchedAnchorReasons.Contains(d.Reason));
+    }
+
+    internal static ContextEvidenceDisposition DispositionFor(
+        IReadOnlyList<Candidate> selected,
+        IReadOnlyList<ContextAnchorDiagnostic>? anchorDiagnostics = null,
+        string? query = null)
+    {
+        bool hasUnmatchedAnchor = HasUnmatchedAnchor(anchorDiagnostics);
+
+        if (!hasUnmatchedAnchor && selected.Any(candidate =>
                 candidate.IsPivot &&
                 candidate.Body is not null &&
                 CarriesImplementation(candidate.Symbol) &&
-                IsAuthoritativeImplementationReason(candidate.Reason)))
+                IsAuthoritativeImplementationReason(candidate.Reason, candidate.Symbol.Name, query)))
+        {
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
-        // Discovery-tier implementation bodies (source_rescue_*, semantic_rank_*, query_term_*_subject)
+        }
+
+        // Discovery-tier implementation bodies (source_rescue_*, semantic_rank_*, query_term_*_subject, or unanchored discovery query_rank_*)
         // beat an authoritative value-declaration sibling for the reason label — they still cannot
         // authorize sufficient, but must not be masked as pivot_value_declaration_only.
         if (selected.Any(static candidate =>
                 candidate.IsPivot &&
                 candidate.Body is not null &&
                 CarriesImplementation(candidate.Symbol)))
+        {
             return new ContextEvidenceDisposition("partial", "discovery_implementation_present");
-        if (selected.Any(static candidate =>
+        }
+
+        if (selected.Any(candidate =>
                 candidate.IsPivot &&
                 candidate.Body is not null &&
-                IsAuthoritativeImplementationReason(candidate.Reason)))
+                IsAuthoritativeImplementationReason(candidate.Reason, candidate.Symbol.Name, query)))
+        {
             return new ContextEvidenceDisposition("partial", "pivot_value_declaration_only");
+        }
+
         if (selected.Any(static candidate => candidate.IsPivot))
             return new ContextEvidenceDisposition("partial", "pivot_signature_only");
+
         return new ContextEvidenceDisposition("insufficient", "no_pivot_rendered");
     }
 
@@ -1743,38 +1893,56 @@ internal static partial class ContextBundleBuilder
         kind is not ("constant" or "variable" or "field" or "property");
 
     internal static ContextEvidenceDisposition DispositionForReference(
-        IReadOnlyList<ReferenceContextItem> selected)
+        IReadOnlyList<ReferenceContextItem> selected,
+        IReadOnlyList<ContextAnchorDiagnostic>? anchorDiagnostics = null,
+        string? query = null)
     {
+        bool hasUnmatchedAnchor = HasUnmatchedAnchor(anchorDiagnostics);
+
         // Authoritative implementation body only — value declarations never authorize sufficient.
-        if (selected.Any(static item =>
+        if (!hasUnmatchedAnchor && selected.Any(item =>
                 item.ItemType == "implementation" &&
                 CarriesImplementationKind(item.Kind) &&
-                IsAuthoritativeImplementationReason(item.AnchorReason)))
+                IsAuthoritativeImplementationReason(item.AnchorReason, item.Name, query)))
+        {
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
+        }
+
         // Exact containing chunks authorize sufficient only when the matched pivot is itself
         // authoritative (entry/edited/stack/full-query). Discovery pivots (source_rescue_*,
         // semantic_rank_*, query_term_*) must not complete via a free content-chunk ride-along.
-        if (selected.Any(item =>
+        if (!hasUnmatchedAnchor && selected.Any(item =>
                 item.ItemType == "content_chunk" &&
                 item.Confidence == "exact" &&
-                HasAuthoritativePivotForSymbol(selected, item.ContainingSymbolId)))
+                HasAuthoritativePivotForSymbol(selected, item.ContainingSymbolId, query)))
+        {
             return new ContextEvidenceDisposition("sufficient", "exact_containing_content_present");
+        }
+
         if (selected.Any(static item =>
                 item.ItemType == "implementation" &&
                 CarriesImplementationKind(item.Kind)))
+        {
             return new ContextEvidenceDisposition("partial", "discovery_implementation_present");
-        if (selected.Any(static item =>
+        }
+
+        if (selected.Any(item =>
                 item.ItemType == "implementation" &&
-                IsAuthoritativeImplementationReason(item.AnchorReason)))
+                IsAuthoritativeImplementationReason(item.AnchorReason, item.Name, query)))
+        {
             return new ContextEvidenceDisposition("partial", "pivot_value_declaration_only");
+        }
+
         if (selected.Any(static item => item.ItemType == "symbol"))
             return new ContextEvidenceDisposition("partial", "symbol_and_relation_evidence_only");
+
         return new ContextEvidenceDisposition("insufficient", "no_pivot_rendered");
     }
 
     private static bool HasAuthoritativePivotForSymbol(
         IReadOnlyList<ReferenceContextItem> selected,
-        string? symbolId)
+        string? symbolId,
+        string? query = null)
     {
         if (string.IsNullOrEmpty(symbolId))
             return false;
@@ -1782,17 +1950,50 @@ internal static partial class ContextBundleBuilder
             item.ItemType == "symbol" &&
             item.Role == "pivot" &&
             string.Equals(item.SymbolId, symbolId, StringComparison.Ordinal) &&
-            IsAuthoritativeImplementationReason(item.Reason));
+            IsAuthoritativeImplementationReason(item.Reason, item.Name, query));
     }
 
-    private static bool IsAuthoritativeImplementationReason(string? reason) =>
-        reason is "entry_symbol" or
+    private static bool IsAuthoritativeImplementationReason(
+        string? reason,
+        string? symbolName = null,
+        string? query = null)
+    {
+        if (reason is "entry_symbol" or
             "entry_file" or
             "edited_file" or
+            "edited_file_caller" or
             "failing_test" or
             "stack_frame" or
-            "stack_symbol" ||
-        reason?.StartsWith("query_rank_", StringComparison.Ordinal) == true;
+            "stack_symbol")
+        {
+            return true;
+        }
 
+        if (reason?.StartsWith("query_rank_", StringComparison.Ordinal) == true)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return true;
 
+            string trimmedQuery = query.Trim();
+            if (!string.IsNullOrEmpty(symbolName))
+            {
+                if (string.Equals(symbolName, trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (trimmedQuery.Length > 0 &&
+                    (trimmedQuery.EndsWith("." + symbolName, StringComparison.OrdinalIgnoreCase) ||
+                     trimmedQuery.EndsWith("::" + symbolName, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+
+            if (!trimmedQuery.Contains(' ') && !trimmedQuery.Contains('\t') && !string.IsNullOrEmpty(symbolName))
+            {
+                if (symbolName.Contains(trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
 }

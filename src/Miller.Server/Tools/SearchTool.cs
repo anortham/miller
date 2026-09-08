@@ -7,6 +7,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -286,7 +287,7 @@ public sealed class SearchTool
         "files. Pass a symbol name, identifier, or natural-language phrase; test code is auto-hidden for phrase " +
         "queries unless exclude_tests=false. Semantic retrieval is on by default; retrieval=lexical performs zero " +
         "vector work for that call, and MILLER_SEMANTIC=off is the permanent process-wide zero-work switch. " +
-        "Modes: mode=markers audits TODO/FIXME/HACK/XXX/RAZORBACK in comments; " +
+        "Modes: mode=text (symbol alias); mode=markers audits TODO/FIXME/HACK/XXX/RAZORBACK in comments; " +
         "mode=content (alias docs) searches docs/config prose; mode=source searches source-body text; " +
         "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
         "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +
@@ -295,7 +296,7 @@ public sealed class SearchTool
         "default; format=json to chain.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text (symbol-name/phrase alias)|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 6; MCP requests above 10 are clamped.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
@@ -331,6 +332,7 @@ public sealed class SearchTool
             int count;
             ToolDiagnostic? regionsConverging = null;
             ToolDiagnostic? markersConverging = null;
+            ToolDiagnostic? markersEmptyDiagnostic = null;
             if (route.Kind == SearchRouteKind.Regions)
             {
                 using WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, refresh);
@@ -375,6 +377,16 @@ public sealed class SearchTool
                         BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
+                if (count == 0 && markersConverging is null)
+                {
+                    markersEmptyDiagnostic = SearchEmptyDiagnostic(
+                        route,
+                        query,
+                        file_pattern,
+                        language,
+                        region.ReadSession,
+                        exclude_tests);
+                }
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
@@ -583,6 +595,7 @@ public sealed class SearchTool
             RequireSearchMcpOutput(output);
             ToolDiagnostic? diagnostic = regionsConverging
                 ?? markersConverging
+                ?? markersEmptyDiagnostic
                 ?? (count == 0 ? SearchEmptyDiagnostic(route, query, file_pattern, language) : null);
             if (scope is not null)
             {
@@ -591,6 +604,10 @@ public sealed class SearchTool
                 scope.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 if (diagnostic is not null)
                     ApplyEmptyTelemetry(scope, route, query);
+            }
+            if (!json && limit > ToolOutputBudget.McpRowLimit && count > 0)
+            {
+                output = AppendCompactClampNotice(output, limit);
             }
             if (diagnostic is not null)
             {
@@ -660,11 +677,52 @@ public sealed class SearchTool
         SearchRoute route,
         string query,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        IWorkspaceReadSession? readSession = null,
+        bool? excludeTests = null)
     {
         string mode = ModeName(route.Mode);
         if (route.Kind == SearchRouteKind.Markers)
         {
+            if (readSession is not null)
+            {
+                ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
+                IReadOnlyList<MarkerFactRow> facts = MarkerFactReader.Read(
+                    readSession,
+                    excludeTests: excludeTests is true,
+                    limit: 200,
+                    predicate: row => filters.Allows(row.Path, row.Language));
+
+                if (facts.Count > 0)
+                {
+                    string[] priority = ["TODO", "FIXME", "HACK", "XXX", "RAZORBACK"];
+                    var distinctMarkers = facts
+                        .Select(static f => f.Marker)
+                        .Where(m => !string.Equals(m, query, StringComparison.OrdinalIgnoreCase))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(m =>
+                        {
+                            int idx = Array.FindIndex(priority, p => string.Equals(p, m, StringComparison.OrdinalIgnoreCase));
+                            return idx >= 0 ? idx : priority.Length;
+                        })
+                        .ThenBy(static m => m, StringComparer.OrdinalIgnoreCase)
+                        .Take(3)
+                        .ToList();
+
+                    if (distinctMarkers.Count > 0)
+                    {
+                        var markerActions = distinctMarkers
+                            .Select(m => CrossToolHandoff.SearchMarkerAlternative(m, filePattern, language, excludeTests))
+                            .ToArray();
+
+                        return ToolDiagnostic.ExpectedEmpty(
+                            EmptyReasonFor(route),
+                            $"No requested source markers '{query}' were found.",
+                            markerActions);
+                    }
+                }
+            }
+
             return ToolDiagnostic.ExpectedEmpty(
                 EmptyReasonFor(route),
                 "No requested source markers were found.",
@@ -1578,7 +1636,6 @@ public sealed class SearchTool
                 strict.Count,
                 limit,
                 allowZeroEvidenceRelaxation: QueryShapeFor(query) == "natural_language");
-            relaxed = decision.Relaxed;
             if (decision.FallbackMode is { } fallbackMode)
             {
                 Fetch(fallbackMode);
@@ -1594,6 +1651,7 @@ public sealed class SearchTool
             {
                 orderedCandidates = strict;
             }
+            relaxed = decision.Relaxed && orderedCandidates.Any(static c => c.Relaxed);
         }
 
         if (mixed)
@@ -1751,8 +1809,8 @@ public sealed class SearchTool
             }
             IReadOnlyList<IndexedSymbol> suggestions = candidates.EmptySuggestions;
             if (json)
-                return suggestions.Count > 0 || candidates.Relaxed
-                    ? RenderEmptyJson(suggestions, candidates.Relaxed)
+                return suggestions.Count > 0
+                    ? RenderEmptyJson(suggestions, relaxed: false)
                     : "[]";
             return candidates.OutsideScope.Count > 0
                 ? RenderFilteredMissCompact(candidates.Filters, compactBanner, candidates.OutsideScope)
@@ -1822,7 +1880,7 @@ public sealed class SearchTool
         }
         if (exactMiss)
             compact = PrefixExactMiss(compact, compactBanner, query);
-        if (candidates.Relaxed)
+        if (servedPage.Any(static c => c.Relaxed))
             compact += "\nnote: relaxed=or — strict AND results first, followed by OR fallback.";
         // Delivery-time nudge: a named symbol top hit is a natural inspect target, so route the agent there.
         // Rendered last, exactly once. Suppressed for JSON (returned above, byte-identical), file-path hits
@@ -2499,7 +2557,8 @@ public sealed class SearchTool
                 index, query, limit, json, out int offCount, out long offBytes, out _, out _, out _,
                 compactBanner, filePattern, language, suggestionLookup,
                 offServingPolicy == SearchServingPolicy.Production ? productionRerank : null,
-                boundAgentOutput);
+                boundAgentOutput,
+                excludeTests: excludeTests);
             return new ContentCanaryOutcome(
                 new SearchRouteExecutionResult(offOutput, offCount, offBytes),
                 Facts: null,
@@ -2544,7 +2603,8 @@ public sealed class SearchTool
             index, query, limit, json, out int count, out long sourceBytes,
             out int lexicalResultCount, out IReadOnlyList<ContentSearchHit> servedPage,
             out IReadOnlyList<ContentSearchHit> lexicalOrder,
-            compactBanner, filePattern, language, suggestionLookup, rerank, boundAgentOutput);
+            compactBanner, filePattern, language, suggestionLookup, rerank, boundAgentOutput,
+            excludeTests: excludeTests);
 
         CanaryCallFacts facts = WithCohortIdentity(
             BuildContentCanaryFacts(
@@ -2813,7 +2873,8 @@ public sealed class SearchTool
         string? language = null,
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
         Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        bool excludeTests = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2824,13 +2885,17 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<ContentSearchHit>();
         var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
+        int hiddenTests = 0;
+        bool windowSaturated = false;
         FetchWithEscalation(overFetch, limit, window =>
         {
             hits.Clear();
             outsideScope.Clear();
-            IReadOnlyList<TextContentSearchHit> fetched =
-                index.Search(query, WorkspaceContentSearchKinds, window, excludeTests: false);
-            foreach (TextContentSearchHit hit in fetched)
+            TextContentSearchResult result =
+                index.SearchExtended(query, WorkspaceContentSearchKinds, window, excludeTests: false);
+            hiddenTests = result.ExcludedTestCount;
+            windowSaturated = result.WindowSaturated;
+            foreach (TextContentSearchHit hit in result.Hits)
             {
                 var contentHit = new ContentSearchHit(
                     hit.DisplayPath,
@@ -2845,7 +2910,7 @@ public sealed class SearchTool
                 else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
                     outsideScope.Add(contentHit);
             }
-            return (fetched.Count, hits.Count);
+            return (result.Hits.Count, hits.Count);
         });
 
         lexicalOrder = [.. hits];
@@ -2868,8 +2933,13 @@ public sealed class SearchTool
 
             IReadOnlyList<IndexedSymbol> suggestions =
                 TextEmptySuggestions(WorkspaceContentSearchKinds, query, suggestionLookup);
-            return ReadToolWorkspaceRouting.PrefixCompact(
+            string empty = ReadToolWorkspaceRouting.PrefixCompact(
                 TextContentEmptyHint(WorkspaceContentSearchKinds, query, suggestions), compactBanner);
+            if (windowSaturated)
+                empty += "\nnote: test results excluded from a bounded candidate window (pass exclude_tests=false to view)";
+            else if (hiddenTests > 0)
+                empty += $"\nnote: {hiddenTests} test chunk{(hiddenTests == 1 ? "" : "s")} hidden (pass exclude_tests=false to view)";
+            return empty;
         }
 
         sourceBytes = hits
@@ -2878,8 +2948,8 @@ public sealed class SearchTool
             .Sum(static group => group.Max(static hit => hit.SourceBytes));
 
         return json
-            ? RenderContentJson(hits, page, boundAgentOutput)
-            : RenderContentCompact(hits, page, total, compactBanner, boundAgentOutput);
+            ? RenderContentJson(hits, page, boundAgentOutput, hiddenTests, windowSaturated)
+            : RenderContentCompact(hits, page, total, compactBanner, boundAgentOutput, hiddenTests, windowSaturated);
     }
 
     /// <summary>
@@ -2938,12 +3008,16 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
+        int hiddenTests = 0;
+        bool windowSaturated = false;
         FetchWithEscalation(overFetch, limit, window =>
         {
             hits.Clear();
             outsideScope.Clear();
-            IReadOnlyList<TextContentSearchHit> fetched = index.Search(query, contentKinds, window, excludeTests);
-            foreach (TextContentSearchHit hit in fetched)
+            TextContentSearchResult result = index.SearchExtended(query, contentKinds, window, excludeTests);
+            hiddenTests = result.ExcludedTestCount;
+            windowSaturated = result.WindowSaturated;
+            foreach (TextContentSearchHit hit in result.Hits)
             {
                 if (filters.Allows(hit.DisplayPath, hit.Language))
                     hits.Add(hit);
@@ -2951,7 +3025,7 @@ public sealed class SearchTool
                     outsideScope.Add(hit);
             }
             hits = DedupByLine(hits);
-            return (fetched.Count, hits.Count);
+            return (result.Hits.Count, hits.Count);
         });
 
         int total = hits.Count;
@@ -2968,8 +3042,13 @@ public sealed class SearchTool
 
             IReadOnlyList<IndexedSymbol> suggestions =
                 TextEmptySuggestions(contentKinds, query, suggestionLookup);
-            return ReadToolWorkspaceRouting.PrefixCompact(
+            string empty = ReadToolWorkspaceRouting.PrefixCompact(
                 TextContentEmptyHint(contentKinds, query, suggestions), compactBanner);
+            if (windowSaturated)
+                empty += "\nnote: test results excluded from a bounded candidate window (pass exclude_tests=false to view)";
+            else if (hiddenTests > 0)
+                empty += $"\nnote: {hiddenTests} test chunk{(hiddenTests == 1 ? "" : "s")} hidden (pass exclude_tests=false to view)";
+            return empty;
         }
 
         sourceBytes = hits
@@ -2979,8 +3058,8 @@ public sealed class SearchTool
 
         servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
-            ? RenderTextContentJson(hits, page, boundAgentOutput)
-            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput);
+            ? RenderTextContentJson(hits, page, boundAgentOutput, hiddenTests, windowSaturated)
+            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput, hiddenTests, windowSaturated);
     }
 
     public static string RunTextContent(
@@ -3008,12 +3087,16 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
+        int hiddenTests = 0;
+        bool windowSaturated = false;
         FetchWithEscalation(overFetch, limit, window =>
         {
             hits.Clear();
             outsideScope.Clear();
-            IReadOnlyList<TextContentSearchHit> fetched = index.Search(query, contentKind, window, excludeTests);
-            foreach (TextContentSearchHit hit in fetched)
+            TextContentSearchResult result = index.SearchExtended(query, contentKind, window, excludeTests);
+            hiddenTests = result.ExcludedTestCount;
+            windowSaturated = result.WindowSaturated;
+            foreach (TextContentSearchHit hit in result.Hits)
             {
                 if (filters.Allows(hit.DisplayPath, hit.Language))
                     hits.Add(hit);
@@ -3021,7 +3104,7 @@ public sealed class SearchTool
                     outsideScope.Add(hit);
             }
             hits = DedupByLine(hits);
-            return (fetched.Count, hits.Count);
+            return (result.Hits.Count, hits.Count);
         });
 
         int total = hits.Count;
@@ -3033,9 +3116,14 @@ public sealed class SearchTool
             sourceBytes = 0;
             if (json)
                 return "[]";
-            return outsideScope.Count > 0
+            string empty = outsideScope.Count > 0
                 ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
                 : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint([contentKind], query), compactBanner);
+            if (windowSaturated)
+                empty += "\nnote: test results excluded from a bounded candidate window (pass exclude_tests=false to view)";
+            else if (hiddenTests > 0)
+                empty += $"\nnote: {hiddenTests} test chunk{(hiddenTests == 1 ? "" : "s")} hidden (pass exclude_tests=false to view)";
+            return empty;
         }
 
         sourceBytes = hits
@@ -3045,8 +3133,8 @@ public sealed class SearchTool
 
         servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
-            ? RenderTextContentJson(hits, page, boundAgentOutput)
-            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput);
+            ? RenderTextContentJson(hits, page, boundAgentOutput, hiddenTests, windowSaturated)
+            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput, hiddenTests, windowSaturated);
     }
 
     /// <summary>
@@ -3212,7 +3300,15 @@ public sealed class SearchTool
 
             IReadOnlyList<ContentSearchHit> fused =
                 FuseContentHits(lexical, materialized, semantic.Hits, weights);
-            return ProtectContentPrefix(fused, lexical, admission.ProtectedLexicalCount);
+            int literalCount = 0;
+            while (literalCount < lexical.Count &&
+                   (lexical[literalCount].Snippet.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    lexical[literalCount].Path.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                literalCount++;
+            }
+            int effectiveProtected = Math.Max(admission.ProtectedLexicalCount, literalCount);
+            return ProtectContentPrefix(fused, lexical, effectiveProtected);
         };
     }
 
@@ -3233,13 +3329,31 @@ public sealed class SearchTool
 
         var protectedIds = new HashSet<(string Path, int Line)>();
         var ordered = new List<ContentSearchHit>(fused.Count);
-        foreach (ContentSearchHit hit in lexical.Take(protectedLexicalCount))
+        var fusedByCoord = new Dictionary<(string Path, int Line), ContentSearchHit>();
+        for (int i = 0; i < fused.Count; i++)
+            fusedByCoord.TryAdd((fused[i].Path, fused[i].Line), fused[i]);
+
+        for (int i = 0; i < Math.Min(protectedLexicalCount, lexical.Count); i++)
         {
+            ContentSearchHit hit = lexical[i];
             if (protectedIds.Add((hit.Path, hit.Line)))
-                ordered.Add(hit);
+            {
+                ContentSearchHit? fusedHit = fusedByCoord.GetValueOrDefault((hit.Path, hit.Line));
+                double? rrf = fusedHit?.RrfScore;
+                bool wasPromoted = fused.Count > i && (fused[i].Path != hit.Path || fused[i].Line != hit.Line);
+                string rankingMethod = wasPromoted || protectedLexicalCount > 0
+                    ? "protected_lexical_leader"
+                    : (fusedHit?.RankingMethod ?? "rrf");
+
+                ordered.Add(hit with { RrfScore = rrf, RankingMethod = rankingMethod });
+            }
         }
 
-        ordered.AddRange(fused.Where(hit => !protectedIds.Contains((hit.Path, hit.Line))));
+        foreach (ContentSearchHit hit in fused)
+        {
+            if (!protectedIds.Contains((hit.Path, hit.Line)))
+                ordered.Add(hit);
+        }
         return ordered;
     }
 
@@ -3274,7 +3388,11 @@ public sealed class SearchTool
         return
         [
             .. union
-                .Select(row => (row.Hit, Fused: FusedScore(row.LexicalRank, semanticRanks, row.Hit.ChunkId, weights)))
+                .Select(row =>
+                {
+                    double fused = FusedScore(row.LexicalRank, semanticRanks, row.Hit.ChunkId, weights);
+                    return (Hit: row.Hit with { RrfScore = fused, RankingMethod = "rrf" }, Fused: fused);
+                })
                 .OrderByDescending(row => row.Fused)
                 .ThenByDescending(row => row.Hit.Score)
                 .ThenBy(row => row.Hit.Path, StringComparer.Ordinal)
@@ -4339,23 +4457,57 @@ public sealed class SearchTool
         sb.Append("Definition found: ").Append(query.Trim()).Append('\n');
         AppendPromotedDefinition(sb, definition, hasDocSymbolIds);
 
-        var otherRows = new List<SymbolCandidate>(Math.Max(0, page - 1));
+        var genuineRows = new List<SymbolCandidate>(Math.Max(0, page - 1));
+        int lowSignalCount = 0;
         for (int i = 0; i < page; i++)
         {
-            if (i != definitionIndex)
-                otherRows.Add(kept[i]);
+            if (i == definitionIndex)
+                continue;
+
+            SymbolCandidate candidate = kept[i];
+            if (IsLowSignalKind(candidate.Kind))
+                lowSignalCount++;
+            else
+                genuineRows.Add(candidate);
         }
 
-        if (otherRows.Count > 0)
+        if (genuineRows.Count > 0)
         {
             sb.Append('\n').Append("Other matches:").Append('\n').Append('\n');
-            AppendOtherMatchesGroupedByFile(sb, otherRows, hasDocSymbolIds);
+            AppendOtherMatchesGroupedByFile(sb, genuineRows, hasDocSymbolIds);
+        }
+
+        if (lowSignalCount > 0)
+        {
+            TrimTrailingNewlines(sb);
+            sb.Append('\n').Append($"… {lowSignalCount} other match{(lowSignalCount == 1 ? "" : "es")}").Append('\n');
         }
 
         TrimTrailingNewlines(sb);
         int remainder = total - page;
         AppendRemainder(sb, remainder, boundAgentOutput);
         return sb.ToString();
+    }
+
+    private static string AppendCompactClampNotice(string output, int limit)
+    {
+        if (limit <= ToolOutputBudget.McpRowLimit || string.IsNullOrWhiteSpace(output))
+            return output;
+
+        string trimmed = output.TrimEnd('\r', '\n');
+        string notice = $"note: limit clamped to {ToolOutputBudget.McpRowLimit} (requested {limit})";
+
+        int lastNewline = trimmed.LastIndexOf('\n');
+        if (lastNewline >= 0)
+        {
+            string lastLine = trimmed[(lastNewline + 1)..];
+            if (lastLine.StartsWith("next: ", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed[..lastNewline] + "\n" + notice + "\n" + lastLine;
+            }
+        }
+
+        return trimmed + "\n" + notice;
     }
 
     private static int FindPromotableDefinitionIndex(IReadOnlyList<SymbolCandidate> kept, int page, string query)
@@ -4698,7 +4850,9 @@ public sealed class SearchTool
         int page,
         int total,
         string? compactBanner,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        int hiddenTests = 0,
+        bool windowSaturated = false)
     {
         var blocks = new List<string>(page);
         for (int i = 0; i < page; i++)
@@ -4725,13 +4879,21 @@ public sealed class SearchTool
             sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
                 .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
                 .Append(')');
+
+        if (windowSaturated)
+            sb.Append("\nnote: test results excluded from a bounded candidate window (pass exclude_tests=false to view)");
+        else if (hiddenTests > 0)
+            sb.Append($"\nnote: {hiddenTests} test chunk{(hiddenTests == 1 ? "" : "s")} hidden (pass exclude_tests=false to view)");
+
         return sb.ToString();
     }
 
     private static string RenderContentJson(
         IReadOnlyList<ContentSearchHit> hits,
         int page,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        int hiddenTests = 0,
+        bool windowSaturated = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4744,6 +4906,18 @@ public sealed class SearchTool
                 writer.WriteString("file", h.Path);
                 writer.WriteNumber("line", h.Line);
                 writer.WriteNumber("score", h.Score);
+                if (h.RankingMethod is not null)
+                {
+                    writer.WriteNumber("final_rank", i + 1);
+                    writer.WriteString("ranking_method", h.RankingMethod);
+                    if (h.RrfScore is { } rrfScore)
+                        writer.WriteNumber("rrf_score", rrfScore);
+                }
+                if (windowSaturated)
+                    writer.WriteBoolean("tests_excluded_bounded", true);
+                else if (hiddenTests > 0)
+                    writer.WriteNumber("tests_hidden", hiddenTests);
+
                 string snippet = ToolOutputBudget.BoundSearchSnippet(
                     h.Snippet,
                     boundAgentOutput,
@@ -4763,7 +4937,9 @@ public sealed class SearchTool
         int page,
         int total,
         string? compactBanner,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        int hiddenTests = 0,
+        bool windowSaturated = false)
     {
         var blocks = new List<string>(page);
         for (int i = 0; i < page; i++)
@@ -4792,13 +4968,21 @@ public sealed class SearchTool
             sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
                 .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
                 .Append(')');
+
+        if (windowSaturated)
+            sb.Append("\nnote: test results excluded from a bounded candidate window (pass exclude_tests=false to view)");
+        else if (hiddenTests > 0)
+            sb.Append($"\nnote: {hiddenTests} test chunk{(hiddenTests == 1 ? "" : "s")} hidden (pass exclude_tests=false to view)");
+
         return sb.ToString();
     }
 
     private static string RenderTextContentJson(
         IReadOnlyList<TextContentSearchHit> hits,
         int page,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        int hiddenTests = 0,
+        bool windowSaturated = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4823,6 +5007,11 @@ public sealed class SearchTool
                 writer.WriteNumber("byte_start", h.ByteStart);
                 writer.WriteNumber("byte_end", h.ByteEnd);
                 writer.WriteNumber("score", h.Score);
+                if (windowSaturated)
+                    writer.WriteBoolean("tests_excluded_bounded", true);
+                else if (hiddenTests > 0)
+                    writer.WriteNumber("tests_hidden", hiddenTests);
+
                 string snippet = ToolOutputBudget.BoundSearchSnippet(
                     h.Snippet,
                     boundAgentOutput,

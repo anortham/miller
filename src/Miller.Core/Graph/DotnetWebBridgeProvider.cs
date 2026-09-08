@@ -232,12 +232,61 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         var endpoints = new List<ControllerEndpoint>();
         foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
         {
-            if (!TryReduceStructuralEndpointFact(fact, symbols, literals, symbolsById, literalSites, out var endpoint))
-                continue;
-
-            endpoints.Add(endpoint);
+            if (TryReduceStructuralEndpointFacts(fact, symbols, literals, symbolsById, literalSites, out var factEndpoints))
+            {
+                endpoints.AddRange(factEndpoints);
+            }
         }
         return endpoints;
+    }
+
+    private static bool TryReduceStructuralEndpointFacts(
+        StructuralFactRecord fact,
+        IReadOnlyList<SymbolDetail> symbols,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites,
+        out IReadOnlyList<ControllerEndpoint> endpoints)
+    {
+        endpoints = [];
+        if (!string.Equals(fact.PatternId, AspNetMinimalApiRoutePattern, StringComparison.Ordinal))
+            return false;
+
+        var routeTemplate = StructuralRouteFactAdapter.MetadataString(fact, "route_template")
+            ?? StructuralRouteFactAdapter.MetadataString(fact, "path")
+            ?? StructuralRouteFactAdapter.MetadataString(fact, "route");
+        if (string.IsNullOrWhiteSpace(routeTemplate))
+            return false;
+
+        var verbs = StructuralRouteFactAdapter.ReadVerbs(fact);
+        if (verbs.Count == 0)
+        {
+            var singleVerb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
+            if (!string.IsNullOrWhiteSpace(singleVerb))
+                verbs = [singleVerb.Trim().ToUpperInvariant()];
+        }
+        if (verbs.Count == 0)
+            return false;
+
+        var handler = ResolveStructuralHandler(fact, symbols, symbolsById);
+        var fullRoute = ComposeStructuralEndpointRoute(fact, routeTemplate, literals, symbolsById, literalSites);
+        var list = new List<ControllerEndpoint>(verbs.Count);
+        foreach (var verb in verbs)
+        {
+            list.Add(new ControllerEndpoint(
+                SymbolId: handler?.Id,
+                VerbKey: ToHttpVerbKey(verb),
+                ClassRoute: null,
+                MethodRoute: fullRoute,
+                ParentClassName: handler?.ParentClassName ?? string.Empty,
+                MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, fullRoute),
+                ReturnType: string.Empty,
+                RequestBodyType: null,
+                FilePath: handler?.FilePath ?? fact.Path,
+                Line: fact.Span.StartLine));
+        }
+        endpoints = list;
+        return true;
     }
 
     private static bool TryReduceStructuralEndpointFact(
@@ -248,29 +297,14 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites,
         out ControllerEndpoint endpoint)
     {
+        if (TryReduceStructuralEndpointFacts(fact, symbols, literals, symbolsById, literalSites, out var endpoints) &&
+            endpoints.Count > 0)
+        {
+            endpoint = endpoints[0];
+            return true;
+        }
         endpoint = null!;
-        if (!string.Equals(fact.PatternId, AspNetMinimalApiRoutePattern, StringComparison.Ordinal))
-            return false;
-
-        var routeTemplate = StructuralRouteFactAdapter.MetadataString(fact, "route_template");
-        var verb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
-        if (string.IsNullOrWhiteSpace(routeTemplate) || string.IsNullOrWhiteSpace(verb))
-            return false;
-
-        var handler = ResolveStructuralHandler(fact, symbols, symbolsById);
-        var fullRoute = ComposeStructuralEndpointRoute(fact, routeTemplate, literals, symbolsById, literalSites);
-        endpoint = new ControllerEndpoint(
-            SymbolId: handler?.Id,
-            VerbKey: ToHttpVerbKey(verb),
-            ClassRoute: null,
-            MethodRoute: fullRoute,
-            ParentClassName: handler?.ParentClassName ?? string.Empty,
-            MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, fullRoute),
-            ReturnType: string.Empty,
-            RequestBodyType: null,
-            FilePath: handler?.FilePath ?? fact.Path,
-            Line: fact.Span.StartLine);
-        return true;
+        return false;
     }
 
     /// <summary>
@@ -304,8 +338,14 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             if (!string.Equals(attributeKind, "http_method", StringComparison.Ordinal))
                 continue;
 
-            var verb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
-            if (string.IsNullOrWhiteSpace(verb))
+            var verbs = StructuralRouteFactAdapter.ReadVerbs(fact);
+            if (verbs.Count == 0)
+            {
+                var verb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
+                if (!string.IsNullOrWhiteSpace(verb))
+                    verbs = [verb.Trim().ToUpperInvariant()];
+            }
+            if (verbs.Count == 0)
                 continue;
 
             // route_template is ABSENT for a bare [HttpGet]; effective_route_template is absent only when
@@ -322,22 +362,25 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 ? containing
                 : null;
 
-            var verbKey = ToHttpVerbKey(verb);
-            var (returnType, requestBodyType) = handler is null
-                ? (string.Empty, (string?)null)
-                : ParseSignatureTypes(handler.Signature, verbKey);
+            foreach (var verb in verbs)
+            {
+                var verbKey = ToHttpVerbKey(verb);
+                var (returnType, requestBodyType) = handler is null
+                    ? (string.Empty, (string?)null)
+                    : ParseSignatureTypes(handler.Signature, verbKey);
 
-            endpoints.Add(new ControllerEndpoint(
-                SymbolId: handler?.Id,
-                VerbKey: verbKey,
-                ClassRoute: null,
-                MethodRoute: route,
-                ParentClassName: handler?.ParentClassName ?? string.Empty,
-                MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, route),
-                ReturnType: returnType,
-                RequestBodyType: requestBodyType,
-                FilePath: handler?.FilePath ?? fact.Path,
-                Line: fact.Span.StartLine));
+                endpoints.Add(new ControllerEndpoint(
+                    SymbolId: handler?.Id,
+                    VerbKey: verbKey,
+                    ClassRoute: null,
+                    MethodRoute: route,
+                    ParentClassName: handler?.ParentClassName ?? string.Empty,
+                    MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, route),
+                    ReturnType: returnType,
+                    RequestBodyType: requestBodyType,
+                    FilePath: handler?.FilePath ?? fact.Path,
+                    Line: fact.Span.StartLine));
+            }
         }
         return new AttributeRouteReduction(endpoints, endpointFacts);
     }
@@ -521,10 +564,13 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 continue;
             }
 
-            if (StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out var reference))
+            if (StructuralRouteFactAdapter.TryReadRouteReferences(fact, symbolsById, out var references))
             {
-                CountStructuralRouteReferencePattern(fact.PatternId, ref htmx, ref vue, ref react, ref nextjs, ref nuxt);
-                calls.Add(ToClientCall(reference));
+                foreach (var reference in references)
+                {
+                    CountStructuralRouteReferencePattern(fact.PatternId, ref htmx, ref vue, ref react, ref nextjs, ref nuxt);
+                    calls.Add(ToClientCall(reference));
+                }
             }
         }
         return new StructuralClientCallReduction(calls, clientRequestCalls, (htmx, vue, react, nextjs, nuxt, clientRequests));

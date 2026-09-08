@@ -29,6 +29,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     /// </summary>
     private readonly CtRunActivityCell? _runActivity;
     private readonly ContinuousTestCoverageNarrowingMode _coverageNarrowingMode;
+    private readonly ICtDiscoveryLedger _discoveryLedger;
     private readonly Dictionary<PendingKey, ContinuousTestDaemonPendingRun> _pending = [];
 
     /// <summary>
@@ -52,7 +53,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         Action<string>? ctStateChanged = null,
         Action<string>? lifecycleLog = null,
         ContinuousTestCoverageNarrowingMode coverageNarrowingMode = ContinuousTestCoverageNarrowingMode.Off,
-        CtRunActivityCell? runActivity = null)
+        CtRunActivityCell? runActivity = null,
+        ICtDiscoveryLedger? discoveryLedger = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _selector = selector ?? throw new ArgumentNullException(nameof(selector));
@@ -64,7 +66,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         _lifecycleLog = lifecycleLog;
         _coverageNarrowingMode = coverageNarrowingMode;
         _runActivity = runActivity;
+        _discoveryLedger = discoveryLedger ?? new CtDiscoveryLedger();
     }
+
+    public ICtDiscoveryLedger DiscoveryLedger => _discoveryLedger;
+
+    public ContinuousTestImpactSelector Selector => _selector;
 
     public bool HasReadyWork(DateTimeOffset now)
     {
@@ -145,6 +152,51 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     {
         ArgumentNullException.ThrowIfNull(change);
         ValidateBuildOutputRoot(change.Workspace);
+        if (requireCompleteDelta && change.DeltaCompleteness != ContinuousTestDeltaCompleteness.Complete)
+        {
+            var empty = new ContinuousTestSelectionResult([], [], []);
+            var rejected = new ContinuousTestDaemonPendingRun(
+                change.Workspace,
+                change.CurrentRevision,
+                change.CurrentRevision,
+                change.IndexIdentity,
+                [],
+                change.FilterArguments,
+                change.Command,
+                change.Framework,
+                false,
+                change.ObservedAt,
+                change.ObservedAt);
+            return new ContinuousTestDaemonEnqueueResult(empty, rejected);
+        }
+
+        ContinuousTestSelectionResult selection = _selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: change.Workspace.WorkspaceId,
+            ChangedPaths: change.ChangedPaths,
+            ImpactedSymbols: change.ImpactedSymbols,
+            ImpactedTests: change.ImpactedTests,
+            WorkspaceScope: change.WorkspaceScope,
+            ProjectPath: change.Workspace.ProjectPath),
+            change.Freshness);
+
+        return ApplyCompletedSelection(change, selection, requireCompleteDelta, explicitRun, idleDrain);
+    }
+
+    /// <summary>
+    /// Applies a computed selection result to the continuous test store and pending run queues.
+    /// MUST be called exclusively on the daemon host loop thread so that SQLite updates and queue
+    /// mutations are never concurrent with background worker tasks.
+    /// </summary>
+    public ContinuousTestDaemonEnqueueResult ApplyCompletedSelection(
+        ContinuousTestDaemonChange change,
+        ContinuousTestSelectionResult selection,
+        bool requireCompleteDelta,
+        bool explicitRun,
+        bool idleDrain = false)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        ArgumentNullException.ThrowIfNull(selection);
+        ValidateBuildOutputRoot(change.Workspace);
         var empty = new ContinuousTestSelectionResult([], [], []);
         var rejected = new ContinuousTestDaemonPendingRun(
             change.Workspace,
@@ -161,14 +213,6 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         if (requireCompleteDelta && change.DeltaCompleteness != ContinuousTestDeltaCompleteness.Complete)
             return new ContinuousTestDaemonEnqueueResult(empty, rejected);
 
-        ContinuousTestSelectionResult selection = _selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
-            WorkspaceId: change.Workspace.WorkspaceId,
-            ChangedPaths: change.ChangedPaths,
-            ImpactedSymbols: change.ImpactedSymbols,
-            ImpactedTests: change.ImpactedTests,
-            WorkspaceScope: change.WorkspaceScope,
-            ProjectPath: change.Workspace.ProjectPath),
-            change.Freshness);
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
         if ((explicitRun || idleDrain) && change.WorkspaceScope)
         {
@@ -937,6 +981,37 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             return pending;
         }
 
+        CtDiscoveryAttemptSummary? latestAttempt = _discoveryLedger.GetLatestAttempt(
+            pending.Workspace.WorkspaceRoot, pending.Workspace.ProjectPath);
+        if (latestAttempt is not null && !pending.ExplicitRun)
+        {
+            if (latestAttempt.Outcome == CtDiscoveryOutcome.Refused)
+            {
+                return pending with { RefreshInventory = false };
+            }
+
+            if ((latestAttempt.Outcome == CtDiscoveryOutcome.Failed || latestAttempt.Outcome == CtDiscoveryOutcome.TimedOut)
+                && latestAttempt.Revision == pending.Freshness.Revision)
+            {
+                return pending with { RefreshInventory = false };
+            }
+        }
+
+        string? framework = pending.Framework ?? pending.Workspace.Framework;
+        if (!ContinuousTestFrameworkSupport.IsSupported(framework))
+        {
+            string reason = ContinuousTestFrameworkSupport.ReasonFor(framework) ?? "Framework unsupported";
+            string? remedy = ContinuousTestFrameworkSupport.RemedyFor(framework);
+            RecordDiscoveryFailure(
+                pending,
+                exception: null,
+                outcome: CtDiscoveryOutcome.Refused,
+                stage: CtDiscoveryStage.FrameworkClassification,
+                reason: reason,
+                remedy: remedy);
+            return pending with { RefreshInventory = false };
+        }
+
         try
         {
             await _coordinator
@@ -1035,16 +1110,74 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private bool HasProviderInventory(string workspaceId, string projectPath) =>
         _store.ListTestCasesForProject(workspaceId, projectPath).Count > 0;
 
-    private void RecordDiscoveryFailure(ContinuousTestDaemonPendingRun pending, Exception exception)
+    private void RecordDiscoveryFailure(
+        ContinuousTestDaemonPendingRun pending,
+        Exception? exception,
+        CtDiscoveryOutcome outcome = CtDiscoveryOutcome.Failed,
+        CtDiscoveryStage stage = CtDiscoveryStage.Execution,
+        string? reason = null,
+        string? remedy = null)
     {
         ContinuousTestWorkspace workspace = pending.Workspace;
+        string framework = pending.Framework ?? workspace.Framework ?? "unknown";
 
-        // Logged BEFORE the store write, and with the FULL detail. The `ct.db` row below keeps only
-        // FailureSummary's first line, which is right for a status column and useless for a diagnosis:
-        // finding the last discovery failure of a dogfood run meant querying the database. This line
-        // carries the type, the whole message, and the stack, so the shared daily log answers it.
-        Log($"ct discovery failed workspace={workspace.WorkspaceId} project={workspace.ProjectPath} "
-            + CtDaemonLog.FailureDetail(exception));
+        if (exception is not null)
+        {
+            if (exception is TimeoutException || exception.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+            {
+                outcome = CtDiscoveryOutcome.TimedOut;
+                stage = CtDiscoveryStage.Execution;
+            }
+            else if (exception is System.ComponentModel.Win32Exception or FileNotFoundException)
+            {
+                stage = CtDiscoveryStage.ProcessSpawn;
+            }
+            else if (exception is System.Text.Json.JsonException || exception.Message.Contains("JSON", StringComparison.OrdinalIgnoreCase))
+            {
+                stage = CtDiscoveryStage.Parsing;
+            }
+        }
+
+        reason ??= exception is not null ? FailureSummary(exception) : "Project discovery failed";
+        remedy ??= ContinuousTestFrameworkSupport.RemedyFor(framework)
+            ?? "Check project configuration and runner prerequisites, or run the suite directly.";
+
+        string attemptId = $"ct-disc-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{RandomNumberGenerator.GetHexString(4).ToLowerInvariant()}";
+        string artifactDir = Path.Combine(workspace.WorkspaceRoot, ".miller", "ct", "discovery-attempts");
+        string artifactPath = Path.Combine(artifactDir, $"{attemptId}.json");
+
+        var attempt = new CtDiscoveryAttempt(
+            AttemptId: attemptId,
+            WorkspaceId: workspace.WorkspaceId,
+            ProjectPath: workspace.ProjectPath,
+            Framework: framework,
+            ProviderSource: "ct-project-status",
+            IndexIdentity: pending.IndexIdentity,
+            Revision: pending.Freshness.Revision,
+            Stage: stage,
+            Outcome: outcome,
+            AttemptedAtUtc: DateTimeOffset.UtcNow,
+            FailureReason: reason,
+            FailureDetail: exception is not null ? CtDaemonLog.FailureDetail(exception) : reason,
+            Remedy: remedy,
+            ExitCode: null,
+            Command: null,
+            StandardOutput: null,
+            StandardError: null,
+            ExceptionType: exception?.GetType().FullName,
+            ArtifactPath: artifactPath);
+
+        _discoveryLedger.RecordAttempt(workspace.WorkspaceRoot, attempt);
+
+        if (exception is not null)
+        {
+            Log($"ct discovery failed workspace={workspace.WorkspaceId} project={workspace.ProjectPath} "
+                + CtDaemonLog.FailureDetail(exception));
+        }
+        else
+        {
+            Log($"ct discovery {outcome.ToString().ToLowerInvariant()} workspace={workspace.WorkspaceId} project={workspace.ProjectPath} reason={reason}");
+        }
 
         string testCaseId = DiscoveryFailureTestCaseId(workspace);
         string runId = CtStableIds.StableId(
@@ -1055,15 +1188,21 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         _store.PutTestCase(new ContinuousTestCase(
             Id: testCaseId,
             WorkspaceId: workspace.WorkspaceId,
-            Name: "Project discovery failed",
-            QualifiedName: $"Project discovery failed: {Path.GetFileName(workspace.ProjectPath)}",
+            Name: $"Project discovery {outcome.ToString().ToLowerInvariant()}",
+            QualifiedName: $"Project discovery {outcome.ToString().ToLowerInvariant()}: {Path.GetFileName(workspace.ProjectPath)}",
             Selector: $"project-discovery::{workspace.ProjectPath}",
-            Framework: pending.Framework ?? workspace.Framework,
+            Framework: framework,
             Source: "ct-project-status",
             Metadata: new Dictionary<string, object?>
             {
                 ["kind"] = DiscoveryFailureKind,
                 ["ct_project_path"] = workspace.ProjectPath,
+                ["project_path"] = workspace.ProjectPath,
+                ["outcome"] = outcome.ToString().ToLowerInvariant(),
+                ["stage"] = stage.ToString(),
+                ["attempt_id"] = attempt.AttemptId,
+                ["artifact_path"] = attempt.ArtifactPath,
+                ["remedy"] = remedy,
             }));
         _storeApplier.StartRun(new ContinuousTestProviderRunStart(
             workspace.WorkspaceId,
@@ -1094,13 +1233,16 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     pending.SelectedRevision,
                     pending.IndexIdentity,
                     pending.Freshness.Revision,
-                    FailureSummary: FailureSummary(exception)),
+                    FailureSummary: reason),
             ]));
         NotifyCtStateChanged(workspace.WorkspaceId);
     }
 
-    private void ClearDiscoveryFailure(ContinuousTestWorkspace workspace) =>
+    private void ClearDiscoveryFailure(ContinuousTestWorkspace workspace)
+    {
         _store.DeleteTestCase(workspace.WorkspaceId, DiscoveryFailureTestCaseId(workspace));
+        _discoveryLedger.ClearAttempt(workspace.WorkspaceRoot, workspace.ProjectPath);
+    }
 
     private static string DiscoveryFailureTestCaseId(ContinuousTestWorkspace workspace) =>
         CtStableIds.StableId("ct-discovery-failure", workspace.WorkspaceId, workspace.ProjectPath);

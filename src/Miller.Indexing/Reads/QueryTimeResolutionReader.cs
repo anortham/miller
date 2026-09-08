@@ -44,6 +44,8 @@ internal sealed class QueryTimeResolutionCounters
     private int _resolvePasses;
     private int _identifierDetailCommands;
     private int _identifierDetailRows;
+    private int _forwardPasses;
+    private int _reversePasses;
 
     internal int ResolvePasses => Volatile.Read(ref _resolvePasses);
 
@@ -51,11 +53,19 @@ internal sealed class QueryTimeResolutionCounters
 
     internal int IdentifierDetailRows => Volatile.Read(ref _identifierDetailRows);
 
+    internal int ForwardPasses => Volatile.Read(ref _forwardPasses);
+
+    internal int ReversePasses => Volatile.Read(ref _reversePasses);
+
     internal void RecordResolvePass() => Interlocked.Increment(ref _resolvePasses);
 
     internal void RecordIdentifierDetailCommand() => Interlocked.Increment(ref _identifierDetailCommands);
 
     internal void RecordIdentifierDetailRow() => Interlocked.Increment(ref _identifierDetailRows);
+
+    internal void RecordForwardPass() => Interlocked.Increment(ref _forwardPasses);
+
+    internal void RecordReversePass() => Interlocked.Increment(ref _reversePasses);
 }
 
 internal sealed class QueryTimeResolutionReader
@@ -296,7 +306,7 @@ internal sealed class QueryTimeResolutionReader
         SqliteConnection connection,
         IReadOnlyList<string> candidateIds)
     {
-        QueryScratch scratch = ResolveQuery(connection, candidateIds);
+        QueryScratch scratch = ResolveQuery(connection, candidateIds, Direction.Reverse);
         var rows = CreateListMap(candidateIds);
         foreach (string candidateId in candidateIds)
         {
@@ -369,13 +379,33 @@ internal sealed class QueryTimeResolutionReader
             {
                 if (!identifier.Details.HasSiteRow || identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
+
+                if (ProvesContradiction(scratch, identifier, candidateId))
+                    continue;
+
+                bool isAmbiguous = identifier.Outcome.Kind == ResolutionOutcomeKind.Ambiguous
+                    && identifier.Outcome.CandidateTargetIds is { Count: > 0 } targets
+                    && targets.Contains(candidateId, StringComparer.Ordinal);
+
+                if (identifier.Outcome.Kind == ResolutionOutcomeKind.Ambiguous && !isAmbiguous)
+                    continue;
+
+                ReferenceResolutionStatus status = isAmbiguous
+                    ? ReferenceResolutionStatus.Ambiguous
+                    : ReferenceResolutionStatus.Fallback;
+
+                IReadOnlyList<string>? candidateTargets = isAmbiguous
+                    ? identifier.Outcome.CandidateTargetIds
+                    : null;
+
                 rows[candidateId].Add(ToInbound(
                     identifier,
-                    targetSymbolId: null,
+                    targetSymbolId: isAmbiguous ? candidateId : null,
                     ReferenceEvidenceSource.NameFallback,
                     Math.Min(identifier.Confidence, 0.5),
                     tier: null,
-                    ReferenceResolutionStatus.Fallback));
+                    status,
+                    candidateTargets));
             }
         }
 
@@ -451,6 +481,18 @@ internal sealed class QueryTimeResolutionReader
             {
                 if (!identifier.Details.HasSiteRow || identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
+
+                bool isAmbiguous = identifier.Outcome.Kind == ResolutionOutcomeKind.Ambiguous
+                    && identifier.Outcome.CandidateTargetIds is { Count: > 0 };
+
+                ReferenceResolutionStatus status = isAmbiguous
+                    ? ReferenceResolutionStatus.Ambiguous
+                    : ReferenceResolutionStatus.Fallback;
+
+                IReadOnlyList<string>? candidateTargets = isAmbiguous
+                    ? identifier.Outcome.CandidateTargetIds
+                    : null;
+
                 rows[candidateId].Add(ToOutgoing(
                     identifier,
                     candidateId,
@@ -459,13 +501,26 @@ internal sealed class QueryTimeResolutionReader
                     ReferenceEvidenceSource.NameFallback,
                     Math.Min(identifier.Confidence, 0.5),
                     tier: null,
-                    ReferenceResolutionStatus.Fallback));
+                    status,
+                    candidateTargets));
             }
 
             foreach (ResolvedPending pending in scratch.PendingsByEvidenceContainer(candidateId))
             {
                 if (!pending.HasSiteRow || pending.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
+
+                bool isAmbiguous = pending.Outcome.Kind == ResolutionOutcomeKind.Ambiguous
+                    && pending.Outcome.CandidateTargetIds is { Count: > 0 };
+
+                ReferenceResolutionStatus status = isAmbiguous
+                    ? ReferenceResolutionStatus.Ambiguous
+                    : ReferenceResolutionStatus.Fallback;
+
+                IReadOnlyList<string>? candidateTargets = isAmbiguous
+                    ? pending.Outcome.CandidateTargetIds
+                    : null;
+
                 rows[candidateId].Add(ToOutgoing(
                     pending,
                     candidateId,
@@ -474,7 +529,8 @@ internal sealed class QueryTimeResolutionReader
                     ReferenceEvidenceSource.NameFallback,
                     Math.Min(pending.Confidence, 0.5),
                     tier: null,
-                    ReferenceResolutionStatus.Fallback));
+                    status,
+                    candidateTargets));
             }
         }
 
@@ -664,6 +720,10 @@ internal sealed class QueryTimeResolutionReader
         Direction direction)
     {
         Counters.RecordResolvePass();
+        if (direction is Direction.Forward or Direction.Both)
+            Counters.RecordForwardPass();
+        if (direction is Direction.Reverse or Direction.Both)
+            Counters.RecordReversePass();
         long candidateLookupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         Dictionary<string, CandidateRecord> candidates = ReadCandidates(connection, candidateIds);
         GraphResolutionMeasurement candidateLookup = new(
@@ -1336,6 +1396,122 @@ internal sealed class QueryTimeResolutionReader
     private const double UniqueNameFallbackMultiplier = 0.5;
     private const double OverloadSetFallbackMultiplier = 0.4;
 
+    private static string NormalizeReceiverTypeName(string rawType)
+    {
+        string s = rawType.Trim();
+        if (s.EndsWith('?'))
+            s = s[..^1].Trim();
+        int genIdx = s.IndexOf('<');
+        if (genIdx >= 0)
+            s = s[..genIdx].Trim();
+        int colonIdx = s.LastIndexOf("::", StringComparison.Ordinal);
+        if (colonIdx >= 0)
+            s = s[(colonIdx + 2)..].Trim();
+        int dotIdx = s.LastIndexOf('.');
+        if (dotIdx >= 0)
+            s = s[(dotIdx + 1)..].Trim();
+        return s;
+    }
+
+    private static bool ProvesContradiction(
+        QueryScratch scratch,
+        string? receiverType,
+        string? receiverName,
+        long versionId,
+        string? callerScopeId,
+        string language,
+        string candidateTargetId)
+    {
+        string? provenType = null;
+        if (!string.IsNullOrWhiteSpace(receiverType))
+        {
+            provenType = receiverType;
+        }
+        else if (!string.IsNullOrWhiteSpace(receiverName) && callerScopeId is not null)
+        {
+            var scopeKey = new FactSymbolKey(versionId, callerScopeId);
+            foreach (FactSymbol receiverSym in scratch.Cache.ChildrenOf(scopeKey))
+            {
+                if (receiverSym.Name == receiverName && receiverSym.Kind == FactSymbolKind.Variable)
+                {
+                    foreach (FactTypeFact typeFact in scratch.Cache.TypeFactsOf(receiverSym.Key))
+                    {
+                        if (!string.IsNullOrWhiteSpace(typeFact.ResolvedType))
+                        {
+                            provenType = typeFact.ResolvedType;
+                            break;
+                        }
+                    }
+                    if (provenType is not null)
+                        break;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(provenType))
+            return false;
+
+        string normalizedProven = NormalizeReceiverTypeName(provenType);
+        if (string.IsNullOrEmpty(normalizedProven))
+            return false;
+
+        FactSymbol? target = scratch.Symbol(candidateTargetId);
+        if (target is null)
+            return false;
+
+        if (target.Parent is not { } parentKey)
+            return false;
+
+        FactSymbol? parent = scratch.Symbol(parentKey.SymbolId) ?? scratch.Cache.Symbol(parentKey);
+        if (parent is null)
+            return false;
+
+        string parentName = parent.Name;
+        if (string.Equals(parentName, normalizedProven, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        foreach (RelationshipSite rel in scratch.RelationshipsFrom(parent.Key.SymbolId))
+        {
+            if (rel.Kind is "implements" or "extends" or "inherits")
+            {
+                FactSymbol? baseSym = scratch.Symbol(rel.ToSymbolId) ?? scratch.Cache.Symbol(new FactSymbolKey(parent.Key.VersionId, rel.ToSymbolId));
+                if (baseSym is not null && string.Equals(NormalizeReceiverTypeName(baseSym.Name), normalizedProven, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+        }
+
+        foreach (FactTypeFact typeFact in scratch.Cache.TypeFactsOf(parent.Key))
+        {
+            if (string.Equals(NormalizeReceiverTypeName(typeFact.ResolvedType), normalizedProven, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        if (parent.Signature is { } signature && signature.Contains(normalizedProven, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return true;
+    }
+
+    private static bool ProvesContradiction(QueryScratch scratch, ResolvedIdentifier identifier, string candidateTargetId) =>
+        ProvesContradiction(
+            scratch,
+            identifier.Site.ReceiverType,
+            identifier.Site.Receiver,
+            identifier.VersionId,
+            identifier.ContainingSymbolId,
+            identifier.Details.Language,
+            candidateTargetId);
+
+    private static bool ProvesContradiction(QueryScratch scratch, ResolvedPending pending, string candidateTargetId) =>
+        ProvesContradiction(
+            scratch,
+            pending.Site.ReceiverType,
+            pending.Site.Receiver,
+            pending.Site.VersionId,
+            pending.Site.CallerScopeSymbolId ?? pending.FromSymbolId,
+            pending.Language,
+            candidateTargetId);
+
     private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
         QueryScratch scratch,
         ResolvedIdentifier identifier)
@@ -1347,15 +1523,50 @@ internal sealed class QueryTimeResolutionReader
             return [];
         }
 
-        return NameFallbackTargets(scratch, identifier.Name, identifier.ContainingSymbolId);
+        var targets = NameFallbackTargets(scratch, identifier.Name, identifier.ContainingSymbolId);
+        if (targets.Count == 0)
+            return targets;
+
+        List<(string, double)>? filtered = null;
+        for (int i = 0; i < targets.Count; i++)
+        {
+            if (ProvesContradiction(scratch, identifier, targets[i].TargetId))
+            {
+                filtered ??= targets.Take(i).ToList();
+            }
+            else
+            {
+                filtered?.Add(targets[i]);
+            }
+        }
+        return filtered ?? targets;
     }
 
     private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
         QueryScratch scratch,
-        ResolvedPending pending) =>
-        pending.Outcome.Kind == ResolutionOutcomeKind.Resolved
-            ? []
-            : NameFallbackTargets(scratch, pending.Name, pending.FromSymbolId);
+        ResolvedPending pending)
+    {
+        if (pending.Outcome.Kind == ResolutionOutcomeKind.Resolved)
+            return [];
+
+        var targets = NameFallbackTargets(scratch, pending.Name, pending.FromSymbolId);
+        if (targets.Count == 0)
+            return targets;
+
+        List<(string, double)>? filtered = null;
+        for (int i = 0; i < targets.Count; i++)
+        {
+            if (ProvesContradiction(scratch, pending, targets[i].TargetId))
+            {
+                filtered ??= targets.Take(i).ToList();
+            }
+            else
+            {
+                filtered?.Add(targets[i]);
+            }
+        }
+        return filtered ?? targets;
+    }
 
     private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
         QueryScratch scratch,
@@ -1401,7 +1612,8 @@ internal sealed class QueryTimeResolutionReader
         ReferenceEvidenceSource source,
         double confidence,
         int? tier,
-        ReferenceResolutionStatus status) =>
+        ReferenceResolutionStatus status,
+        IReadOnlyList<string>? candidateTargetIds = null) =>
         new(
             targetSymbolId,
             identifier.ContainingSymbolId,
@@ -1421,7 +1633,9 @@ internal sealed class QueryTimeResolutionReader
             identifier.Details.Language,
             identifier.Details.ReferenceSiteId,
             identifier.Details.IsExact,
-            identifier.Details.SiteProvenance);
+            identifier.Details.SiteProvenance,
+            CandidateTargetIds: candidateTargetIds,
+            Provenances: [identifier.Details.SiteProvenance]);
 
     private static ReferenceEvidence ToInbound(
         ResolvedPending pending,
@@ -1429,7 +1643,8 @@ internal sealed class QueryTimeResolutionReader
         ReferenceEvidenceSource source,
         double confidence,
         int? tier,
-        ReferenceResolutionStatus status) =>
+        ReferenceResolutionStatus status,
+        IReadOnlyList<string>? candidateTargetIds = null) =>
         new(
             targetSymbolId,
             pending.SiteContainingSymbolId,
@@ -1449,7 +1664,9 @@ internal sealed class QueryTimeResolutionReader
             pending.Language,
             pending.ReferenceSiteId,
             pending.IsExact,
-            pending.SiteProvenance);
+            pending.SiteProvenance,
+            CandidateTargetIds: candidateTargetIds,
+            Provenances: [pending.SiteProvenance]);
 
     private static ReferenceEvidence ToInbound(
         RelationshipSite relationship,
@@ -1477,7 +1694,8 @@ internal sealed class QueryTimeResolutionReader
             relationship.Language,
             relationship.ReferenceSiteId,
             relationship.IsExact,
-            relationship.SiteProvenance);
+            relationship.SiteProvenance,
+            Provenances: [relationship.SiteProvenance]);
 
     private static OutgoingReferenceEvidence ToOutgoing(
         ResolvedIdentifier identifier,
@@ -1487,7 +1705,8 @@ internal sealed class QueryTimeResolutionReader
         ReferenceEvidenceSource source,
         double confidence,
         int? tier,
-        ReferenceResolutionStatus status) =>
+        ReferenceResolutionStatus status,
+        IReadOnlyList<string>? candidateTargetIds = null) =>
         new(
             containingSymbolId,
             targetSymbolId,
@@ -1508,7 +1727,9 @@ internal sealed class QueryTimeResolutionReader
             identifier.Details.Language,
             identifier.Details.ReferenceSiteId,
             identifier.Details.IsExact,
-            identifier.Details.SiteProvenance);
+            identifier.Details.SiteProvenance,
+            CandidateTargetIds: candidateTargetIds,
+            Provenances: [identifier.Details.SiteProvenance]);
 
     private static OutgoingReferenceEvidence ToOutgoing(
         ResolvedPending pending,
@@ -1518,7 +1739,8 @@ internal sealed class QueryTimeResolutionReader
         ReferenceEvidenceSource source,
         double confidence,
         int? tier,
-        ReferenceResolutionStatus status) =>
+        ReferenceResolutionStatus status,
+        IReadOnlyList<string>? candidateTargetIds = null) =>
         new(
             containingSymbolId,
             targetSymbolId,
@@ -1539,7 +1761,9 @@ internal sealed class QueryTimeResolutionReader
             pending.Language,
             pending.ReferenceSiteId,
             pending.IsExact,
-            pending.SiteProvenance);
+            pending.SiteProvenance,
+            CandidateTargetIds: candidateTargetIds,
+            Provenances: [pending.SiteProvenance]);
 
     private static OutgoingReferenceEvidence ToOutgoing(
         RelationshipSite relationship,
@@ -1570,7 +1794,8 @@ internal sealed class QueryTimeResolutionReader
             relationship.Language,
             relationship.ReferenceSiteId,
             relationship.IsExact,
-            relationship.SiteProvenance);
+            relationship.SiteProvenance,
+            Provenances: [relationship.SiteProvenance]);
 
     private QueryTimeExportEvidence ToExport(
         ResolvedIdentifier identifier,
@@ -2042,6 +2267,8 @@ internal sealed class QueryTimeResolutionReader
         }
 
         internal Dictionary<string, CandidateRecord> Candidates { get; }
+
+        internal RevisionFactCache Cache => _cache;
 
         internal IReadOnlyList<ResolvedIdentifier> AllIdentifiers { get; }
 

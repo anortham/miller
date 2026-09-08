@@ -11,12 +11,12 @@ internal static class WorkspaceFreshnessView
     public const string RefreshPendingStatus = "refresh_pending";
 
     /// <summary>
-    /// Freshness for the serve-then-refresh arm. A pending refresh means freshness was never CONFIRMED, so
-    /// <c>index_fresh</c> is false — the read is honest that it served whatever the pinned view held.
+    /// Freshness for the serve-then-refresh arm. Background scheduling never forces source freshness to false by
+    /// itself: when no source check was observed, source freshness is unknown (null) rather than false.
     /// </summary>
     public static bool? IndexFreshFor(
         WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row, bool refreshPending) =>
-        refreshPending ? false : IndexFreshFor(refreshResult, row);
+        IndexFreshFor(refreshResult, row);
 
     /// <summary>
     /// Status for the serve-then-refresh arm. A row that already reports something WORSE than healthy keeps its own
@@ -25,7 +25,7 @@ internal static class WorkspaceFreshnessView
     /// </summary>
     public static string FreshnessStatusFor(
         WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row, bool refreshPending) =>
-        refreshPending && IndexFreshFor(refreshResult, row) == true
+        refreshPending && IndexFreshFor(refreshResult, row) is true or null
             ? RefreshPendingStatus
             : FreshnessStatusFor(refreshResult, row);
 
@@ -38,8 +38,11 @@ internal static class WorkspaceFreshnessView
             WorkspaceRefreshStatus.MissingRoot => false,
             WorkspaceRefreshStatus.MissingIndex => false,
             WorkspaceRefreshStatus.Failed => false,
-            null => row.State is WorkspaceRegistryState.Current
-                or WorkspaceRegistryState.Ready,
+            null => row.State switch
+            {
+                WorkspaceRegistryState.Current or WorkspaceRegistryState.Ready => null,
+                _ => false,
+            },
             _ => false,
         };
 
@@ -52,7 +55,24 @@ internal static class WorkspaceFreshnessView
         };
 
     public static string? WarningTextFor(WorkspaceRefreshResult? refreshResult) =>
-        refreshResult?.Status == WorkspaceRefreshStatus.LockBusy
-            ? refreshResult.WarningText
-            : refreshResult?.WarningText;
+        WarningTextFor(refreshResult, operationSnapshot: null);
+
+    public static string? WarningTextFor(
+        WorkspaceRefreshResult? refreshResult,
+        BackgroundRefreshOperationSnapshot? operationSnapshot)
+    {
+        if (refreshResult?.Status == WorkspaceRefreshStatus.LockBusy)
+            return refreshResult.WarningText;
+
+        if (!string.IsNullOrWhiteSpace(refreshResult?.WarningText))
+            return refreshResult.WarningText;
+
+        if (operationSnapshot?.State == BackgroundRefreshActivityState.Failed &&
+            !string.IsNullOrWhiteSpace(operationSnapshot.FailureMessage))
+        {
+            return $"Background refresh failed: {operationSnapshot.FailureMessage}";
+        }
+
+        return null;
+    }
 }

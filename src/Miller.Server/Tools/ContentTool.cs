@@ -53,7 +53,9 @@ public sealed class ContentTool
         int ProbedCandidateCount,
         int ProbedResultLimitOmittedCount,
         bool MoreMayExist,
-        IReadOnlyList<WorkspaceSearchFailure> Failures);
+        IReadOnlyList<WorkspaceSearchFailure> Failures,
+        int SkippedMissingWorkspaces = 0,
+        int SearchedWorkspaceCount = 0);
 
     private sealed record ContentInventoryRow(string ContentKind, ExternalContentSource Source);
 
@@ -104,13 +106,15 @@ public sealed class ContentTool
         [Description("import|add_markdown|search|read|shape|list|remove. Default list.")] string? operation = "list",
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,
         [Description("Search query for operation=search.")] string? query = null,
-        [Description("Imported source id for operation=read/shape/remove, of the form external_file:<hash> or web:<hash>. A unique display_path is also accepted for read/shape.")] string? source_id = null,
+        [Description("Imported source id for search/read/shape/remove, of the form external_file:<hash> or web:<hash>. A unique display_path is also accepted for read/shape.")] string? source_id = null,
         [Description("URL metadata for operation=add_markdown with web content.")] string? url = null,
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
         [Description("Content kind for search/list. Search defaults external_file; bare list inventories external_file and web.")] string? content_kind = null,
         [Description("Registered workspace selector for search/read. Use all only for read-only registered workspace search. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line (0–1,000,000). Default 10. A window over 200 lines is clamped to 200, keeping the requested line; output reports continuation.")] int? context_lines = null,
+        [Description("Max characters per line for operation=read (1–32000). Default 160.")] int? max_line_chars = null,
+        [Description("Continuation token from a truncated line in operation=read.")] string? continuation = null,
         [Description("Max search results (1–100), or returned list rows per kind. List is capped at 20 per kind. Default 6.")] int limit = SearchTool.DefaultLimit,
         [Description("Max import bytes. Required to intentionally import files over the default cap.")] long? max_bytes = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
@@ -129,7 +133,9 @@ public sealed class ContentTool
             limit,
             max_bytes,
             format,
-            ToolOutputBudget.ContentMcpMaxBytes).Output;
+            ToolOutputBudget.ContentMcpMaxBytes,
+            max_line_chars,
+            continuation).Output;
     }
 
     internal ContentToolExecutionResult Execute(
@@ -146,14 +152,16 @@ public sealed class ContentTool
         int limit,
         long? maxBytes,
         string format,
-        int? outputByteBudget = null)
+        int? outputByteBudget = null,
+        int? maxLineChars = null,
+        string? continuation = null)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
         try
         {
-            ValidateInputs(operation, path, query, sourceId, url, displayPath, contentKind, workspaceId, format);
+            ValidateInputs(operation, path, query, sourceId, url, displayPath, contentKind, workspaceId, format, continuation);
             ContentReadLocation? currentLocation = ResolveOperationLocation(op, sourceId, workspaceId);
             StampWorkspace(telemetry, currentLocation);
             string contentDbPath = currentLocation?.ContentDbPath ?? string.Empty;
@@ -173,11 +181,21 @@ public sealed class ContentTool
                     SearchContentKindOrDefault(contentKind),
                     limit,
                     workspaceId,
+                    sourceId,
                     json,
                     telemetry,
                     outputByteBudget),
                 "read" => Read(
-                    currentLocation, sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
+                    currentLocation,
+                    sourceId,
+                    workspaceId,
+                    line,
+                    contextLines,
+                    maxLineChars,
+                    continuation,
+                    json,
+                    telemetry,
+                    outputByteBudget),
                 "shape" => Shape(
                     currentLocation, sourceId, workspaceId, json, telemetry, outputByteBudget),
                 "list" => List(
@@ -358,6 +376,7 @@ public sealed class ContentTool
         string? contentKind,
         int limit,
         string? workspaceId,
+        string? sourceId,
         bool json,
         TelemetryScope? telemetry,
         int? outputByteBudget)
@@ -378,6 +397,7 @@ public sealed class ContentTool
                 contentKind,
                 limit,
                 workspaceId,
+                sourceId,
                 json,
                 telemetry,
                 outputByteBudget);
@@ -388,8 +408,8 @@ public sealed class ContentTool
         var failures = new List<WorkspaceSearchFailure>();
         int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
         IReadOnlyList<TextContentSearchHit> candidates = contentKind is null
-            ? SearchCurrentAllContent(currentLocation, query, probeLimit, failures)
-            : SearchCurrentContent(currentLocation, query, contentKind, probeLimit);
+            ? SearchCurrentAllContent(currentLocation, query, probeLimit, failures, sourceId)
+            : SearchCurrentContent(currentLocation, query, contentKind, probeLimit, sourceId);
         bool moreMayExist = candidates.Count > limit;
         TextContentSearchHit[] hits = candidates.Take(limit).ToArray();
         var coverage = new ContentSearchCoverage(
@@ -435,10 +455,11 @@ public sealed class ContentTool
         ContentReadLocation location,
         string query,
         string contentKind,
-        int limit)
+        int limit,
+        string? sourceId = null)
     {
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(location.ContentDbPath, query, contentKind, limit);
+            return _store.Search(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
 
         if (!File.Exists(location.ContentDbPath))
             return [];
@@ -447,7 +468,7 @@ public sealed class ContentTool
         {
             return ContentCorpusSidecar
                 .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
-                .Search(query, contentKind, limit, excludeTests: false);
+                .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
         }
 
         string indexDbPath = location.IndexDbPath
@@ -460,21 +481,23 @@ public sealed class ContentTool
             expectedRevision = freshness.LatestRevision();
         return ContentCorpusSidecar
             .OpenGenerationChecked(location.ContentDbPath, indexDbPath, expectedRevision)
-            .Search(query, contentKind, limit, excludeTests: false);
+            .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
     }
 
     private IReadOnlyList<TextContentSearchHit> SearchCurrentAllContent(
         ContentReadLocation location,
         string query,
         int limit,
-        ICollection<WorkspaceSearchFailure> failures)
+        ICollection<WorkspaceSearchFailure> failures,
+        string? sourceId = null)
     {
         var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
         IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
             location,
             query,
             limit,
-            kindFailures);
+            kindFailures,
+            sourceId);
 
         if (kindFailures.Count > 0)
             AddWorkspaceSearchFailure(
@@ -495,20 +518,47 @@ public sealed class ContentTool
         string? contentKind,
         int limit,
         string workspaceId,
+        string? sourceId,
         bool json,
         TelemetryScope? telemetry,
         int? outputByteBudget)
     {
         string contentKindLabel = contentKind ?? "all";
         int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
-        IReadOnlyList<WorkspaceRegistryRow> workspaces = ResolveContentSearchWorkspaces(workspaceId);
-        bool isolateFailures = string.Equals(workspaceId, "all", StringComparison.OrdinalIgnoreCase)
+
+        bool isAllOrRegistered = string.Equals(workspaceId, "all", StringComparison.OrdinalIgnoreCase)
             || string.Equals(workspaceId, "registered", StringComparison.OrdinalIgnoreCase);
+
+        IReadOnlyList<WorkspaceRegistryRow> workspaces;
+        string? localSourceId = sourceId;
+
+        if (isAllOrRegistered && !string.IsNullOrWhiteSpace(sourceId))
+        {
+            (WorkspaceRegistryRow targetWorkspace, string extractedLocalSourceId) =
+                ResolveAllWorkspacesScopedSource(sourceId);
+            workspaces = [targetWorkspace];
+            localSourceId = extractedLocalSourceId;
+        }
+        else
+        {
+            workspaces = ResolveContentSearchWorkspaces(workspaceId);
+        }
+
+        bool isolateFailures = isAllOrRegistered && string.IsNullOrWhiteSpace(sourceId);
         var hits = new List<WorkspaceContentSearchHit>();
         var failures = new List<WorkspaceSearchFailure>();
         bool moreMayExist = false;
+        int skippedMissingWorkspaces = 0;
+        int searchedWorkspaceCount = 0;
         foreach (WorkspaceRegistryRow row in workspaces)
         {
+            if (isolateFailures && !Directory.Exists(row.CanonicalRoot))
+            {
+                skippedMissingWorkspaces++;
+                continue;
+            }
+
+            searchedWorkspaceCount++;
             try
             {
                 ContentReadLocation location = Location(row);
@@ -518,7 +568,8 @@ public sealed class ContentTool
                     query,
                     contentKind,
                     probeLimit,
-                    failures);
+                    failures,
+                    localSourceId);
                 moreMayExist |= local.Count > limit;
                 for (int localRank = 0; localRank < local.Count; localRank++)
                     hits.Add(new WorkspaceContentSearchHit(row, local[localRank], localRank));
@@ -547,7 +598,9 @@ public sealed class ContentTool
             hits.Count,
             Math.Max(0, hits.Count - page.Length),
             moreMayExist,
-            failures);
+            failures,
+            skippedMissingWorkspaces,
+            searchedWorkspaceCount);
 
         if (telemetry is not null)
         {
@@ -565,6 +618,8 @@ public sealed class ContentTool
                     SetContentSearchEmptyTelemetry(telemetry, query, contentKindLabel);
             }
             telemetry.SetMetadata("degraded_workspace_count", failures.Count);
+            telemetry.SetMetadata("skipped_missing_workspaces", skippedMissingWorkspaces);
+            telemetry.SetMetadata("searched_workspace_count", searchedWorkspaceCount);
         }
 
         if (outputByteBudget is not null)
@@ -578,7 +633,7 @@ public sealed class ContentTool
                 json,
                 outputByteBudget.Value);
         }
-        if (failures.Count > 0)
+        if (failures.Count > 0 || coverage.SkippedMissingWorkspaces > 0)
         {
             return json
                 ? RenderMcpWorkspaceSearchJson(
@@ -606,7 +661,8 @@ public sealed class ContentTool
         string query,
         string? contentKind,
         int limit,
-        ICollection<WorkspaceSearchFailure>? failures)
+        ICollection<WorkspaceSearchFailure>? failures,
+        string? sourceId = null)
     {
         if (contentKind is null)
         {
@@ -615,25 +671,26 @@ public sealed class ContentTool
                 location,
                 query,
                 limit,
-                kindFailures);
+                kindFailures,
+                sourceId);
             if (kindFailures.Count > 0 && failures is not null)
                 AddWorkspaceSearchFailure(failures, row.WorkspaceId, row.DisplayId, kindFailures);
             return hits;
         }
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(location.ContentDbPath, query, contentKind, limit);
+            return _store.Search(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
 
         if (location.Snapshot is { } snapshot)
         {
             return ContentCorpusSidecar
                 .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
-                .Search(query, contentKind, limit, excludeTests: false);
+                .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
         }
 
         long expectedRevision = ExpectedWorkspaceRevision(row);
         return ContentCorpusSidecar
             .OpenGenerationChecked(location.ContentDbPath, row.IndexDbPath, expectedRevision)
-            .Search(query, contentKind, limit, excludeTests: false);
+            .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
     }
 
     private static long ExpectedWorkspaceRevision(WorkspaceRegistryRow row)
@@ -676,7 +733,8 @@ public sealed class ContentTool
         ContentReadLocation location,
         string query,
         int limit,
-        List<(string Kind, string DiagnosticCode, string Message)> failures)
+        List<(string Kind, string DiagnosticCode, string Message)> failures,
+        string? sourceId = null)
     {
         if (!File.Exists(location.ContentDbPath))
             return [];
@@ -710,14 +768,14 @@ public sealed class ContentTool
         var groups = new Dictionary<string, IReadOnlyList<TextContentSearchHit>>(StringComparer.Ordinal);
         if (index is not null)
         {
-            SearchKinds(index, AllContentKinds, query, limit, groups, failures);
+            SearchKinds(index, AllContentKinds, query, limit, groups, failures, sourceId);
         }
         else
         {
             try
             {
                 index = FtsTextContentSearchIndex.OpenUnversioned(location.ContentDbPath);
-                SearchKinds(index, ImportedContentKinds, query, limit, groups, failures);
+                SearchKinds(index, ImportedContentKinds, query, limit, groups, failures, sourceId);
             }
             catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
             {
@@ -738,13 +796,14 @@ public sealed class ContentTool
         string query,
         int limit,
         IDictionary<string, IReadOnlyList<TextContentSearchHit>> groups,
-        ICollection<(string Kind, string DiagnosticCode, string Message)> failures)
+        ICollection<(string Kind, string DiagnosticCode, string Message)> failures,
+        string? sourceId = null)
     {
         foreach (string kind in kinds)
         {
             try
             {
-                groups[kind] = index.Search(query, kind, limit, excludeTests: false);
+                groups[kind] = index.Search(query, kind, limit, excludeTests: false, sourceId: sourceId);
             }
             catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
             {
@@ -816,10 +875,32 @@ public sealed class ContentTool
         string? workspaceId,
         int? line,
         int? contextLines,
+        int? maxLineChars,
+        string? continuation,
         bool json,
         TelemetryScope? telemetry,
         int? outputByteBudget)
     {
+        string? contSourceId = null;
+        string? contContentHash = null;
+        int? contLine = null;
+        int? contCharOffset = null;
+
+        if (!string.IsNullOrWhiteSpace(continuation))
+        {
+            (contSourceId, contContentHash, contLine, contCharOffset) =
+                DecodeContinuationToken(continuation);
+
+            sourceId ??= contSourceId;
+
+            if (line is { } specifiedLine && specifiedLine != contLine.Value)
+            {
+                throw new InvalidOperationException(
+                    $"content read: line {specifiedLine} does not match continuation token line {contLine.Value}.");
+            }
+            line ??= contLine;
+        }
+
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content read requires source_id.");
         if (line is null)
@@ -829,12 +910,51 @@ public sealed class ContentTool
         ContentReadLocation readLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(readLocation.ContentDbPath, sourceId);
         readLocation = ResolveReadLocation(readLocation, resolvedSourceId, workspaceId: null);
+
+        if (!string.IsNullOrWhiteSpace(continuation) && contSourceId is not null)
+        {
+            if (!string.Equals(resolvedSourceId, contSourceId, StringComparison.Ordinal)
+                && !contSourceId.EndsWith(":" + resolvedSourceId, StringComparison.Ordinal)
+                && !resolvedSourceId.EndsWith(":" + contSourceId, StringComparison.Ordinal))
+            {
+                ExternalContentReadResult? newResult = null;
+                try
+                {
+                    newResult = ReadWindowWithNearestPaths(readLocation.ContentDbPath, resolvedSourceId, 1, 0);
+                }
+                catch
+                {
+                    // Ignore
+                }
+
+                if (newResult is not null && !string.Equals(newResult.ContentHash, contContentHash, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"content_modified: file content was modified since continuation was created. " +
+                        $"Token content_hash '{contContentHash}' does not match current '{newResult.ContentHash}'.");
+                }
+
+                throw new InvalidOperationException(
+                    $"content read: source_id '{sourceId}' does not match continuation token source_id '{contSourceId}'.");
+            }
+        }
         ExternalContentReadResult result = ReadWindowWithNearestPaths(
             readLocation.ContentDbPath,
             resolvedSourceId,
             line.Value,
             effectiveContextLines);
         EnsureWorkspaceContentFresh(readLocation, result.ContentKind);
+
+        if (!string.IsNullOrWhiteSpace(continuation) && contContentHash is not null)
+        {
+            if (!string.Equals(result.ContentHash, contContentHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"content_modified: file content was modified since continuation was created. " +
+                    $"Token content_hash '{contContentHash}' does not match current '{result.ContentHash}'.");
+            }
+        }
+
         if (telemetry is not null)
         {
             StampWorkspace(telemetry, readLocation);
@@ -843,14 +963,50 @@ public sealed class ContentTool
             telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
         }
 
+        int effectiveMaxLineChars = Math.Clamp(
+            maxLineChars ?? MaxReadLineUnits,
+            1,
+            Math.Min(outputByteBudget ?? ToolOutputBudget.ContentMcpMaxBytes, 32_000));
+
+        int startOffset = contCharOffset ?? 0;
+        int targetLine = line.Value;
+
+        string? nextContinuationToken = null;
+        bool targetLineTruncated = false;
+
+        var renderedLines = new List<RenderedReadLine>(result.Lines.Count);
+        foreach (ExternalContentLine cl in result.Lines)
+        {
+            if (cl.LineNumber == targetLine)
+            {
+                (string slice, int nextOffset, bool hasMore) = SliceRuneSafe(cl.Text, startOffset, effectiveMaxLineChars);
+                targetLineTruncated = hasMore;
+                if (hasMore)
+                {
+                    nextContinuationToken = EncodeContinuationToken(result.SourceId, result.ContentHash, targetLine, nextOffset);
+                }
+                renderedLines.Add(new RenderedReadLine(cl.LineNumber, slice, hasMore, startOffset, cl.Text.Length));
+            }
+            else
+            {
+                (string slice, _, bool hasMore) = SliceRuneSafe(cl.Text, 0, effectiveMaxLineChars);
+                renderedLines.Add(new RenderedReadLine(cl.LineNumber, slice, hasMore, 0, cl.Text.Length));
+            }
+        }
+
         if (outputByteBudget is null)
             return json
-                ? RenderReadJson(result, line.Value, effectiveContextLines)
-                : RenderReadCompact(result, line.Value, effectiveContextLines);
+                ? RenderReadJson(result, renderedLines, line.Value, effectiveContextLines, nextContinuationToken, targetLineTruncated)
+                : RenderReadCompact(result, renderedLines, line.Value, effectiveContextLines, nextContinuationToken, effectiveMaxLineChars);
+
         return RenderMcpRead(
             result,
+            renderedLines,
             line.Value,
             effectiveContextLines,
+            nextContinuationToken,
+            targetLineTruncated,
+            effectiveMaxLineChars,
             json,
             outputByteBudget.Value);
     }
@@ -1273,6 +1429,110 @@ public sealed class ContentTool
         }
     }
 
+    private (WorkspaceRegistryRow TargetWorkspace, string ExtractedLocalSourceId) ResolveAllWorkspacesScopedSource(string sourceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
+
+        if (sourceId.StartsWith("external_file:", StringComparison.OrdinalIgnoreCase)
+            || sourceId.StartsWith("web:", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"unqualified_source_id: content search with workspace_id=all requires a fully qualified source_id of the form '{{workspace_id}}:{{kind}}:{{hash}}'. Unqualified source_id: '{sourceId}'. Pass an explicit workspace_id to search this source.");
+        }
+
+        int firstColon = sourceId.IndexOf(':', StringComparison.Ordinal);
+        if (firstColon <= 0)
+        {
+            throw new InvalidOperationException(
+                $"unqualified_source_id: content search with workspace_id=all requires a fully qualified source_id of the form '{{workspace_id}}:{{kind}}:{{hash}}'. Unqualified source_id: '{sourceId}'.");
+        }
+
+        string workspacePart = sourceId[..firstColon];
+        string remainder = sourceId[(firstColon + 1)..];
+        int secondColon = remainder.IndexOf(':', StringComparison.Ordinal);
+        if (secondColon <= 0)
+        {
+            throw new InvalidOperationException(
+                $"unqualified_source_id: content search with workspace_id=all requires a fully qualified source_id of the form '{{workspace_id}}:{{kind}}:{{hash}}'. Unqualified source_id: '{sourceId}'.");
+        }
+
+        string kindPart = remainder[..secondColon];
+        string hashPart = remainder[(secondColon + 1)..];
+        if (!string.Equals(kindPart, TextContentKind.ExternalFile, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(kindPart, TextContentKind.Web, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"unqualified_source_id: content search with workspace_id=all requires a valid kind ('external_file' or 'web') in '{{workspace_id}}:{{kind}}:{{hash}}'. Unqualified source_id: '{sourceId}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(hashPart))
+        {
+            throw new InvalidOperationException(
+                $"unqualified_source_id: content search with workspace_id=all requires a non-empty hash in source_id '{sourceId}'.");
+        }
+
+        WorkspaceRegistry registry;
+        bool shouldDispose;
+        try
+        {
+            registry = OpenRegistry(out shouldDispose);
+        }
+        catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException($"registry_read_failure: unable to open workspace registry: {ex.Message}", ex);
+        }
+
+        try
+        {
+            IReadOnlyList<WorkspaceRegistryRow> rows;
+            try
+            {
+                if (registry.Get(workspacePart) is { } exact)
+                    return (exact, remainder);
+
+                rows = registry.List();
+            }
+            catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException($"registry_read_failure: unable to read workspace registry: {ex.Message}", ex);
+            }
+
+            var exactDisplay = rows
+                .Where(r => string.Equals(r.DisplayId, workspacePart, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (exactDisplay.Length == 1)
+                return (exactDisplay[0], remainder);
+            if (exactDisplay.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"ambiguous_short_id: ambiguous workspace selector '{workspacePart}' in source_id '{sourceId}'. Matches: {string.Join(", ", exactDisplay.Select(r => r.WorkspaceId))}.");
+            }
+
+            var prefixMatches = rows
+                .Where(r => r.WorkspaceId.StartsWith(workspacePart, StringComparison.OrdinalIgnoreCase)
+                         || r.DisplayId.StartsWith(workspacePart, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(r => r.WorkspaceId, StringComparer.Ordinal)
+                .Select(g => g.First())
+                .ToArray();
+
+            if (prefixMatches.Length == 1)
+                return (prefixMatches[0], remainder);
+            if (prefixMatches.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"ambiguous_short_id: ambiguous short workspace id '{workspacePart}' in source_id '{sourceId}'. Matches: {string.Join(", ", prefixMatches.Select(r => r.WorkspaceId))}.");
+            }
+
+            throw new KeyNotFoundException(
+                $"missing_owner: no registered workspace matches owner '{workspacePart}' in source_id '{sourceId}'.");
+        }
+        finally
+        {
+            if (shouldDispose)
+                registry.Dispose();
+        }
+    }
+
     private static string? SearchContentKindOrDefault(string? value) =>
         string.IsNullOrWhiteSpace(value) ? TextContentKind.ExternalFile : OptionalContentKind(value);
 
@@ -1344,7 +1604,8 @@ public sealed class ContentTool
         string? displayPath,
         string? contentKind,
         string? workspaceId,
-        string? format)
+        string? format,
+        string? continuation = null)
     {
         ValidateInput("operation", operation, 64);
         ValidateInput("path", path, 4_096);
@@ -1355,6 +1616,7 @@ public sealed class ContentTool
         ValidateInput("content_kind", contentKind, 128);
         ValidateInput("workspace_id", workspaceId, 1_024);
         ValidateInput("format", format, 32);
+        ValidateInput("continuation", continuation, 4_096);
         if (!string.Equals(format, "compact", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
@@ -1542,7 +1804,8 @@ public sealed class ContentTool
         var output = new StringBuilder();
         if (hits.Count == 0
             && coverage.ProbedCandidateCount == 0
-            && coverage.Failures.Count == 0)
+            && coverage.Failures.Count == 0
+            && coverage.SkippedMissingWorkspaces == 0)
         {
             output.Append(RenderNoResultsCompact("search", query, contentKind));
         }
@@ -1554,7 +1817,9 @@ public sealed class ContentTool
                 output.AppendLine().Append(
                     coverage.Failures.Count > 0
                         ? "search incomplete: one or more selected workspaces could not be searched"
-                        : "results omitted by output budget; narrow the query or lower limit");
+                        : (coverage.ProbedCandidateCount == 0
+                            ? "no results found in searched workspaces"
+                            : "results omitted by output budget; narrow the query or lower limit"));
             }
             else
             {
@@ -1605,6 +1870,8 @@ public sealed class ContentTool
             output.Append(" output_omitted=").Append(outputOmittedCount);
         if (coverage.Failures.Count > 0)
             output.Append(" degraded_workspaces=").Append(coverage.Failures.Count);
+        if (coverage.SkippedMissingWorkspaces > 0)
+            output.Append(" skipped_missing_workspaces=").Append(coverage.SkippedMissingWorkspaces);
     }
 
     private static void AppendBoundedHitRows(
@@ -1645,16 +1912,12 @@ public sealed class ContentTool
 
     private static string RenderReadCompact(
         ExternalContentReadResult result,
+        IReadOnlyList<RenderedReadLine> lines,
         int requestedLine,
-        int contextLines)
+        int contextLines,
+        string? continuationToken,
+        int maxLineChars)
     {
-        var lines = result.Lines
-            .Select(static line =>
-            {
-                string text = SearchTool.Truncate(line.Text, MaxReadLineUnits);
-                return new RenderedReadLine(line.LineNumber, text, text.Length != line.Text.Length);
-            })
-            .ToArray();
         int truncatedLineCount = lines.Count(static line => line.Truncated);
         var sb = new StringBuilder();
         if (result.Clamped)
@@ -1693,7 +1956,7 @@ public sealed class ContentTool
         if (truncatedLineCount > 0)
         {
             sb.Append("read truncated_lines=").Append(truncatedLineCount)
-              .Append(" line_limit=").Append(MaxReadLineUnits)
+              .Append(" line_limit=").Append(maxLineChars)
               .Append('\n');
         }
 
@@ -1702,19 +1965,106 @@ public sealed class ContentTool
           .Append(':').Append(result.LineStart).Append('-').Append(result.LineEnd);
         foreach (RenderedReadLine line in lines)
             sb.Append('\n').Append("    ").Append(line.LineNumber).Append(": ").Append(line.Text);
+
+        if (!string.IsNullOrWhiteSpace(continuationToken))
+        {
+            sb.Append('\n').Append("continuation: content read source_id=")
+              .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+              .Append(" line=").Append(requestedLine)
+              .Append(" continuation=").Append(continuationToken);
+        }
+
         return sb.ToString();
     }
 
-    private sealed record RenderedReadLine(int LineNumber, string Text, bool Truncated);
+    private sealed record RenderedReadLine(
+        int LineNumber,
+        string Text,
+        bool Truncated,
+        int CharOffset = 0,
+        int TotalChars = 0);
+
+    internal static (string Text, int NextOffset, bool HasMore) SliceRuneSafe(string line, int startOffset, int maxChars)
+    {
+        if (string.IsNullOrEmpty(line) || startOffset >= line.Length)
+            return (string.Empty, line?.Length ?? 0, false);
+
+        if (startOffset < 0)
+            startOffset = 0;
+
+        if (startOffset < line.Length && char.IsLowSurrogate(line[startOffset]) && startOffset > 0 && char.IsHighSurrogate(line[startOffset - 1]))
+            startOffset--;
+
+        int remaining = line.Length - startOffset;
+        int targetLength = Math.Min(maxChars, remaining);
+        int targetEnd = startOffset + targetLength;
+
+        if (targetEnd < line.Length)
+        {
+            if (char.IsHighSurrogate(line[targetEnd - 1]))
+            {
+                targetEnd--;
+                if (targetEnd == startOffset)
+                {
+                    targetEnd = Math.Min(line.Length, startOffset + 2);
+                }
+            }
+        }
+
+        string slice = line[startOffset..targetEnd];
+        bool hasMore = targetEnd < line.Length;
+        return (slice, targetEnd, hasMore);
+    }
+
+    private static string EncodeContinuationToken(string sourceId, string contentHash, int line, int charOffset)
+    {
+        string payload = $"cnt1|{Uri.EscapeDataString(sourceId)}|{Uri.EscapeDataString(contentHash)}|{line}|{charOffset}";
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static (string SourceId, string ContentHash, int Line, int CharOffset) DecodeContinuationToken(string token)
+    {
+        try
+        {
+            string base64 = token.Replace('-', '+').Replace('_', '/');
+            switch (base64.Length % 4)
+            {
+                case 2: base64 += "=="; break;
+                case 3: base64 += "="; break;
+            }
+            string payload = Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+            string[] parts = payload.Split('|');
+            if (parts.Length != 5 || !string.Equals(parts[0], "cnt1", StringComparison.Ordinal))
+                throw new FormatException("Invalid continuation token format");
+
+            string sourceId = Uri.UnescapeDataString(parts[1]);
+            string contentHash = Uri.UnescapeDataString(parts[2]);
+            int line = int.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture);
+            int charOffset = int.Parse(parts[4], System.Globalization.CultureInfo.InvariantCulture);
+
+            return (sourceId, contentHash, line, charOffset);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"invalid continuation token: {ex.Message}", ex);
+        }
+    }
 
     private static string RenderMcpRead(
         ExternalContentReadResult result,
+        IReadOnlyList<RenderedReadLine> renderedLines,
         int requestedLine,
         int contextLines,
+        string? continuationToken,
+        bool targetLineTruncated,
+        int maxLineChars,
         bool json,
         int maxBytes)
     {
-        ExternalContentLine[] ordered = result.Lines.OrderBy(static line => line.LineNumber).ToArray();
+        RenderedReadLine[] ordered = renderedLines.OrderBy(static line => line.LineNumber).ToArray();
         var retained = ordered.ToList();
         int requestedStart = checked((int)Math.Max(1L, (long)requestedLine - contextLines));
         int requestedEnd = checked((int)Math.Min(result.SourceLineCount, (long)requestedLine + contextLines));
@@ -1732,7 +2082,7 @@ public sealed class ContentTool
             int omittedBefore = storeOmittedBefore + outputOmittedBefore;
             int omittedAfter = storeOmittedAfter + outputOmittedAfter;
             string output = json
-                ? RenderMcpReadJson(result, retained, requestedLine, contextLines, omittedBefore, omittedAfter)
+                ? RenderMcpReadJson(result, retained, requestedLine, contextLines, omittedBefore, omittedAfter, continuationToken, targetLineTruncated)
                 : RenderMcpReadCompact(
                     result,
                     retained,
@@ -1741,7 +2091,9 @@ public sealed class ContentTool
                     omittedBefore,
                     omittedAfter,
                     outputOmittedBefore,
-                    outputOmittedAfter);
+                    outputOmittedAfter,
+                    continuationToken,
+                    maxLineChars);
             if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
                 return output;
             if (retained.Count <= 1)
@@ -1755,16 +2107,18 @@ public sealed class ContentTool
 
     private static string RenderMcpReadCompact(
         ExternalContentReadResult result,
-        IReadOnlyList<ExternalContentLine> lines,
+        IReadOnlyList<RenderedReadLine> lines,
         int requestedLine,
         int contextLines,
         int omittedBefore,
         int omittedAfter,
         int outputOmittedBefore,
-        int outputOmittedAfter)
+        int outputOmittedAfter,
+        string? continuationToken,
+        int maxLineChars)
     {
         if (outputOmittedBefore == 0 && outputOmittedAfter == 0)
-            return RenderReadCompact(result, requestedLine, contextLines);
+            return RenderReadCompact(result, lines, requestedLine, contextLines, continuationToken, maxLineChars);
 
         var output = new StringBuilder();
         output.Append("content read: returned=").Append(lines.Count)
@@ -1781,21 +2135,23 @@ public sealed class ContentTool
             .Append(TruncateUtf8(result.DisplayPath, MaxSearchDisplayPathBytes));
         if (lines.Count > 0)
             output.Append(':').Append(lines[0].LineNumber).Append('-').Append(lines[^1].LineNumber);
-        foreach (ExternalContentLine line in lines)
+        foreach (RenderedReadLine line in lines)
         {
             output.Append('\n').Append("    ").Append(line.LineNumber).Append(": ")
                 .Append(TruncateUtf8(line.Text, MaxMcpReadLineBytes));
         }
-        AppendReadContinuationCompact(output, result, lines, omittedBefore, omittedAfter);
+        AppendReadContinuationCompact(output, result, lines, omittedBefore, omittedAfter, continuationToken, requestedLine);
         return output.ToString();
     }
 
     private static void AppendReadContinuationCompact(
         StringBuilder output,
         ExternalContentReadResult result,
-        IReadOnlyList<ExternalContentLine> lines,
+        IReadOnlyList<RenderedReadLine> lines,
         int omittedBefore,
-        int omittedAfter)
+        int omittedAfter,
+        string? continuationToken,
+        int requestedLine)
     {
         if (lines.Count == 0)
             return;
@@ -1817,7 +2173,15 @@ public sealed class ContentTool
                 .Append(" line=").Append(line)
                 .Append(" context_lines=").Append(contextLines);
         }
+        if (!string.IsNullOrWhiteSpace(continuationToken))
+        {
+            output.Append('\n').Append("continuation: content read source_id=")
+                .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+                .Append(" line=").Append(requestedLine)
+                .Append(" continuation=").Append(continuationToken);
+        }
     }
+
 
     private static (int Line, int ContextLines) ForwardContinuation(int sourceLineCount, int firstOmittedLine)
     {
@@ -2110,6 +2474,16 @@ public sealed class ContentTool
     private static string ContentDiagnosticCode(string operation, Exception ex)
     {
         string message = ex.Message;
+        if (message.Contains("unqualified_source_id", StringComparison.OrdinalIgnoreCase))
+            return "unqualified_source_id";
+        if (message.Contains("missing_owner", StringComparison.OrdinalIgnoreCase))
+            return "missing_owner";
+        if (message.Contains("ambiguous_short_id", StringComparison.OrdinalIgnoreCase))
+            return "ambiguous_short_id";
+        if (message.Contains("registry_read_failure", StringComparison.OrdinalIgnoreCase))
+            return "registry_read_failure";
+        if (message.Contains("content_modified", StringComparison.OrdinalIgnoreCase))
+            return "content_modified";
         if (message.Contains("content input ", StringComparison.OrdinalIgnoreCase))
             return "input_too_large";
         if (message.Contains("format must be", StringComparison.OrdinalIgnoreCase))
@@ -2202,12 +2576,12 @@ public sealed class ContentTool
     private static ToolDiagnostic ContentDiagnostic(string code, Exception ex)
     {
         string message = SearchTool.Truncate(ex.Message, 1_024);
-        if (code == "ambiguous_source")
+        if (code is "ambiguous_source" or "ambiguous_short_id")
             return ToolDiagnostic.Ambiguity(code, message);
-        if (code == "source_not_found")
+        if (code is "source_not_found" or "missing_owner")
             return ToolDiagnostic.ExpectedEmpty(code, message);
         if (code is "content_corpus_missing" or "content_corpus_stale" or
-            "content_corpus_imports_only" or "workspace_search_incomplete")
+            "content_corpus_imports_only" or "workspace_search_incomplete" or "registry_read_failure")
         {
             return ToolDiagnostic.Unavailable(code, message);
         }
@@ -2215,7 +2589,7 @@ public sealed class ContentTool
             "missing_query" or "invalid_limit" or "missing_source_id" or "missing_line" or
             "line_out_of_range" or "invalid_context_lines" or "invalid_line" or
             "missing_path" or "import_too_large" or "invalid_utf8" or "missing_url" or
-            "invalid_content_kind")
+            "invalid_content_kind" or "unqualified_source_id" or "content_modified")
         {
             return ToolDiagnostic.Refusal(code, message);
         }
@@ -2520,6 +2894,8 @@ public sealed class ContentTool
         writer.WriteBoolean("output_truncated", outputOmittedCount > 0);
         writer.WriteBoolean("more_may_exist", coverage.MoreMayExist);
         writer.WriteNumber("degraded_workspace_count", coverage.Failures.Count);
+        writer.WriteNumber("skipped_missing_workspaces", coverage.SkippedMissingWorkspaces);
+        writer.WriteNumber("searched_workspace_count", coverage.SearchedWorkspaceCount);
         if (coverage.ProbedCandidateCount == 0)
         {
             writer.WriteString(
@@ -2712,19 +3088,12 @@ public sealed class ContentTool
 
     private static string RenderReadJson(
         ExternalContentReadResult result,
+        IReadOnlyList<RenderedReadLine> lines,
         int requestedLine,
-        int contextLines)
+        int contextLines,
+        string? continuationToken,
+        bool targetLineTruncated)
     {
-        var lines = result.Lines
-            .Select(static line =>
-            {
-                string text = TruncateForJson(line.Text, MaxReadLineUnits);
-                return new RenderedReadLine(
-                    line.LineNumber,
-                    text,
-                    !string.Equals(text, line.Text, StringComparison.Ordinal));
-            })
-            .ToArray();
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
         {
@@ -2759,6 +3128,14 @@ public sealed class ContentTool
                 writer.WriteNull("continuation_direction");
                 writer.WriteNull("continuation_line");
             }
+            if (targetLineTruncated)
+            {
+                writer.WriteBoolean("line_truncated", true);
+            }
+            if (!string.IsNullOrWhiteSpace(continuationToken))
+            {
+                writer.WriteString("line_continuation_token", continuationToken);
+            }
             writer.WriteNumber("truncated_line_count", lines.Count(static line => line.Truncated));
             writer.WriteStartArray("lines");
             foreach (RenderedReadLine line in lines)
@@ -2767,6 +3144,12 @@ public sealed class ContentTool
                 writer.WriteNumber("line", line.LineNumber);
                 writer.WriteString("text", line.Text);
                 writer.WriteBoolean("truncated", line.Truncated);
+                if (line.Truncated)
+                {
+                    writer.WriteNumber("char_offset", line.CharOffset);
+                    writer.WriteNumber("char_length", line.Text.Length);
+                    writer.WriteNumber("total_chars", line.TotalChars);
+                }
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
@@ -2777,11 +3160,13 @@ public sealed class ContentTool
 
     private static string RenderMcpReadJson(
         ExternalContentReadResult result,
-        IReadOnlyList<ExternalContentLine> lines,
+        IReadOnlyList<RenderedReadLine> lines,
         int requestedLine,
         int contextLines,
         int omittedBefore,
-        int omittedAfter)
+        int omittedAfter,
+        string? continuationToken,
+        bool targetLineTruncated)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
@@ -2802,18 +3187,32 @@ public sealed class ContentTool
             writer.WriteNumber("omitted_before", omittedBefore);
             writer.WriteNumber("omitted_after", omittedAfter);
             writer.WriteBoolean("output_truncated", omittedBefore > 0 || omittedAfter > 0);
+            if (targetLineTruncated)
+            {
+                writer.WriteBoolean("line_truncated", true);
+            }
+            if (!string.IsNullOrWhiteSpace(continuationToken))
+            {
+                writer.WriteString("line_continuation_token", continuationToken);
+            }
             int truncatedLineCount = 0;
             writer.WriteStartArray("lines");
-            foreach (ExternalContentLine line in lines)
+            foreach (RenderedReadLine line in lines)
             {
                 string text = TruncateForJson(line.Text, MaxMcpReadLineBytes);
-                bool truncated = !string.Equals(text, line.Text, StringComparison.Ordinal);
+                bool truncated = line.Truncated || !string.Equals(text, line.Text, StringComparison.Ordinal);
                 if (truncated)
                     truncatedLineCount++;
                 writer.WriteStartObject();
                 writer.WriteNumber("line", line.LineNumber);
                 writer.WriteString("text", text);
                 writer.WriteBoolean("truncated", truncated);
+                if (line.Truncated)
+                {
+                    writer.WriteNumber("char_offset", line.CharOffset);
+                    writer.WriteNumber("char_length", line.Text.Length);
+                    writer.WriteNumber("total_chars", line.TotalChars);
+                }
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
@@ -2845,6 +3244,16 @@ public sealed class ContentTool
                     ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                     ("context_lines", continuationContext.ToString(
                         System.Globalization.CultureInfo.InvariantCulture))));
+            }
+            if (!string.IsNullOrWhiteSpace(continuationToken))
+            {
+                actions.Add(NextAction(
+                    "content",
+                    "continue reading truncated line",
+                    ("operation", "read"),
+                    ("source_id", result.SourceId),
+                    ("line", requestedLine.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("continuation", continuationToken)));
             }
             WriteNextActions(writer, actions);
             writer.WriteEndObject();

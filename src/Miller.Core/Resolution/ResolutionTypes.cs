@@ -102,7 +102,8 @@ public sealed record ResolutionOutcome(
     int? Tier,
     double? Confidence,
     string? Method,
-    int? CandidateCount)
+    int? CandidateCount,
+    IReadOnlyList<string>? CandidateTargetIds = null)
 {
     /// <summary>No applicable chain, empty name, or an unmapped kind the caller already skipped.</summary>
     public static ResolutionOutcome NoContext { get; } =
@@ -112,8 +113,8 @@ public sealed record ResolutionOutcome(
     public static ResolutionOutcome Missing { get; } =
         new(ResolutionOutcomeKind.Missing, null, null, null, null, null);
 
-    public static ResolutionOutcome Ambiguous(int candidateCount) =>
-        new(ResolutionOutcomeKind.Ambiguous, null, null, null, null, candidateCount);
+    public static ResolutionOutcome Ambiguous(int candidateCount, IReadOnlyList<string>? candidateTargetIds = null) =>
+        new(ResolutionOutcomeKind.Ambiguous, null, null, null, null, candidateCount, candidateTargetIds);
 
     public static ResolutionOutcome Resolved(
         FactSymbolKey target,

@@ -42,14 +42,14 @@ namespace Miller.Server.Tools;
 /// </summary>
 public sealed class EditService
 {
-    private const string FailureNoMatch = "no_match";
-    private const string FailureAmbiguousMatch = "ambiguous_match";
-    private const string FailureStaleTarget = "stale_target";
-    private const string FailureInvalidRequest = "invalid_request";
-    private const string FailureTargetNotFound = "target_not_found";
-    private const string FailureApplyFailed = "apply_failed";
-    private const string FailurePartialApply = "partial_apply";
-    private const string FailureReferenceLayerConverging = "reference_layer_converging";
+    internal const string FailureNoMatch = "no_match";
+    internal const string FailureAmbiguousMatch = "ambiguous_match";
+    internal const string FailureStaleTarget = "stale_target";
+    internal const string FailureInvalidRequest = "invalid_request";
+    internal const string FailureTargetNotFound = "target_not_found";
+    internal const string FailureApplyFailed = "apply_failed";
+    internal const string FailurePartialApply = "partial_apply";
+    internal const string FailureReferenceLayerConverging = "reference_layer_converging";
     private const int RenameDiffMaxBytes = 4 * 1024;
     private const int RenameSummaryMaxBytes = 1024;
     private const int MaxRenameEvidenceSitesPerTier = 8;
@@ -145,6 +145,14 @@ public sealed class EditService
         _resolveFreshContext = resolveFreshContext;
     }
 
+    internal SmartTargetResolver Resolver => _resolver;
+    internal string WorkspaceRoot => _workspaceRoot;
+    internal string CanonicalWorkspaceRoot => _canonicalWorkspaceRoot;
+    internal EditApplier Applier => _applier;
+    internal IEditWriteThrough WriteThrough => _writeThrough;
+    internal ISymbolLookupIndex Index => _index;
+    internal RecoveryOptions Recovery => _recovery;
+
     /// <summary>The outcome of an <c>edit</c> call: the rendered output plus the structured flags the tool/telemetry need.</summary>
     /// <param name="Output">Compact markdown (diff preview / apply summary / error) or JSON, per the request format.</param>
     /// <param name="Applied">True iff files were written to disk.</param>
@@ -169,9 +177,11 @@ public sealed class EditService
         public ToolDiagnostic? Diagnostic { get; init; }
     }
 
-    /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
-    public EditResult Execute(EditRequest request)
+    public static bool ValidateRequest(
+        EditRequest request,
+        out EditOperation operation,
+        out Occurrence occurrence,
+        out EditResult? errorResult)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -180,31 +190,80 @@ public sealed class EditService
         if (!string.Equals(request.Format, "compact", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(request.Format, "json", StringComparison.OrdinalIgnoreCase))
         {
-            return WithDiagnostic(
+            operation = default;
+            occurrence = default;
+            errorResult = WithDiagnostic(
                 Error(
                     $"unknown format '{request.Format}'. Valid: compact, json.",
                     json,
                     failureReason: FailureInvalidRequest),
                 json);
+            return false;
         }
 
-        if (!TryParseOperation(request.Operation, out var op))
-            return WithDiagnostic(
+        if (string.Equals(request.Operation, "batch", StringComparison.OrdinalIgnoreCase))
+        {
+            operation = default;
+            occurrence = Occurrence.First;
+            errorResult = null;
+            return true;
+        }
+
+        if (!TryParseOperation(request.Operation, out operation))
+        {
+            occurrence = default;
+            errorResult = WithDiagnostic(
                 Error($"unknown operation '{request.Operation}'. Valid: {string.Join(", ", OperationNames)}.", json,
                     failureReason: FailureInvalidRequest),
                 json);
+            return false;
+        }
 
-        if (!TryParseOccurrence(request.Occurrence, out var occurrence))
-            return WithDiagnostic(
+        if (!TryParseOccurrence(request.Occurrence, out occurrence))
+        {
+            errorResult = WithDiagnostic(
                 Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json,
                     failureReason: FailureInvalidRequest),
                 json);
+            return false;
+        }
 
-        if (op == EditOperation.ReplaceText && !TryParseMatchMode(request.MatchMode, out _))
-            return WithDiagnostic(
+        if (operation == EditOperation.ReplaceText && !TryParseMatchMode(request.MatchMode, out _))
+        {
+            errorResult = WithDiagnostic(
                 Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json,
                     failureReason: FailureInvalidRequest),
                 json);
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Target))
+        {
+            errorResult = WithDiagnostic(
+                Error("target is required.", json, failureReason: FailureInvalidRequest),
+                json);
+            return false;
+        }
+
+        errorResult = null;
+        return true;
+    }
+
+    /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
+    public EditResult Execute(EditRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!ValidateRequest(request, out var op, out var occurrence, out var errorResult))
+            return errorResult!.Value;
+
+        bool json = string.Equals(request.Format, "json", StringComparison.OrdinalIgnoreCase);
+
+        if (string.Equals(request.Operation, "batch", StringComparison.OrdinalIgnoreCase))
+        {
+            return EditBatchPlanner.PlanAndExecute(this, request, json);
+        }
 
         EditResult result;
         try
@@ -355,7 +414,7 @@ public sealed class EditService
         {
             plan = op switch
             {
-                EditOperation.ReplaceSymbolBody => EditPlanner.ReplaceSymbolBody(span!, request.NewText ?? string.Empty),
+                EditOperation.ReplaceSymbolBody => EditPlanner.ReplaceSymbolBody(content, span!, request.NewText ?? string.Empty),
                 EditOperation.ReplaceSymbolSignature => EditPlanner.ReplaceSymbolSignature(content, span!, request.NewText ?? string.Empty),
                 EditOperation.InsertBefore => EditPlanner.InsertBefore(span!, request.NewText ?? string.Empty),
                 EditOperation.InsertAfter => EditPlanner.InsertAfter(span!, request.NewText ?? string.Empty),
@@ -472,7 +531,7 @@ public sealed class EditService
             indexFresh: fresh, json, evidence: evidence) with { StaleWaitPerformed = staleWaitPerformed };
     }
 
-    private ReplaceTextPlanResult PlanReplaceText(
+    internal ReplaceTextPlanResult PlanReplaceText(
         string relativePath,
         string content,
         EditRequest request,
@@ -974,11 +1033,11 @@ public sealed class EditService
         return reader.LatestRevision();
     }
 
-    private SymbolDetail? ReadDetail(string symbolId) => _readSession is { } readSession
+    internal SymbolDetail? ReadDetail(string symbolId) => _readSession is { } readSession
         ? ExtractReader.ReadDetail(readSession, symbolId)
         : ExtractReader.ReadDetail(_dbPath, symbolId);
 
-    private SymbolEditSpan? ReadEditSpan(string symbolId) => _readSession is { } readSession
+    internal SymbolEditSpan? ReadEditSpan(string symbolId) => _readSession is { } readSession
         ? ExtractReader.ReadEditSpan(readSession, symbolId)
         : ExtractReader.ReadEditSpan(_dbPath, symbolId);
 
@@ -991,7 +1050,7 @@ public sealed class EditService
         ? ExtractReader.ReadIdentifierSites(readSession, name)
         : ExtractReader.ReadIdentifierSites(_dbPath, name);
 
-    private FreshnessGate.GateResult CheckFreshness(string indexedFilePath, string diskPath, string diskText) =>
+    internal FreshnessGate.GateResult CheckFreshness(string indexedFilePath, string diskPath, string diskText) =>
         _readSession is { } readSession
             ? FreshnessGate.Check(readSession, indexedFilePath, diskPath, diskText)
             : FreshnessGate.Check(_dbPath, indexedFilePath, diskPath, diskText);
@@ -1139,51 +1198,315 @@ public sealed class EditService
                 failureReason: FailureReferenceLayerConverging);
         }
 
+        IReadOnlyList<(string SiteOrSpan, string BoundHash)> requestedExclusions;
+        try
+        {
+            requestedExclusions = ParseExclusions(request.ExcludeSites);
+        }
+        catch (ToolDiagnosticException ex)
+        {
+            return Error(ex.Diagnostic.Message, json, failureReason: ex.Diagnostic.Code);
+        }
+
         var evidenceBounds = new ReferenceEvidenceBounds(int.MaxValue, int.MaxValue);
         ReferenceEvidenceSet evidence = ReadReferenceEvidence(target.SymbolId, evidenceBounds);
         int oldNameByteLength = Encoding.UTF8.GetByteCount(oldName);
-        IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact, oldNameByteLength);
-        int unusableExactSites = CountUnreachableExactSites(evidence.Exact, oldNameByteLength);
-        int missingExactFiles = exactSites
+
+        // 1. Exact sites and safe spanless reference recovery
+        var exactSitesList = new List<IdentifierSite>();
+        var recoveredExactSites = new List<IdentifierSite>();
+        var unusableExactReferenceReasons = new List<string>();
+        IReadOnlyList<ReferenceEvidence> exactWithoutRedundant = WithoutRedundantSpanlessRows(evidence.Exact, oldNameByteLength);
+        var updatedExactEvidence = new List<ReferenceEvidence>();
+
+        foreach (ReferenceEvidence reference in exactWithoutRedundant)
+        {
+            if (HasUsableRenameSpan(reference, oldNameByteLength))
+            {
+                exactSitesList.Add(new IdentifierSite(
+                    reference.FilePath,
+                    (int)reference.StartByte!.Value,
+                    (int)reference.EndByte!.Value,
+                    reference.StartLine!.Value));
+                updatedExactEvidence.Add(reference);
+            }
+            else
+            {
+                if (TryRecoverSpanlessExactReference(reference, oldNameByteLength, oldName, out IdentifierSite? recovered, out string? refusalReason))
+                {
+                    exactSitesList.Add(recovered!);
+                    recoveredExactSites.Add(recovered!);
+                    updatedExactEvidence.Add(reference with
+                    {
+                        StartByte = recovered!.StartByte,
+                        EndByte = recovered.EndByte,
+                        Source = ReferenceEvidenceSource.IdentifierResolution
+                    });
+                }
+                else
+                {
+                    unusableExactReferenceReasons.Add(refusalReason ?? $"unusable exact site in '{reference.FilePath}'");
+                    updatedExactEvidence.Add(reference);
+                }
+            }
+        }
+
+        exactSitesList = exactSitesList
+            .GroupBy(static site => (site.FilePath, site.StartByte, site.EndByte))
+            .Select(static group => group.First())
+            .OrderBy(static site => site.FilePath, StringComparer.Ordinal)
+            .ThenBy(static site => site.StartByte)
+            .ToList();
+
+        int unusableExactSites = unusableExactReferenceReasons.Count;
+        int missingExactFiles = exactSitesList
             .Select(site => site.FilePath)
             .Distinct(StringComparer.Ordinal)
             .Count(path => !File.Exists(ToAbsolute(path)));
+
+        // 2. Pre-coverage homonym resolution & candidate identification
+        var exactKeys = exactSitesList
+            .Select(static site => (site.FilePath, (long)site.StartByte, (long)site.EndByte))
+            .ToHashSet();
+
+        var resolvedHomonymKeys = _index.FindByName(oldName)
+            .Where(symbol => !string.Equals(symbol.SymbolId, target.SymbolId, StringComparison.Ordinal))
+            .SelectMany(symbol => ReadReferenceEvidence(symbol.SymbolId, evidenceBounds).Exact)
+            .Where(r => r.StartByte is { } sb && r.EndByte is { } eb && eb - sb == oldNameByteLength)
+            .Select(static site => (site.FilePath, (long)site.StartByte!.Value, (long)site.EndByte!.Value))
+            .ToHashSet();
+
+        IReadOnlyList<IdentifierSite> allIdentifierSites = ReadIdentifierSites(oldName);
+        var candidateSites = allIdentifierSites
+            .Where(site =>
+                !exactKeys.Contains((site.FilePath, site.StartByte, site.EndByte))
+                && !resolvedHomonymKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
+            .ToList();
+
+        foreach (ReferenceEvidence fb in evidence.Fallback)
+        {
+            if (fb.StartByte is not null && fb.EndByte is not null)
+            {
+                if (!exactKeys.Contains((fb.FilePath, fb.StartByte.Value, fb.EndByte.Value))
+                    && !resolvedHomonymKeys.Contains((fb.FilePath, fb.StartByte.Value, fb.EndByte.Value))
+                    && !candidateSites.Any(c => c.FilePath == fb.FilePath && c.StartByte == fb.StartByte.Value && c.EndByte == fb.EndByte.Value))
+                {
+                    candidateSites.Add(new IdentifierSite(fb.FilePath, (int)fb.StartByte.Value, (int)fb.EndByte.Value, fb.StartLine ?? 1));
+                }
+            }
+        }
+
+        var candidateSiteInfos = new List<CandidateSiteInfo>();
+        foreach (IdentifierSite site in candidateSites)
+        {
+            ReferenceEvidence? matchedRef = evidence.Fallback.FirstOrDefault(r =>
+                string.Equals(r.FilePath, site.FilePath, StringComparison.Ordinal)
+                && r.StartByte == site.StartByte
+                && r.EndByte == site.EndByte);
+            string relPath = ToRelative(ToAbsolute(site.FilePath));
+            string siteId = matchedRef?.ReferenceSiteId ?? $"{relPath}:{site.StartByte}-{site.EndByte}";
+            string absPath = ToAbsolute(site.FilePath);
+            string boundHash = File.Exists(absPath) ? ContentHasher.Blake3FileHex(absPath) : "missing";
+            string exclusionToken = $"{siteId}@{boundHash}";
+            string receiver = ExtractReceiverInfo(site.FilePath, site.StartLine, oldName);
+            candidateSiteInfos.Add(new CandidateSiteInfo(
+                site.FilePath,
+                site.StartLine,
+                site.StartByte,
+                site.EndByte,
+                siteId,
+                exclusionToken,
+                receiver));
+        }
+
+        // 3. Validate and apply requested exclusions
+        var excludedSiteInfos = new List<ExcludedSiteInfo>();
+        var excludedKeys = new HashSet<(string FilePath, long StartByte, long EndByte)>();
+        bool anyExactSiteExcluded = false;
+
+        if (requestedExclusions.Count > 0)
+        {
+            foreach (var (siteOrSpan, boundHash) in requestedExclusions)
+            {
+                var matchedCandidates = candidateSiteInfos
+                    .Where(c => MatchesExclusion(c.FilePath, c.Line, c.StartByte, c.EndByte, c.SiteId, siteOrSpan))
+                    .ToList();
+
+                var matchedExact = exactSitesList
+                    .Where(e => MatchesExclusion(e.FilePath, e.StartLine, e.StartByte, e.EndByte, null, siteOrSpan))
+                    .ToList();
+
+                if (matchedCandidates.Count == 0 && matchedExact.Count == 0)
+                {
+                    return Error(
+                        $"excluded site '{siteOrSpan}' does not match any candidate or reference site for symbol '{oldName}'.",
+                        json,
+                        failureReason: "unknown_exclusion");
+                }
+
+                foreach (var c in matchedCandidates)
+                {
+                    string absPath = ToAbsolute(c.FilePath);
+                    if (!File.Exists(absPath))
+                    {
+                        return Error(
+                            $"file '{c.FilePath}' content hash has changed since exclusion was reviewed.",
+                            json,
+                            failureReason: "stale_exclusion");
+                    }
+                    string currentHash = ContentHasher.Blake3FileHex(absPath);
+                    if (!string.Equals(currentHash, boundHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Error(
+                            $"file '{c.FilePath}' content hash has changed since exclusion was reviewed.",
+                            json,
+                            failureReason: "stale_exclusion");
+                    }
+
+                    if (excludedKeys.Add((c.FilePath, c.StartByte, c.EndByte)))
+                    {
+                        excludedSiteInfos.Add(new ExcludedSiteInfo(
+                            c.FilePath,
+                            c.Line,
+                            c.StartByte,
+                            c.EndByte,
+                            c.SiteId,
+                            boundHash,
+                            c.Receiver));
+                    }
+                }
+
+                foreach (var e in matchedExact)
+                {
+                    string absPath = ToAbsolute(e.FilePath);
+                    if (!File.Exists(absPath))
+                    {
+                        return Error(
+                            $"file '{e.FilePath}' content hash has changed since exclusion was reviewed.",
+                            json,
+                            failureReason: "stale_exclusion");
+                    }
+                    string currentHash = ContentHasher.Blake3FileHex(absPath);
+                    if (!string.Equals(currentHash, boundHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Error(
+                            $"file '{e.FilePath}' content hash has changed since exclusion was reviewed.",
+                            json,
+                            failureReason: "stale_exclusion");
+                    }
+
+                    anyExactSiteExcluded = true;
+                    if (excludedKeys.Add((e.FilePath, e.StartByte, e.EndByte)))
+                    {
+                        string relPath = ToRelative(absPath);
+                        string siteId = $"{relPath}:{e.StartByte}-{e.EndByte}";
+                        string receiver = ExtractReceiverInfo(e.FilePath, e.StartLine, oldName);
+                        excludedSiteInfos.Add(new ExcludedSiteInfo(
+                            e.FilePath,
+                            e.StartLine,
+                            e.StartByte,
+                            e.EndByte,
+                            siteId,
+                            boundHash,
+                            receiver));
+                    }
+                }
+            }
+        }
+
+        candidateSiteInfos.RemoveAll(c => excludedKeys.Contains((c.FilePath, c.StartByte, c.EndByte)));
+        exactSitesList.RemoveAll(e => excludedKeys.Contains((e.FilePath, e.StartByte, e.EndByte)));
+
         bool incompleteExactCoverage =
             evidence.Coverage.ExactTruncated ||
             unusableExactSites > 0 ||
             missingExactFiles > 0 ||
-            evidence.Coverage.FallbackAvailable > 0;
+            candidateSiteInfos.Count > 0 ||
+            anyExactSiteExcluded;
+
         if (renameMode == "exact" && incompleteExactCoverage)
         {
-            return Error(
-                "incomplete exact reference coverage: " +
+            NotRenamedMentions mentions = CollectNotRenamedMentions(oldName);
+            string errMessage = "incomplete exact reference coverage: " +
                 $"{evidence.Coverage.ExactAvailable} exact site(s), " +
                 $"{unusableExactSites} exact site(s) without usable byte spans, and " +
                 $"{missingExactFiles} missing exact file(s), and " +
-                $"{evidence.Coverage.FallbackAvailable} unresolved fallback candidate(s). " +
+                $"{candidateSiteInfos.Count} unresolved fallback candidate(s). " +
                 "Refresh the workspace or explicitly retry with rename_mode=include_fallback after reviewing " +
-                "the name-based homonym risk.",
-                json,
-                failureReason: FailureNoMatch);
+                "the name-based homonym risk.";
+
+            if (json)
+            {
+                var refusalEvidence = new RenameEvidenceSummary(
+                    renameMode,
+                    target,
+                    exactSitesList,
+                    FallbackSites: [],
+                    evidence.Coverage,
+                    updatedExactEvidence,
+                    excludedSiteInfos,
+                    candidateSiteInfos,
+                    mentions);
+
+                string body = JsonObject(w =>
+                {
+                    w.WriteBoolean("applied", false);
+                    w.WriteString("error", errMessage);
+                    WriteRenameEvidenceJson(w, refusalEvidence);
+                });
+                return new EditResult(body, false, false, null, "error", 0, FailureNoMatch);
+            }
+
+            var sb = new StringBuilder();
+            sb.Append("edit: ").Append(errMessage).Append("\n\n");
+            sb.Append("exact sites:\n");
+            sb.Append("  ").Append(target.FilePath).Append(':').Append(target.StartLine).Append("  definition\n");
+            AppendRenameSites(sb, exactSitesList);
+            if (candidateSiteInfos.Count > 0)
+            {
+                sb.Append("\ncandidate sites (unresolved fallback, review before rename):\n");
+                foreach (var c in candidateSiteInfos)
+                {
+                    sb.Append("  ").Append(ToRelative(ToAbsolute(c.FilePath))).Append(':').Append(c.Line);
+                    if (!string.IsNullOrEmpty(c.Receiver))
+                        sb.Append(" receiver=").Append(c.Receiver);
+                    sb.Append(" token=").Append(c.ExclusionToken).Append('\n');
+                }
+            }
+            if (excludedSiteInfos.Count > 0)
+            {
+                sb.Append("\nexcluded sites:\n");
+                foreach (var e in excludedSiteInfos)
+                {
+                    sb.Append("  ").Append(ToRelative(ToAbsolute(e.FilePath))).Append(':').Append(e.Line);
+                    if (!string.IsNullOrEmpty(e.Receiver))
+                        sb.Append(" receiver=").Append(e.Receiver);
+                    sb.Append('\n');
+                }
+            }
+            int totalMentions = mentions.XmlCrefCount + mentions.CommentCount + mentions.StringCount + mentions.MarkdownCount + mentions.TestNameCount;
+            if (totalMentions > 0)
+            {
+                sb.Append("\nnot-renamed mentions: xml_cref=").Append(mentions.XmlCrefCount)
+                  .Append(" comments=").Append(mentions.CommentCount)
+                  .Append(" strings=").Append(mentions.StringCount)
+                  .Append(" markdown=").Append(mentions.MarkdownCount)
+                  .Append(" test_names=").Append(mentions.TestNameCount)
+                  .Append(" status=").Append(mentions.Status).Append('\n');
+            }
+            if (candidateSiteInfos.Count > 0)
+            {
+                sb.Append("\nTo exclude reviewed non-target candidates, retry with:\n");
+                sb.Append("  exclude_sites=\"").Append(candidateSiteInfos[0].ExclusionToken).Append("\"\n");
+            }
+            return new EditResult(sb.ToString().TrimEnd('\n'), false, false, null, "error", 0, FailureNoMatch);
         }
 
         IReadOnlyList<IdentifierSite> fallbackSites = [];
         if (renameMode == "include_fallback")
         {
-            var exactKeys = exactSites
-                .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
-                .ToHashSet();
-            var resolvedHomonymKeys = _index.FindByName(oldName)
-                .Where(symbol => !string.Equals(symbol.SymbolId, target.SymbolId, StringComparison.Ordinal))
-                .SelectMany(symbol => RenameIdentifierSites(
-                    ReadReferenceEvidence(symbol.SymbolId, evidenceBounds).Exact,
-                    oldNameByteLength))
-                .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
-                .ToHashSet();
-            IReadOnlyList<IdentifierSite> nameBasedSites = ReadIdentifierSites(oldName)
-                .Where(site =>
-                    !exactKeys.Contains((site.FilePath, site.StartByte, site.EndByte))
-                    && !resolvedHomonymKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
+            IReadOnlyList<IdentifierSite> nameBasedSites = candidateSites
+                .Where(site => !excludedKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
                 .ToArray();
             int unusableFallbackSites = nameBasedSites.Count(
                 site => site.StartByte < 0 || site.EndByte - site.StartByte != oldNameByteLength);
@@ -1198,7 +1521,7 @@ public sealed class EditService
             fallbackSites = nameBasedSites;
         }
 
-        string? missingSelectedFile = exactSites
+        string? missingSelectedFile = exactSitesList
             .Concat(fallbackSites)
             .Select(site => site.FilePath)
             .Distinct(StringComparer.Ordinal)
@@ -1211,7 +1534,7 @@ public sealed class EditService
                 failureReason: FailureNoMatch);
         }
 
-        IReadOnlyList<IdentifierSite> sites = exactSites.Concat(fallbackSites).ToArray();
+        IReadOnlyList<IdentifierSite> sites = exactSitesList.Concat(fallbackSites).ToArray();
         var span = ReadEditSpan(target.SymbolId);
 
         var files = BuildRenameFiles(
@@ -1278,14 +1601,15 @@ public sealed class EditService
                 failureReason: FailureReasonFor(plan.Error.Kind));
 
         string diff = RenderRenameDiff(plan);
-        IReadOnlyList<IdentifierSite> renderedExactSites = exactSites
+        NotRenamedMentions mentionsSuccess = CollectNotRenamedMentions(oldName);
+        IReadOnlyList<IdentifierSite> renderedExactSites = exactSitesList
             .Where(site =>
                 !string.Equals(site.FilePath, definitionSite.FilePath, StringComparison.Ordinal)
                 || site.StartByte != definitionSite.StartByte
                 || site.EndByte != definitionSite.EndByte)
             .ToArray();
         IReadOnlyList<ReferenceEvidence> renderedExactEvidence =
-            WithoutRedundantSpanlessRows(evidence.Exact, oldNameByteLength)
+            updatedExactEvidence
             .Where(reference =>
                 !string.Equals(reference.FilePath, definitionSite.FilePath, StringComparison.Ordinal)
                 || reference.StartByte != definitionSite.StartByte
@@ -1297,7 +1621,10 @@ public sealed class EditService
             renderedExactSites,
             fallbackSites,
             evidence.Coverage,
-            renderedExactEvidence);
+            renderedExactEvidence,
+            excludedSiteInfos,
+            candidateSiteInfos,
+            mentionsSuccess);
         string summary = RenderRenameSummary(oldName, newName, plan, renameEvidence);
 
         if (!IsApply(request))
@@ -1691,6 +2018,76 @@ public sealed class EditService
         writer.WriteNumber("fallback_candidates", evidence.Coverage.FallbackAvailable);
         writer.WriteString("fallback_status", evidence.Coverage.FallbackStatus.ToString());
         writer.WriteNumber("inferred_exact_count", evidence.ExactEvidence.Count(IsInferredBinding));
+
+        if (evidence.ExcludedSites is { Count: > 0 } excluded)
+        {
+            writer.WritePropertyName("excluded_sites");
+            writer.WriteStartArray();
+            foreach (var site in excluded)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("file", ToolOutputBudget.TruncateUtf8(ToRelative(ToAbsolute(site.FilePath)), MaxRenameEvidencePathBytes, "…"));
+                writer.WriteNumber("line", site.Line);
+                writer.WriteNumber("start_byte", site.StartByte);
+                writer.WriteNumber("end_byte", site.EndByte);
+                writer.WriteString("site_id", site.SiteId);
+                writer.WriteString("bound_hash", site.BoundHash);
+                if (!string.IsNullOrEmpty(site.Receiver))
+                    writer.WriteString("receiver", site.Receiver);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteNumber("excluded_sites_count", excluded.Count);
+        }
+
+        if (evidence.CandidateSites is { Count: > 0 } candidates)
+        {
+            writer.WritePropertyName("candidate_sites");
+            writer.WriteStartArray();
+            foreach (var site in candidates)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("file", ToolOutputBudget.TruncateUtf8(ToRelative(ToAbsolute(site.FilePath)), MaxRenameEvidencePathBytes, "…"));
+                writer.WriteNumber("line", site.Line);
+                writer.WriteNumber("start_byte", site.StartByte);
+                writer.WriteNumber("end_byte", site.EndByte);
+                writer.WriteString("site_id", site.SiteId);
+                writer.WriteString("exclusion_token", site.ExclusionToken);
+                if (!string.IsNullOrEmpty(site.Receiver))
+                    writer.WriteString("receiver", site.Receiver);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteNumber("candidate_sites_count", candidates.Count);
+        }
+
+        if (evidence.Mentions is { } mentions)
+        {
+            writer.WritePropertyName("not_renamed_mentions");
+            writer.WriteStartObject();
+            writer.WriteNumber("xml_cref_count", mentions.XmlCrefCount);
+            writer.WriteNumber("comment_count", mentions.CommentCount);
+            writer.WriteNumber("string_count", mentions.StringCount);
+            writer.WriteNumber("markdown_count", mentions.MarkdownCount);
+            writer.WriteNumber("test_name_count", mentions.TestNameCount);
+            int totalMentions = mentions.XmlCrefCount + mentions.CommentCount + mentions.StringCount + mentions.MarkdownCount + mentions.TestNameCount;
+            writer.WriteNumber("total_count", totalMentions);
+            writer.WriteString("status", mentions.Status);
+            writer.WritePropertyName("samples");
+            writer.WriteStartArray();
+            foreach (var sample in mentions.Samples)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("category", sample.Category);
+                writer.WriteString("file", ToolOutputBudget.TruncateUtf8(ToRelative(ToAbsolute(sample.FilePath)), MaxRenameEvidencePathBytes, "…"));
+                writer.WriteNumber("line", sample.Line);
+                writer.WriteString("snippet", ToolOutputBudget.TruncateUtf8(sample.Snippet, 100, "…"));
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
         writer.WriteEndObject();
     }
 
@@ -1759,7 +2156,7 @@ public sealed class EditService
         return new EditResult(sb.ToString().TrimEnd('\n'), true, staleAllowed, indexFresh, "ok", count);
     }
 
-    private EditResult PartialApply(EditApplier.ApplyResult applyResult, bool json, bool indexFresh)
+    internal EditResult PartialApply(EditApplier.ApplyResult applyResult, bool json, bool indexFresh)
     {
         IReadOnlyList<string> absolutePaths = applyResult.FilesLeftModified ?? [];
         string? convergeFailure = null;
@@ -1831,7 +2228,7 @@ public sealed class EditService
             ToolOutputBudget.EditDiffMaxBytes,
             "\n… diff preview truncated; narrow the edit target for a smaller proof.");
 
-    private static void AppendEvidence(StringBuilder sb, EditMatchEvidence? evidence)
+    internal static void AppendEvidence(StringBuilder sb, EditMatchEvidence? evidence)
     {
         if (evidence is null)
             return;
@@ -1874,7 +2271,7 @@ public sealed class EditService
         sb.Append("match note: ").Append(string.Join("; ", notes)).Append('\n');
     }
 
-    private static void WriteEvidenceJson(Utf8JsonWriter w, EditMatchEvidence? evidence)
+    internal static void WriteEvidenceJson(Utf8JsonWriter w, EditMatchEvidence? evidence)
     {
         if (evidence is null)
             return;
@@ -1906,7 +2303,7 @@ public sealed class EditService
         }
     }
 
-    private static EditResult StaleBlocked(
+    internal static EditResult StaleBlocked(
         string relativePath,
         bool indexedContentFound,
         bool json,
@@ -1959,7 +2356,7 @@ public sealed class EditService
     /// out — the caller then refuses exactly as it did before this seam existed. Time spent is deducted from
     /// <paramref name="budget"/> so a multi-file gate loop cannot stack per-file waits.
     /// </summary>
-    private bool TryRecoverFreshness(
+    internal bool TryRecoverFreshness(
         string relativePath,
         string absPath,
         string diskText,
@@ -2023,13 +2420,45 @@ public sealed class EditService
         }
     }
 
+    private sealed record ExcludedSiteInfo(
+        string FilePath,
+        int Line,
+        int StartByte,
+        int EndByte,
+        string SiteId,
+        string BoundHash,
+        string Receiver);
+
+    private sealed record CandidateSiteInfo(
+        string FilePath,
+        int Line,
+        int StartByte,
+        int EndByte,
+        string SiteId,
+        string ExclusionToken,
+        string Receiver);
+
+    private sealed record MentionItem(string Category, string FilePath, int Line, string Snippet);
+
+    private sealed record NotRenamedMentions(
+        int XmlCrefCount,
+        int CommentCount,
+        int StringCount,
+        int MarkdownCount,
+        int TestNameCount,
+        IReadOnlyList<MentionItem> Samples,
+        string Status);
+
     private sealed record RenameEvidenceSummary(
         string Mode,
         IndexedSymbol Target,
         IReadOnlyList<IdentifierSite> ExactSites,
         IReadOnlyList<IdentifierSite> FallbackSites,
         ReferenceEvidenceCoverage Coverage,
-        IReadOnlyList<ReferenceEvidence> ExactEvidence);
+        IReadOnlyList<ReferenceEvidence> ExactEvidence,
+        IReadOnlyList<ExcludedSiteInfo>? ExcludedSites = null,
+        IReadOnlyList<CandidateSiteInfo>? CandidateSites = null,
+        NotRenamedMentions? Mentions = null);
 
     /// <summary>
     /// Whether a reference's target was proved by scope rather than inferred by a heuristic tier. Tier 3 binds a
@@ -2126,6 +2555,360 @@ public sealed class EditService
         startByte <= int.MaxValue &&
         endByte <= int.MaxValue;
 
+    private static IReadOnlyList<(string SiteOrSpan, string BoundHash)> ParseExclusions(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        var list = new List<string>();
+        string trimmed = raw.Trim();
+        if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement elem in doc.RootElement.EnumerateArray())
+                    {
+                        if (elem.GetString() is { } s && !string.IsNullOrWhiteSpace(s))
+                            list.Add(s.Trim());
+                    }
+                }
+            }
+            catch
+            {
+                list.AddRange(trimmed.Trim('[', ']').Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            }
+        }
+        else
+        {
+            list.AddRange(trimmed.Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        var results = new List<(string SiteOrSpan, string BoundHash)>();
+        foreach (string item in list)
+        {
+            string clean = item.Trim('"', '\'', ' ');
+            if (string.IsNullOrWhiteSpace(clean))
+                continue;
+            int atIndex = clean.LastIndexOf('@');
+            if (atIndex <= 0 || atIndex == clean.Length - 1)
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "malformed_exclusion",
+                    $"exclusion token '{clean}' is malformed; must be in format '<siteOrSpan>@<contentHash>'."));
+            }
+            results.Add((clean[..atIndex].Trim(), clean[(atIndex + 1)..].Trim()));
+        }
+        return results;
+    }
+
+    private bool MatchesExclusion(
+        string filePath,
+        int? startLine,
+        long? startByte,
+        long? endByte,
+        string? siteId,
+        string exclusionPattern)
+    {
+        if (!string.IsNullOrEmpty(siteId) && string.Equals(siteId, exclusionPattern, StringComparison.Ordinal))
+            return true;
+
+        string relPath = ToRelative(ToAbsolute(filePath));
+        string normPattern = exclusionPattern.Replace('\\', '/');
+
+        if (startByte is not null && endByte is not null)
+        {
+            string spanFormat = $"{relPath}:{startByte}-{endByte}";
+            if (string.Equals(spanFormat, normPattern, StringComparison.Ordinal) ||
+                string.Equals($"{filePath}:{startByte}-{endByte}", normPattern, StringComparison.Ordinal))
+                return true;
+        }
+
+        if (startLine is not null)
+        {
+            string lineFormat = $"{relPath}:{startLine}";
+            if (string.Equals(lineFormat, normPattern, StringComparison.Ordinal) ||
+                string.Equals($"{filePath}:{startLine}", normPattern, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool TryRecoverSpanlessExactReference(
+        ReferenceEvidence reference,
+        int nameByteLength,
+        string oldName,
+        out IdentifierSite? recoveredSite,
+        out string? refusalReason)
+    {
+        recoveredSite = null;
+        refusalReason = null;
+
+        if (reference.StartLine is null || string.IsNullOrWhiteSpace(reference.FilePath))
+        {
+            refusalReason = $"spanless reference in '{reference.FilePath}' is missing line or file path.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(reference.ContainingSymbolId))
+        {
+            refusalReason = $"spanless reference in '{reference.FilePath}' has no containing symbol ID.";
+            return false;
+        }
+
+        IndexedSymbol? containing = _index.FindBySymbolId(reference.ContainingSymbolId);
+        if (containing is null)
+        {
+            refusalReason = $"containing symbol '{reference.ContainingSymbolId}' not found in index.";
+            return false;
+        }
+
+        string absPath = ToAbsolute(reference.FilePath);
+        if (!File.Exists(absPath))
+        {
+            refusalReason = $"file '{reference.FilePath}' not found on disk.";
+            return false;
+        }
+
+        int lineNum = reference.StartLine.Value;
+        if (containing.StartLine > 0 && containing.EndLine > 0 &&
+            (lineNum < containing.StartLine || lineNum > containing.EndLine))
+        {
+            refusalReason = $"line {lineNum} is outside containing symbol boundaries ({containing.StartLine}-{containing.EndLine}) in '{reference.FilePath}'.";
+            return false;
+        }
+
+        byte[] fileBytes = File.ReadAllBytes(absPath);
+        int currentLine = 1;
+        int lineStartByte = 0;
+        int bytePos = 0;
+        while (bytePos < fileBytes.Length && currentLine < lineNum)
+        {
+            if (fileBytes[bytePos] == (byte)'\n')
+            {
+                currentLine++;
+                lineStartByte = bytePos + 1;
+            }
+            bytePos++;
+        }
+
+        if (currentLine != lineNum)
+        {
+            refusalReason = $"line {lineNum} not found in '{reference.FilePath}'.";
+            return false;
+        }
+
+        int lineEndByte = lineStartByte;
+        while (lineEndByte < fileBytes.Length && fileBytes[lineEndByte] != (byte)'\n' && fileBytes[lineEndByte] != (byte)'\r')
+        {
+            lineEndByte++;
+        }
+
+        string lineText = Encoding.UTF8.GetString(fileBytes, lineStartByte, lineEndByte - lineStartByte);
+        var matches = new List<int>();
+        int searchIdx = 0;
+        while (searchIdx <= lineText.Length - oldName.Length)
+        {
+            int found = lineText.IndexOf(oldName, searchIdx, StringComparison.Ordinal);
+            if (found < 0)
+                break;
+            bool startOk = found == 0 || (!char.IsLetterOrDigit(lineText[found - 1]) && lineText[found - 1] != '_');
+            int after = found + oldName.Length;
+            bool endOk = after >= lineText.Length || (!char.IsLetterOrDigit(lineText[after]) && lineText[after] != '_');
+            if (startOk && endOk)
+            {
+                matches.Add(found);
+            }
+            searchIdx = found + 1;
+        }
+
+        if (matches.Count == 0)
+        {
+            refusalReason = $"token '{oldName}' not found on line {lineNum} in '{reference.FilePath}'.";
+            return false;
+        }
+
+        if (matches.Count > 1)
+        {
+            refusalReason = $"multiple tokens matching '{oldName}' found on line {lineNum} in '{reference.FilePath}'; cannot uniquely prove span.";
+            return false;
+        }
+
+        int matchCharIndex = matches[0];
+        int tokenByteOffset = Encoding.UTF8.GetByteCount(lineText[..matchCharIndex]);
+        int startByte = lineStartByte + tokenByteOffset;
+        int endByte = startByte + nameByteLength;
+
+        recoveredSite = new IdentifierSite(reference.FilePath, startByte, endByte, lineNum);
+        return true;
+    }
+
+    private string ExtractReceiverInfo(string filePath, int line, string oldName)
+    {
+        string absPath = ToAbsolute(filePath);
+        if (!File.Exists(absPath))
+            return string.Empty;
+
+        string[] lines = File.ReadAllLines(absPath);
+        if (line < 1 || line > lines.Length)
+            return string.Empty;
+
+        string lineText = lines[line - 1];
+        int idx = lineText.IndexOf(oldName, StringComparison.Ordinal);
+        if (idx > 0 && lineText[idx - 1] == '.')
+        {
+            int end = idx - 1;
+            while (end > 0 && char.IsWhiteSpace(lineText[end - 1]))
+                end--;
+            int start = end - 1;
+            int angleBracketDepth = 0;
+            while (start >= 0)
+            {
+                char c = lineText[start];
+                if (c == '>')
+                    angleBracketDepth++;
+                else if (c == '<')
+                    angleBracketDepth--;
+                else if (angleBracketDepth == 0 && !char.IsLetterOrDigit(c) && c != '_' && c != '.')
+                    break;
+                start--;
+            }
+            string receiver = lineText.Substring(start + 1, end - (start + 1)).Trim();
+            return receiver;
+        }
+
+        return string.Empty;
+    }
+
+    private NotRenamedMentions CollectNotRenamedMentions(string oldName)
+    {
+        int xmlCrefCount = 0;
+        int commentCount = 0;
+        int stringCount = 0;
+        int markdownCount = 0;
+        int testNameCount = 0;
+        var samples = new List<MentionItem>();
+        int totalMentions = 0;
+        const int maxMentionsCap = 100;
+        const int maxSamplesCap = 10;
+
+        try
+        {
+            var testSymbols = _index.Search(oldName, 20)
+                .Select(h => _index.Resolve(h.Document.DocId))
+                .Where(s =>
+                    s.IsTest &&
+                    (s.Name.StartsWith(oldName + "_", StringComparison.OrdinalIgnoreCase) ||
+                     s.Name.StartsWith(oldName, StringComparison.OrdinalIgnoreCase) ||
+                     s.Name.Contains(oldName, StringComparison.OrdinalIgnoreCase)))
+                .Take(20)
+                .ToList();
+            testNameCount = testSymbols.Count;
+            totalMentions += testNameCount;
+            foreach (var testSym in testSymbols.Take(3))
+            {
+                if (samples.Count < maxSamplesCap)
+                    samples.Add(new MentionItem("test_name", testSym.FilePath, testSym.StartLine, testSym.Name));
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            var mdFiles = Directory.Exists(_workspaceRoot)
+                ? Directory.EnumerateFiles(_workspaceRoot, "*.md", SearchOption.AllDirectories)
+                    .Where(p => !p.Contains("/.git/") && !p.Contains("/.miller/") && !p.Contains("/bin/") && !p.Contains("/obj/"))
+                    .Take(25)
+                    .ToList()
+                : [];
+
+            foreach (string mdFile in mdFiles)
+            {
+                if (totalMentions >= maxMentionsCap)
+                    break;
+                string relPath = ToRelative(mdFile);
+                string[] lines = File.ReadAllLines(mdFile);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    if (lines[i].Contains(oldName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        markdownCount++;
+                        totalMentions++;
+                        if (samples.Count < maxSamplesCap)
+                        {
+                            samples.Add(new MentionItem("markdown", relPath, i + 1, lines[i].Trim()));
+                        }
+                        if (totalMentions >= maxMentionsCap)
+                            break;
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            IReadOnlyList<SourceRegionRow> regions = _readSession is not null
+                ? SqliteSourceRegionReader.ReadIndexedRegions(_readSession)
+                : (File.Exists(_dbPath) ? SqliteSourceRegionReader.ReadIndexedRegions(_dbPath) : []);
+
+            int scannedRegions = 0;
+            foreach (SourceRegionRow region in regions)
+            {
+                if (totalMentions >= maxMentionsCap || scannedRegions >= 500)
+                    break;
+                scannedRegions++;
+
+                string absPath = ToAbsolute(region.Path);
+                if (!File.Exists(absPath))
+                    continue;
+
+                byte[] bytes = File.ReadAllBytes(absPath);
+                if (region.StartByte >= 0 && region.EndByte <= bytes.Length && region.EndByte > region.StartByte)
+                {
+                    int len = (int)(region.EndByte - region.StartByte);
+                    if (len > 4096) len = 4096;
+                    string regionText = Encoding.UTF8.GetString(bytes, (int)region.StartByte, len);
+                    if (regionText.Contains(oldName, StringComparison.Ordinal))
+                    {
+                        totalMentions++;
+                        if (region.Kind == "doc_comment" && regionText.Contains("cref="))
+                        {
+                            xmlCrefCount++;
+                            if (samples.Count < maxSamplesCap)
+                                samples.Add(new MentionItem("xml_cref", region.Path, region.StartLine, regionText.Trim()));
+                        }
+                        else if (region.Kind is "comment" or "doc_comment")
+                        {
+                            commentCount++;
+                            if (samples.Count < maxSamplesCap)
+                                samples.Add(new MentionItem("comment", region.Path, region.StartLine, regionText.Trim()));
+                        }
+                        else if (region.Kind == "string_literal")
+                        {
+                            stringCount++;
+                            if (samples.Count < maxSamplesCap)
+                                samples.Add(new MentionItem("string", region.Path, region.StartLine, regionText.Trim()));
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        string status = totalMentions >= maxMentionsCap ? "truncated" : "complete";
+        return new NotRenamedMentions(xmlCrefCount, commentCount, stringCount, markdownCount, testNameCount, samples, status);
+    }
+
     private string RenderRenameSummary(
         string oldName,
         string newName,
@@ -2183,6 +2966,41 @@ public sealed class EditService
         foreach (var f in plan.Summary)
             sb.Append("  ").Append(ToRelative(f.FilePath)).Append("  (")
               .Append(f.SiteCount).Append(f.SiteCount == 1 ? " site)" : " sites)").Append('\n');
+        if (evidence.ExcludedSites is { Count: > 0 } excluded)
+        {
+            sb.Append("excluded sites:\n");
+            foreach (var e in excluded)
+            {
+                sb.Append("  ").Append(ToRelative(ToAbsolute(e.FilePath))).Append(':').Append(e.Line);
+                if (!string.IsNullOrEmpty(e.Receiver))
+                    sb.Append(" receiver=").Append(e.Receiver);
+                sb.Append('\n');
+            }
+        }
+        if (evidence.CandidateSites is { Count: > 0 } candidates)
+        {
+            sb.Append("candidate sites (unresolved fallback, review before rename):\n");
+            foreach (var c in candidates)
+            {
+                sb.Append("  ").Append(ToRelative(ToAbsolute(c.FilePath))).Append(':').Append(c.Line);
+                if (!string.IsNullOrEmpty(c.Receiver))
+                    sb.Append(" receiver=").Append(c.Receiver);
+                sb.Append(" token=").Append(c.ExclusionToken).Append('\n');
+            }
+        }
+        if (evidence.Mentions is { } mentions)
+        {
+            int totalMentions = mentions.XmlCrefCount + mentions.CommentCount + mentions.StringCount + mentions.MarkdownCount + mentions.TestNameCount;
+            if (totalMentions > 0 || mentions.Status != "not-scanned")
+            {
+                sb.Append("not-renamed mentions: xml_cref=").Append(mentions.XmlCrefCount)
+                  .Append(" comments=").Append(mentions.CommentCount)
+                  .Append(" strings=").Append(mentions.StringCount)
+                  .Append(" markdown=").Append(mentions.MarkdownCount)
+                  .Append(" test_names=").Append(mentions.TestNameCount)
+                  .Append(" status=").Append(mentions.Status).Append('\n');
+            }
+        }
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -2210,7 +3028,7 @@ public sealed class EditService
         return sb.ToString().TrimEnd('\n');
     }
 
-    private EditResult Candidates(IReadOnlyList<IndexedSymbol> matches, bool json)
+    internal EditResult Candidates(IReadOnlyList<IndexedSymbol> matches, bool json)
     {
         if (json)
             return new EditResult(JsonObject(w =>
@@ -2239,7 +3057,7 @@ public sealed class EditService
             FailureAmbiguousMatch);
     }
 
-    private static EditResult NotFound(string target, bool json)
+    internal static EditResult NotFound(string target, bool json)
     {
         string msg = $"'{target}' not found. Use search/inspect to locate it.";
         return json
@@ -2250,7 +3068,7 @@ public sealed class EditService
 
     // failureReason has NO default: an untyped bucket must not be reachable by forgetting an argument. Every
     // exit states which condition it refused on, and the compiler enforces it for exits added later.
-    private static EditResult Error(
+    internal static EditResult Error(
         string message, bool json, string failureReason, bool? indexFresh = null)
     {
         if (json)
@@ -2274,7 +3092,7 @@ public sealed class EditService
     /// the shared M2 resolver. A qualified lookup yielding one symbol wins; several → candidates; none → the
     /// original (bare) resolution result.
     /// </summary>
-    private TargetResolution ResolveSymbol(string target, string? scope)
+    internal TargetResolution ResolveSymbol(string target, string? scope)
     {
         var bare = _resolver.Resolve(target, scope);
         if (bare is TargetResolution.Symbol)
@@ -2312,7 +3130,7 @@ public sealed class EditService
 
     private static bool IsApply(EditRequest request) => request.Apply;
 
-    private static IReadOnlyList<TextEdit> FillReplacement(IReadOnlyList<TextEdit> edits, string? replacement)
+    internal static IReadOnlyList<TextEdit> FillReplacement(IReadOnlyList<TextEdit> edits, string? replacement)
     {
         string r = replacement ?? string.Empty;
         var filled = new TextEdit[edits.Count];
@@ -2321,7 +3139,7 @@ public sealed class EditService
         return filled;
     }
 
-    private string ToAbsolute(string relativeOrAbsolute)
+    internal string ToAbsolute(string relativeOrAbsolute)
     {
         string lexical = Path.IsPathRooted(relativeOrAbsolute)
             ? Path.GetFullPath(relativeOrAbsolute)
@@ -2360,7 +3178,7 @@ public sealed class EditService
         return lexical;
     }
 
-    private sealed class InvalidEditTargetPathException : Exception
+    internal sealed class InvalidEditTargetPathException : Exception
     {
         public InvalidEditTargetPathException(string message)
             : base(message)
@@ -2376,15 +3194,15 @@ public sealed class EditService
     // Map an absolute path back to the workspace-relative path julie keyed the index/freshness snapshot under
     // (forward-slashed, matching julie's stored file_path). Falls back to the absolute path if it is outside
     // the root (which should not happen for a resolved target).
-    private string ToRelative(string absolutePath)
+    internal string ToRelative(string absolutePath)
     {
         string rel = Path.GetRelativePath(_workspaceRoot, absolutePath);
         return rel.Replace(Path.DirectorySeparatorChar, '/');
     }
 
-    private static string ReadDisk(string absPath) => File.ReadAllText(absPath, Encoding.UTF8);
+    internal static string ReadDisk(string absPath) => File.ReadAllText(absPath, Encoding.UTF8);
 
-    private string EditPlanFailureMessage(
+    internal string EditPlanFailureMessage(
         EditError error, EditOperation op, string relativePath, string? oldText, out string failureReason)
     {
         failureReason = FailureReasonFor(error.Kind);
@@ -2401,24 +3219,38 @@ public sealed class EditService
             relativePath,
             oldText,
             storeEnabled: StoreEnabledForSidecars);
-        if (match is null)
-            return error.Message;
+        if (match is not null)
+        {
+            failureReason = FailureStaleTarget;
+            return $"old_text not found in current file: \"{oldText}\". The indexed source still contains it " +
+                   $"near line {match.Line}, so the file likely changed after the index snapshot. Wait for the " +
+                   "watcher or run workspace refresh, then retry with the current text.";
+        }
 
-        failureReason = FailureStaleTarget;
-        return $"old_text not found in current file: \"{oldText}\". The indexed source still contains it " +
-               $"near line {match.Line}, so the file likely changed after the index snapshot. Wait for the " +
-               "watcher or run workspace refresh, then retry with the current text.";
+        // Task N5: return up to 3 bounded nearby candidate lines from examined windows without secondary DB queries.
+        if (error.Candidates is { Count: > 0 } candidates)
+        {
+            var sb = new StringBuilder();
+            sb.Append(error.Message).Append($" Nearby candidate lines in {relativePath}:\n");
+            foreach (var c in candidates.Take(3))
+            {
+                sb.Append($"  line {c.LineNumber} (distance {c.Distance}): \"{c.Snippet}\"\n");
+            }
+            return sb.ToString().TrimEnd('\n');
+        }
+
+        return error.Message + $" No credible nearby candidate found in {relativePath}.";
     }
 
     // ---- operation / occurrence parsing ----
 
-    private static readonly string[] OperationNames =
+    internal static readonly string[] OperationNames =
     [
         "replace_text", "replace_symbol_body", "replace_symbol_signature",
-        "rename_symbol", "insert_before", "insert_after", "add_doc",
+        "rename_symbol", "insert_before", "insert_after", "add_doc", "batch",
     ];
 
-    private static bool TryParseOperation(string? op, out EditOperation parsed)
+    internal static bool TryParseOperation(string? op, out EditOperation parsed)
     {
         switch (op?.ToLowerInvariant())
         {
@@ -2433,7 +3265,7 @@ public sealed class EditService
         }
     }
 
-    private static bool TryParseOccurrence(string? occ, out Occurrence parsed)
+    internal static bool TryParseOccurrence(string? occ, out Occurrence parsed)
     {
         switch (occ?.ToLowerInvariant())
         {
@@ -2444,7 +3276,7 @@ public sealed class EditService
         }
     }
 
-    private static bool TryParseMatchMode(string? mode, out TextMatchMode parsed)
+    internal static bool TryParseMatchMode(string? mode, out TextMatchMode parsed)
     {
         switch (mode?.ToLowerInvariant())
         {
@@ -2468,12 +3300,13 @@ public sealed class EditService
     {
         EditErrorKind.TextNotFound => FailureNoMatch,
         EditErrorKind.InvalidSpan => FailureStaleTarget,
+        EditErrorKind.DuplicateDeclaration => "duplicate_declaration",
         EditErrorKind.BodySpanUnavailable or EditErrorKind.InvalidNewName or EditErrorKind.MissingArgument =>
             FailureInvalidRequest,
         _ => FailureUnclassifiedPlanError,
     };
 
-    private sealed record ReplaceTextPlanResult(
+    internal sealed record ReplaceTextPlanResult(
         EditPlan? Plan, EditMatchEvidence? Evidence, string? ErrorMessage, string? FailureReason)
     {
         /// <summary>True iff planning spent budget waiting for a single-file converge, however it ended.</summary>
@@ -2486,7 +3319,7 @@ public sealed class EditService
             new(Plan: null, Evidence: null, message, failureReason);
     }
 
-    private sealed record EditMatchEvidence(
+    internal sealed record EditMatchEvidence(
         string MatchMode,
         string MatchSource,
         string ContentIndexState,
@@ -2509,7 +3342,7 @@ public sealed class EditService
 
     // ---- JSON helper ----
 
-    private static string JsonObject(Action<Utf8JsonWriter> write)
+    internal static string JsonObject(Action<Utf8JsonWriter> write)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer,

@@ -279,7 +279,7 @@ public sealed class ContentCorpusSidecarTests : IDisposable
         using var fx = SourceFixture();
         var sidecar = new ContentCorpusSidecar();
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             sidecar.OpenRequired(fx.DbPath, expectedRevision: 7));
 
         Assert.Contains("content corpus", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -293,7 +293,7 @@ public sealed class ContentCorpusSidecarTests : IDisposable
         var sidecar = new ContentCorpusSidecar();
         Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 6));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             sidecar.OpenRequired(fx.DbPath, expectedRevision: 7));
 
         Assert.Contains("stale", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -383,5 +383,56 @@ public sealed class ContentCorpusSidecarTests : IDisposable
             {
                 ["src/Api.cs"] = sourceText,
             });
+    }
+
+    [Fact]
+    public void EnsureBuilt_MigratesExistingVersion0Database_InPlaceWithoutRebuild()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+
+        // Simulate a pre-migration DB where user_version is 0 and src/Api.cs was classified as test
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = contentDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE content_sources SET is_test = 1 WHERE path = 'src/Api.cs';
+                UPDATE content_chunks SET is_test = 1 WHERE path = 'src/Api.cs';
+                PRAGMA user_version = 0;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        // Calling EnsureBuilt when already fresh should migrate in-place and return false
+        bool rebuilt = sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        Assert.False(rebuilt);
+
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = contentDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA user_version;";
+            Assert.Equal(1L, Convert.ToInt64(cmd.ExecuteScalar()));
+
+            cmd.CommandText = "SELECT is_test FROM content_sources WHERE path = 'src/Api.cs';";
+            Assert.Equal(0, Convert.ToInt32(cmd.ExecuteScalar()));
+
+            cmd.CommandText = "SELECT is_test FROM content_chunks WHERE path = 'src/Api.cs';";
+            Assert.Equal(0, Convert.ToInt32(cmd.ExecuteScalar()));
+        }
     }
 }

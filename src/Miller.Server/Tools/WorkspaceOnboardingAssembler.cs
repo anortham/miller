@@ -14,7 +14,7 @@ internal static class WorkspaceOnboardingAssembler
         string? workspaceId,
         string indexDbPath)
     {
-        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId);
+        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId, windowDays: 7);
         IReadOnlyList<RecoveredTargetHash> targets = ResolveTargets(indexDbPath, telemetry.TargetHashes);
         return WorkspaceOnboardingFacts.Create(statusFacts, telemetry, targets);
     }
@@ -27,7 +27,7 @@ internal static class WorkspaceOnboardingAssembler
         IWorkspaceReadSession readSession)
     {
         ArgumentNullException.ThrowIfNull(readSession);
-        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId);
+        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId, windowDays: 7);
         IReadOnlyList<RecoveredTargetHash> targets = ResolveTargets(readSession, telemetry.TargetHashes);
         return WorkspaceOnboardingFacts.Create(statusFacts, telemetry, targets);
     }
@@ -41,7 +41,7 @@ internal static class WorkspaceOnboardingAssembler
         bool storeEnabled,
         Func<IJulieStoreClient>? readerClient = null)
     {
-        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId);
+        TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId, windowDays: 7);
         IReadOnlyList<RecoveredTargetHash> targets;
         try
         {

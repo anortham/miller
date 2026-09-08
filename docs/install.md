@@ -93,12 +93,26 @@ workspace-bound call.
 
 ### Session hooks
 
-The Claude Code plugin injects a ~2.4KB Miller routing block at session start through a `SessionStart`
-hook, so tool-routing guidance stays in context even though clients truncate MCP server instructions.
-The Codex plugin ships the same hook: Codex runs it once you review and trust the plugin's hooks, and
-current Codex builds load hooks from `~/.codex/hooks.json` rather than from plugin roots
-([openai/codex#16430](https://github.com/openai/codex/issues/16430)). Set `MILLER_SESSION_HOOKS=0` to
-opt out.
+The Claude Code, Codex, and Cursor plugins inject the canonical Miller routing block at session start,
+so tool-routing guidance stays in context even though clients truncate MCP server instructions.
+
+- **Claude Code**: runs the bundled `SessionStart` and `SubagentStart` hooks from `.claude-plugin/plugin.json`
+  via `hooks/claude-codex-hooks.json`.
+- **Codex**: modern Codex versions support trusted plugin hooks declared in `.codex-plugin/plugin.json`.
+  Trust the plugin hooks when prompted during installation. If running on a Codex environment or
+  configuration that does not load plugin-bundled hooks, configure `~/.codex/hooks.json` with the command
+  from `hooks/claude-codex-hooks.json` as a fallback.
+- **Cursor**: the plugin bundles `hooks/cursor-hooks.json` executing on `sessionStart` and delivering
+  `additional_context`. If running without the plugin or on an installation that does not execute
+  plugin hooks, wire `~/.cursor/hooks.json` with `cursor-session-start`, or generate static Cursor rules via:
+  `miller rules --harness cursor > .cursor/rules/miller.mdc`
+- **Host Context & Safety**: when host session context (such as current working directory or open workspace
+  roots) is passed on stdin, the hook defensively validates the path (rejecting sensitive system/home roots
+  and ambiguous directories) and suggests it as a candidate for explicit `workspace operation=open`. The hook
+  never implicitly registers workspaces or overrides active session selection. Subagent sessions are
+  isolated and omit candidate project suggestions.
+- **Opt-out**: set `MILLER_SESSION_HOOKS=0` (or `MILLER_SESSION_HOOKS=false`) in your environment to cleanly
+  disable session hook execution across all hosts.
 
 ### Plugin components
 
@@ -107,6 +121,7 @@ The plugin distribution lives in the main Miller repository, not a separate plug
 - `.claude-plugin/plugin.json` exposes Miller to Claude Code.
 - `.cursor-plugin/plugin.json` exposes Miller to Cursor (plugin marketplace install).
 - `.codex-plugin/plugin.json` and `.mcp.json` expose Miller to Codex.
+- `hooks/claude-codex-hooks.json` and `hooks/cursor-hooks.json` declare session hooks.
 - `skills/` is generated from `.agents/skills/` by `scripts/sync-plugin-skills.sh`.
 - `bin/miller-plugin-launcher.cjs` is the Node launcher described above.
 

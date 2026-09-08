@@ -161,6 +161,12 @@ public sealed class EditToolTests : IDisposable
             CompleteCalls++;
             return _factory(null);
         }
+
+        public WorkspaceSymbolReadContext ResolveCompleteSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
+        {
+            CompleteCalls++;
+            return _factory(workspaceId);
+        }
     }
 
     private sealed class StoreReadSession(
@@ -423,8 +429,9 @@ public sealed class EditToolTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(output);
         Assert.False(document.RootElement.GetProperty("applied").GetBoolean());
         Assert.Equal("preview", document.RootElement.GetProperty("mode").GetString());
-        Assert.Equal(0, provider.Calls);
-        Assert.Equal(1, provider.CompleteCalls);
+        bool isReplaceText = string.Equals(operation, "replace_text", StringComparison.Ordinal);
+        Assert.Equal(isReplaceText ? 1 : 0, provider.Calls);
+        Assert.Equal(isReplaceText ? 0 : 1, provider.CompleteCalls);
     }
 
     [Fact]
@@ -498,6 +505,82 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
         Assert.True(File.Exists(Path.Combine(targetMillerDir, EditWriteLock.LockFileName)));
         Assert.False(File.Exists(Path.Combine(_root, ".miller", EditWriteLock.LockFileName)));
+    }
+
+    [Fact]
+    public void Edit_InvalidOperation_ProducesZeroCompleteSymbolLoads()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "workspaces.db"));
+        var provider = new FixedSymbolReadProvider(() => throw new InvalidOperationException("read was not expected"));
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit("unsupported_op", "orders/OrderService.cs", workspace_id: "target-ws");
+
+        Assert.Contains("unknown operation", output);
+        Assert.Equal(0, provider.Calls);
+        Assert.Equal(0, provider.CompleteCalls);
+    }
+
+    [Fact]
+    public void Edit_ReplaceText_DiskOnlyPreview_ProducesZeroCompleteSymbolLoads()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        string dbPath = Path.Combine(_root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.Copy(fx.DbPath, dbPath);
+
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(dbPath));
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "workspaces.db"));
+        registry.UpsertSeen("ws1", "ws1-hash", _root, dbPath);
+        registry.MarkScanned("ws1", revision: 1);
+
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                dbPath, _root, "ws1", storeEnabled: false);
+            return new WorkspaceSymbolReadContext(
+                index,
+                session,
+                "ws1",
+                _root,
+                1,
+                true,
+                "current",
+                null,
+                "ws1",
+                true,
+                session.Snapshot.IndexLevel);
+        });
+
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string preview = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "int",
+            new_text: "long",
+            workspace_id: "ws1");
+
+        Assert.Contains("@@", preview);
+        Assert.Equal(0, provider.CompleteCalls);
+        Assert.Equal(1, provider.Calls);
     }
 
     [Fact]

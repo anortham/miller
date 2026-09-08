@@ -656,6 +656,8 @@ internal sealed class CtFreshnessKeyJsonConverter : JsonConverter<CtFreshnessKey
 // Nested inside CtDaemonStatusRecord. The published binary is Native AOT, where a type the source
 // generator was never told about fails when a run is in flight, not at build time.
 [JsonSerializable(typeof(CtDaemonRunProgress))]
+[JsonSerializable(typeof(CtDaemonSelectionProgress))]
 [JsonSerializable(typeof(CtDaemonLeaseIdentity))]
 [JsonSerializable(typeof(CtFreshnessKey))]
 internal sealed partial class CtDaemonJsonContext : JsonSerializerContext;
+

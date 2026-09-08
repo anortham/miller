@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Miller.Core.References;
 using Miller.Indexing;
@@ -52,9 +53,12 @@ public sealed class InspectTool
         [Description("A file path or a symbol name/id (smart-resolved).")] string target,
         [Description("summary|overview|full. overview adds bounded refs/callers/callees/body preview; full adds complete body.")]
         string depth = "summary",
+        [Description("View mode: members for direct child member enumeration (40 default, 100 max). Optional.")]
+        string? view = null,
         [Description("Filter a file listing to one kind (function/class/...). Optional.")] string? kind = null,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
-        [Description("Max symbols when listing a file. Default and maximum 10.")] int limit = ToolOutputBudget.McpRowLimit,
+        [Description("Max symbols when listing a file or members. Default 10 for files, 40 for members; maximum 100.")]
+        int? limit = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
@@ -73,9 +77,18 @@ public sealed class InspectTool
                     "invalid_format",
                     "inspect format must be compact or json."));
             }
+            if (!string.IsNullOrWhiteSpace(view) && !string.Equals(view, "members", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_view",
+                    "inspect view must be members when specified."));
+            }
             WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
-            int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
+            bool isMembersView = string.Equals(view, "members", StringComparison.OrdinalIgnoreCase);
+            int effectiveLimit = isMembersView
+                ? (limit.HasValue ? Math.Clamp(limit.Value, 1, 100) : 40)
+                : Math.Min(limit ?? ToolOutputBudget.McpRowLimit, ToolOutputBudget.McpRowLimit);
 
             using WorkspaceSymbolReadContext context =
                 _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, refresh);
@@ -95,7 +108,8 @@ public sealed class InspectTool
                 out int count,
                 out ToolDiagnostic? diagnostic,
                 compactBanner,
-                boundAgentOutput: true);
+                boundAgentOutput: true,
+                view: view);
 
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
@@ -244,7 +258,9 @@ public sealed class InspectTool
         MillerRepositoryIndex index, SmartTargetResolver resolver, WorkspaceReadHandle dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
-        string? compactBanner = null)
+        string? compactBanner = null,
+        string? view = null,
+        string? continuation = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -254,7 +270,7 @@ public sealed class InspectTool
 
         return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
             json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
-            continuation: null, boundAgentOutput: false);
+            continuation, boundAgentOutput: false, view: view);
     }
 
     /// <summary>
@@ -268,13 +284,14 @@ public sealed class InspectTool
         out int resultCount,
         out ToolDiagnostic? diagnostic,
         string? compactBanner = null,
-        string? continuation = null)
+        string? continuation = null,
+        string? view = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         return RunLookupWithDiagnostics(
             index, dbPath, workspaceRoot, WorkspaceId.FromCanonicalRoot(workspaceRoot),
             target, depth, kind, scope, limit, json, continuation,
-            out resultCount, out diagnostic, compactBanner, boundAgentOutput: false);
+            out resultCount, out diagnostic, compactBanner, boundAgentOutput: false, view: view);
     }
 
     /// <inheritdoc cref="RunLookup"/>
@@ -298,7 +315,8 @@ public sealed class InspectTool
         string? compactBanner,
         string workspaceId,
         string? continuation,
-        bool boundAgentOutput)
+        bool boundAgentOutput,
+        string? view = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -309,6 +327,12 @@ public sealed class InspectTool
         switch (resolution)
         {
             case TargetResolution.File file:
+                if (string.Equals(view, "members", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                        "invalid_view_target",
+                        "inspect view=members applies to symbols, not files."));
+                }
                 string fileOutput = RenderFile(
                     index,
                     file.Path,
@@ -327,6 +351,16 @@ public sealed class InspectTool
                     json ? null : compactBanner);
 
             case TargetResolution.Symbol sym:
+                if (string.Equals(view, "members", StringComparison.OrdinalIgnoreCase))
+                {
+                    string membersOutput = json
+                        ? RenderSymbolMembersJson(
+                            index, workspaceId, sym.Value, limit, continuation, out resultCount)
+                        : RenderSymbolMembersCompact(
+                            index, workspaceId, sym.Value, limit, continuation, out resultCount);
+                    return ReadToolWorkspaceRouting.PrefixCompact(membersOutput, json ? null : compactBanner);
+                }
+
                 if (!string.IsNullOrWhiteSpace(continuation) && depth != InspectDepth.Full)
                 {
                     throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
@@ -351,12 +385,12 @@ public sealed class InspectTool
                 diagnostic = ToolDiagnostic.Ambiguity(
                     "ambiguous_target",
                     $"'{target}' matched {cands.Matches.Count} symbols.",
-                    CandidateOutput.RerunExamples(target, cands.Matches, supportsScope: true)
+                    CandidateOutput.RerunExamples(target, cands.Matches, supportsScope: true, "inspect", index)
                         .Select(example => new ToolDiagnosticAction(example, "select one exact symbol"))
                         .ToArray());
                 string candidatesOutput = json
-                    ? RenderCandidatesJson(target, cands.Matches)
-                    : RenderCandidatesCompact(target, cands.Matches);
+                    ? RenderCandidatesJson(target, cands.Matches, index)
+                    : RenderCandidatesCompact(target, cands.Matches, index);
                 return ReadToolWorkspaceRouting.PrefixCompact(candidatesOutput, json ? null : compactBanner);
 
             case TargetResolution.NotFound nf:
@@ -399,7 +433,8 @@ public sealed class InspectTool
         out int resultCount,
         out ToolDiagnostic? diagnostic,
         string? compactBanner,
-        bool boundAgentOutput)
+        bool boundAgentOutput,
+        string? view = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
@@ -423,10 +458,9 @@ public sealed class InspectTool
             compactBanner,
             workspaceId,
             continuation,
-            boundAgentOutput);
+            boundAgentOutput,
+            view);
     }
-
-    // ---------- file listing ----------
 
     /// <summary>
     /// Separates "this indexed file holds no matching symbols" from "this path never reached the index". Both
@@ -761,6 +795,299 @@ public sealed class InspectTool
           .Append(")\n");
     }
 
+    // ---------- doc comments ----------
+
+    private static readonly Regex XmlDocMarkerRegex =
+        new(@"^[ \t]*(?:///|//!|\*)[ \t]?", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex XmlPresentationTagRegex =
+        new(@"</?(?:summary|remarks|returns|value|example|para|param\b[^>]*|typeparam\b[^>]*|exception\b[^>]*)/?>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex XmlCodeTagRegex =
+        new(@"</?c>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex XmlCodeBlockTagRegex =
+        new(@"</?code>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex XmlSeeCrefWithContentRegex =
+        new(@"<see(?:also)?\s+cref=""(?<cref>[^""]+)""\s*>(?<content>.*?)</see(?:also)?>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex XmlSeeCrefSelfClosingRegex =
+        new(@"<see(?:also)?\s+cref=""(?<cref>[^""]+)""\s*/>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex XmlSeeLangwordRegex =
+        new(@"<see\s+langword=""(?<word>[^""]+)""\s*/>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex XmlRefNameRegex =
+        new(@"<(?:paramref|typeparamref)\s+name=""(?<name>[^""]+)""\s*/>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static string CleanCompactDocComment(string? rawDoc)
+    {
+        if (string.IsNullOrWhiteSpace(rawDoc))
+            return string.Empty;
+
+        // 1. Strip leading doc comment markers line by line (///, //!, or * )
+        string doc = XmlDocMarkerRegex.Replace(rawDoc, string.Empty);
+
+        // 2. Unwrap cref elements:
+        doc = XmlSeeCrefWithContentRegex.Replace(doc, static m =>
+        {
+            string content = m.Groups["content"].Value.Trim();
+            if (!string.IsNullOrEmpty(content))
+                return content;
+            return CleanCrefIdentifier(m.Groups["cref"].Value);
+        });
+
+        doc = XmlSeeCrefSelfClosingRegex.Replace(doc, static m =>
+            CleanCrefIdentifier(m.Groups["cref"].Value));
+
+        doc = XmlSeeLangwordRegex.Replace(doc, static m => m.Groups["word"].Value);
+        doc = XmlRefNameRegex.Replace(doc, static m => m.Groups["name"].Value);
+
+        // 3. Unwrap <c> and <code>
+        doc = XmlCodeTagRegex.Replace(doc, string.Empty);
+        doc = XmlCodeBlockTagRegex.Replace(doc, string.Empty);
+
+        // 4. Strip presentation tags (<summary>, </summary>, <param...>, etc.)
+        doc = XmlPresentationTagRegex.Replace(doc, string.Empty);
+
+        // 5. Clean up extra whitespace/newlines while preserving prose paragraphs
+        string[] lines = doc.Split(['\r', '\n'], StringSplitOptions.None);
+        var cleanedLines = new List<string>(lines.Length);
+        bool previousEmpty = false;
+        foreach (string line in lines)
+        {
+            string trimmed = line.Trim();
+            if (trimmed.Length == 0)
+            {
+                if (!previousEmpty && cleanedLines.Count > 0)
+                {
+                    cleanedLines.Add(string.Empty);
+                    previousEmpty = true;
+                }
+            }
+            else
+            {
+                cleanedLines.Add(trimmed);
+                previousEmpty = false;
+            }
+        }
+
+        return string.Join("\n", cleanedLines).Trim();
+    }
+
+    private static string CleanCrefIdentifier(string cref)
+    {
+        cref = cref.Trim();
+        if (cref.Length > 2 && cref[1] == ':' && char.IsAsciiLetter(cref[0]))
+            cref = cref[2..];
+        return cref;
+    }
+
+    // ---------- members & overview ranking ----------
+
+    private static int OverviewMemberTier(IndexedSymbol symbol)
+    {
+        string? vis = DisplayVisibility(null, symbol);
+        bool isPublicOrProtected = vis is "public" or "protected" or "exported" or "export" or "pub" or "open";
+        bool isPrivateField = (vis is "private" || string.IsNullOrEmpty(vis)) &&
+                              symbol.Kind is "field" or "variable";
+
+        if (isPublicOrProtected)
+            return 0;
+        if (!isPrivateField)
+            return 1;
+        return 2;
+    }
+
+    private static IEnumerable<IndexedSymbol> RankOverviewChildren(IEnumerable<IndexedSymbol> children)
+    {
+        return children
+            .OrderBy(OverviewMemberTier)
+            .ThenBy(static s => s.StartLine)
+            .ThenBy(static s => s.Name, StringComparer.Ordinal);
+    }
+
+    private static string MemberLine(IndexedSymbol s)
+    {
+        var sb = new StringBuilder();
+        sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
+          .Append(s.FilePath).Append(':').Append(s.StartLine);
+        string? vis = DisplayVisibility(null, s);
+        if (!string.IsNullOrWhiteSpace(vis))
+            sb.Append("  [").Append(vis).Append(']');
+        if (SignatureAddsInfo(s))
+            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), ToolRenderLimits.SignatureMaxLength));
+        return sb.ToString();
+    }
+
+    private static void WriteMemberSymbolObject(Utf8JsonWriter w, IndexedSymbol s)
+    {
+        w.WriteStartObject();
+        w.WriteString("symbol_id", s.SymbolId);
+        w.WriteString("name", s.Name);
+        w.WriteString("kind", s.Kind);
+        w.WriteString("language", s.Language);
+        w.WriteString("file", s.FilePath);
+        w.WriteNumber("line", s.StartLine);
+        if (s.EndLine > 0) w.WriteNumber("end_line", s.EndLine); else w.WriteNull("end_line");
+        string? vis = DisplayVisibility(null, s);
+        if (vis is null) w.WriteNull("visibility"); else w.WriteString("visibility", vis);
+        if (s.Signature is null) w.WriteNull("signature");
+        else w.WriteString("signature", Truncate(InlineSignature(s.Signature), ToolRenderLimits.SignatureMaxLength));
+        w.WriteEndObject();
+    }
+
+    private static string RenderSymbolMembersCompact(
+        ISymbolLookupIndex index,
+        string workspaceId,
+        IndexedSymbol sym,
+        int limit,
+        string? continuation,
+        out int resultCount)
+    {
+        var allChildren = index.FindChildren(sym.SymbolId);
+        if (allChildren.Count == 0)
+        {
+            resultCount = 0;
+            var emptySb = new StringBuilder();
+            emptySb.Append("# ").Append(sym.Name).Append("  (").Append(sym.Kind).Append(")\n");
+            emptySb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
+            emptySb.Append("Symbol has no child members.");
+            return emptySb.ToString();
+        }
+
+        List<IndexedSymbol> ordered = allChildren
+            .OrderBy(static s => s.StartLine)
+            .ThenBy(static s => s.Name, StringComparer.Ordinal)
+            .ThenBy(static s => s.SymbolId, StringComparer.Ordinal)
+            .ToList();
+
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_members",
+            workspaceId,
+            PopulationFingerprint(ordered),
+            RequestFingerprint(sym.SymbolId, "compact", limit.ToString()));
+
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.DecodePopulationCursor(continuation, identity).Offset;
+        if (offset < 0 || offset >= ordered.Count)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_offset_invalid",
+                "Inspect members continuation offset is outside the current result population."));
+        }
+
+        List<IndexedSymbol> page = ordered.Skip(offset).Take(limit).ToList();
+        int nextOffset = checked(offset + page.Count);
+        string? nextContinuation = nextOffset < ordered.Count
+            ? ToolOutputBudget.EncodePopulationCursor(
+                identity,
+                new ToolPopulationContinuationCursor(nextOffset))
+            : null;
+        resultCount = page.Count;
+
+        var sb = new StringBuilder();
+        sb.Append("# ").Append(sym.Name).Append("  (").Append(sym.Kind).Append(")\n");
+        sb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
+        sb.Append("\n## members (").Append(page.Count).Append(" of ").Append(ordered.Count).Append(")\n");
+        foreach (var m in page)
+        {
+            sb.Append(MemberLine(m)).Append('\n');
+        }
+
+        int remainder = ordered.Count - nextOffset;
+        if (remainder > 0)
+        {
+            sb.Append("… ").Append(remainder).Append(" more members\n");
+            if (nextContinuation is not null)
+            {
+                sb.Append(NextStepHint.Render(
+                    $"inspect target=\"{EscapeDiagnosticTarget(sym.SymbolId)}\" view=members limit={limit} continuation=\"{nextContinuation}\"",
+                    "continue member listing")).Append('\n');
+            }
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string RenderSymbolMembersJson(
+        ISymbolLookupIndex index,
+        string workspaceId,
+        IndexedSymbol sym,
+        int limit,
+        string? continuation,
+        out int resultCount)
+    {
+        var allChildren = index.FindChildren(sym.SymbolId);
+        List<IndexedSymbol> ordered = allChildren
+            .OrderBy(static s => s.StartLine)
+            .ThenBy(static s => s.Name, StringComparer.Ordinal)
+            .ThenBy(static s => s.SymbolId, StringComparer.Ordinal)
+            .ToList();
+
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_members",
+            workspaceId,
+            PopulationFingerprint(ordered),
+            RequestFingerprint(sym.SymbolId, "json", limit.ToString()));
+
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.DecodePopulationCursor(continuation, identity).Offset;
+        if (offset < 0 || (ordered.Count > 0 && offset >= ordered.Count))
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_offset_invalid",
+                "Inspect members continuation offset is outside the current result population."));
+        }
+
+        List<IndexedSymbol> page = ordered.Skip(offset).Take(limit).ToList();
+        int nextOffset = checked(offset + page.Count);
+        string? nextContinuation = nextOffset < ordered.Count
+            ? ToolOutputBudget.EncodePopulationCursor(
+                identity,
+                new ToolPopulationContinuationCursor(nextOffset))
+            : null;
+        resultCount = page.Count;
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WritePropertyName("symbol");
+            WriteSymbolObject(w, sym, detail: null);
+
+            w.WritePropertyName("members");
+            w.WriteStartArray();
+            foreach (var m in page)
+            {
+                WriteMemberSymbolObject(w, m);
+            }
+            w.WriteEndArray();
+
+            w.WriteNumber("members_total_count", ordered.Count);
+            w.WriteNumber("members_returned_count", page.Count);
+            w.WriteNumber("members_omitted_count", ordered.Count - nextOffset);
+            w.WriteBoolean("members_truncated", nextContinuation is not null);
+            w.WriteNumber("page_offset", offset);
+            w.WriteNumber("effective_limit", limit);
+            if (nextContinuation is null)
+                w.WriteNull("continuation");
+            else
+                w.WriteString("continuation", nextContinuation);
+
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
@@ -790,22 +1117,44 @@ public sealed class InspectTool
             sb.Append("visibility: ").Append(visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
         {
-            bool docTruncated =
-                boundAgentOutput &&
-                Encoding.UTF8.GetByteCount(detail.DocComment) > ToolOutputBudget.InspectMcpDocMaxBytes;
-            string docComment = docTruncated
-                ? ToolOutputBudget.TruncateUtf8(
-                    detail.DocComment,
-                    ToolOutputBudget.InspectMcpDocMaxBytes,
-                    "…")
-                : detail.DocComment;
-            sb.Append("doc: ").Append(docComment).Append('\n');
-            if (docTruncated)
-                sb.Append("doc_truncated: true\n");
+            string cleanedDoc = CleanCompactDocComment(detail.DocComment);
+            if (!string.IsNullOrEmpty(cleanedDoc))
+            {
+                bool docTruncated =
+                    boundAgentOutput &&
+                    Encoding.UTF8.GetByteCount(cleanedDoc) > ToolOutputBudget.InspectMcpDocMaxBytes;
+                string docComment = docTruncated
+                    ? ToolOutputBudget.TruncateUtf8(
+                        cleanedDoc,
+                        ToolOutputBudget.InspectMcpDocMaxBytes,
+                        "…")
+                    : cleanedDoc;
+                sb.Append("doc: ").Append(docComment).Append('\n');
+                if (docTruncated)
+                    sb.Append("doc_truncated: true\n");
+            }
         }
 
         if (depth == InspectDepth.Summary)
             return sb.ToString().TrimEnd('\n');
+
+        if (!string.IsNullOrWhiteSpace(continuation))
+        {
+            sb.Append("\n## body\n");
+            var bodyCont = detail is null
+                ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
+                : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
+                    detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
+            ToolOutputPage bodyPageCont = PageFullBody(bodyCont, detail, workspaceId, sym, continuation);
+            sb.Append(bodyPageCont.Text);
+            if (bodyPageCont is { Truncated: true, Continuation: not null })
+            {
+                sb.Append('\n').Append(NextStepHint.Render(
+                    $"inspect target=\"{sym.SymbolId}\" depth=full continuation=\"{bodyPageCont.Continuation}\"",
+                    $"continue body at byte {bodyPageCont.EndOffset}"));
+            }
+            return sb.ToString().TrimEnd('\n');
+        }
 
         var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
         if (complexity is not null)
@@ -843,9 +1192,17 @@ public sealed class InspectTool
             int childLimit = depth == InspectDepth.Overview
                 ? OverviewChildLimit
                 : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue;
-            foreach (var c in children.Take(childLimit))
-                sb.Append(SymbolLine(c)).Append('\n');
-            AppendOmittedLine(sb, children.Count, childLimit, "children");
+            IEnumerable<IndexedSymbol> childSeq = depth == InspectDepth.Overview
+                ? RankOverviewChildren(children)
+                : children;
+            foreach (var c in childSeq.Take(childLimit))
+                sb.Append(SymbolLine(c, index)).Append('\n');
+            AppendOmittedLine(
+                sb,
+                children.Count,
+                childLimit,
+                "children",
+                depth == InspectDepth.Overview ? "use view=members" : "use depth=full");
         }
 
         ReferenceEvidenceSet referenceEvidence = evidence.Inbound;
@@ -998,23 +1355,32 @@ public sealed class InspectTool
             typedInbound[ReferenceKind.Inheritance],
             typedRelationLimit);
 
-        sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
         var body = detail is null
             ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
             : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                 detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
+
+        bool omitUnavailableBody =
+            IsValueDeclaration(sym) &&
+            IsCompleteValueDeclaration(sym) &&
+            body.Text is null;
+
         ToolOutputPage? bodyPage = null;
-        if (depth == InspectDepth.Overview)
+        if (!omitUnavailableBody)
         {
-            var preview = BodyPreview(body);
-            sb.Append(preview.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
-            if (preview.Truncated)
-                sb.Append("\n... body preview truncated (use depth=full)");
-        }
-        else
-        {
-            bodyPage = PageFullBody(body, detail, workspaceId, sym, continuation);
-            sb.Append(bodyPage.Text);
+            sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
+            if (depth == InspectDepth.Overview)
+            {
+                var preview = BodyPreview(body);
+                sb.Append(preview.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
+                if (preview.Truncated)
+                    sb.Append("\n... body preview truncated (use depth=full)");
+            }
+            else
+            {
+                bodyPage = PageFullBody(body, detail, workspaceId, sym, continuation);
+                sb.Append(bodyPage.Text);
+            }
         }
 
         bool refsTruncated =
@@ -1164,6 +1530,27 @@ public sealed class InspectTool
 
             if (depth != InspectDepth.Summary)
             {
+                if (!string.IsNullOrWhiteSpace(continuation))
+                {
+                    var bodyCont = detail is null
+                        ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
+                        : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
+                            detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
+                    ToolOutputPage bodyPageCont = PageFullBody(bodyCont, detail, workspaceId, sym, continuation);
+                    w.WriteString("body", bodyPageCont.Text);
+                    w.WriteNumber("body_start_offset", bodyPageCont.StartOffset);
+                    w.WriteNumber("body_end_offset", bodyPageCont.EndOffset);
+                    w.WriteBoolean("body_truncated", bodyPageCont.Truncated);
+                    if (bodyPageCont.Continuation is null)
+                        w.WriteNull("body_continuation");
+                    else
+                        w.WriteString("body_continuation", bodyPageCont.Continuation);
+
+                    w.WriteEndObject();
+                    w.Flush();
+                    return Utf8(buffer);
+                }
+
                 var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
                 if (complexity is null)
                 {
@@ -1209,8 +1596,11 @@ public sealed class InspectTool
                     ? OverviewChildLimit
                     : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue;
                 IndexedSymbol[] allChildren = index.FindChildren(sym.SymbolId).ToArray();
+                IEnumerable<IndexedSymbol> childSeq = depth == InspectDepth.Overview
+                    ? RankOverviewChildren(allChildren)
+                    : allChildren;
                 w.WritePropertyName("children");
-                WriteSymbolArray(w, allChildren.Take(childLimit));
+                WriteSymbolArray(w, childSeq.Take(childLimit));
                 w.WriteNumber("children_available", allChildren.Length);
                 w.WriteBoolean("children_truncated", allChildren.Length > childLimit);
 
@@ -1320,8 +1710,11 @@ public sealed class InspectTool
                 }
                 else if (body.Text is null && string.IsNullOrWhiteSpace(continuation))
                 {
-                    w.WriteNull("body");
-                    w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
+                    if (!(IsValueDeclaration(sym) && IsCompleteValueDeclaration(sym)))
+                    {
+                        w.WriteNull("body");
+                        w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
+                    }
                 }
                 else
                 {
@@ -1939,7 +2332,7 @@ public sealed class InspectTool
 
     // ---------- candidates ----------
 
-    private static string RenderCandidatesCompact(string target, IReadOnlyList<IndexedSymbol> matches)
+    private static string RenderCandidatesCompact(string target, IReadOnlyList<IndexedSymbol> matches, ISymbolLookupIndex? index = null)
     {
         var sb = new StringBuilder();
         sb.Append(CandidateOutput.Header(
@@ -1947,13 +2340,13 @@ public sealed class InspectTool
             supportsScope: true,
             fallback: "Multiple candidates — pass a more specific target:")).Append('\n');
         foreach (var s in CandidateOutput.Visible(matches))
-            sb.Append(SymbolLine(s)).Append('\n');
+            sb.Append(SymbolLine(s, index)).Append('\n');
         CandidateOutput.AppendRemainderNote(sb, matches.Count);
-        CandidateOutput.AppendRerunExamples(sb, target, matches, supportsScope: true);
+        CandidateOutput.AppendRerunExamples(sb, target, matches, supportsScope: true, index: index);
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string RenderCandidatesJson(string target, IReadOnlyList<IndexedSymbol> matches)
+    private static string RenderCandidatesJson(string target, IReadOnlyList<IndexedSymbol> matches, ISymbolLookupIndex? index = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using var w = NewWriter(buffer);
@@ -1961,7 +2354,7 @@ public sealed class InspectTool
         w.WritePropertyName("candidates");
         WriteSymbolArray(w, matches);
         w.WriteStartArray("rerun_examples");
-        foreach (string example in CandidateOutput.RerunExamples(target, matches, supportsScope: true))
+        foreach (string example in CandidateOutput.RerunExamples(target, matches, supportsScope: true, index: index))
             w.WriteStringValue(example);
         w.WriteEndArray();
         w.WriteEndObject();
@@ -1991,13 +2384,19 @@ public sealed class InspectTool
 
     // ---------- shared rendering helpers ----------
 
-    private static string SymbolLine(IndexedSymbol s)
+    private static string SymbolLine(IndexedSymbol s, ISymbolLookupIndex? index = null)
     {
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine);
         if (SignatureAddsInfo(s))
             sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), ToolRenderLimits.SignatureMaxLength));
+        if (index is not null && !string.IsNullOrEmpty(s.ParentId))
+        {
+            var parent = index.FindBySymbolId(s.ParentId);
+            if (parent is not null)
+                sb.Append("  [parent=").Append(parent.Name).Append(']');
+        }
         return sb.ToString();
     }
 

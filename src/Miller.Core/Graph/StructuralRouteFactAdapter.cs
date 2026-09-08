@@ -65,6 +65,19 @@ internal static class StructuralRouteFactAdapter
         return true;
     }
 
+    public static bool TryReadRouteReferences(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out IReadOnlyList<StructuralRouteReference> references)
+    {
+        references = [];
+        if (!TryReadRouteReference(fact, symbolsById, out var reference))
+            return false;
+
+        references = [reference];
+        return true;
+    }
+
     public static bool TryReadFileRoute(
         StructuralFactRecord fact,
         IReadOnlyDictionary<string, SymbolDetail> symbolsById,
@@ -148,25 +161,61 @@ internal static class StructuralRouteFactAdapter
         out StructuralRouteHandler handler)
     {
         handler = null!;
+        if (TryReadRouteHandlers(fact, symbolsById, out var handlers) && handlers.Count > 0)
+        {
+            handler = handlers[0];
+            return true;
+        }
+        return false;
+    }
+
+    public static bool TryReadRouteHandlers(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out IReadOnlyList<StructuralRouteHandler> handlers)
+    {
+        handlers = [];
         if (!IsRouteHandlerPattern(fact.PatternId))
             return false;
 
         var routePath = MetadataString(fact, "route_path")
-            ?? MetadataString(fact, "normalized_route_template");
+            ?? MetadataString(fact, "normalized_route_template")
+            ?? MetadataString(fact, "route_template");
         if (string.IsNullOrWhiteSpace(routePath))
             return false;
 
         if (IsTestFact(fact, symbolsById))
             return false;
 
-        var verb = MetadataString(fact, "verb");
-        handler = new StructuralRouteHandler(
-            fact,
-            routePath,
-            string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant(),
-            fact.ContainingSymbolId ?? string.Empty,
-            fact.Path,
-            fact.Span.StartLine);
+        var verbs = ReadVerbs(fact);
+        if (verbs.Count == 0)
+        {
+            var verb = MetadataString(fact, "verb");
+            handlers =
+            [
+                new StructuralRouteHandler(
+                    fact,
+                    routePath,
+                    string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant(),
+                    fact.ContainingSymbolId ?? string.Empty,
+                    fact.Path,
+                    fact.Span.StartLine),
+            ];
+            return true;
+        }
+
+        var list = new List<StructuralRouteHandler>(verbs.Count);
+        foreach (var verb in verbs)
+        {
+            list.Add(new StructuralRouteHandler(
+                fact,
+                routePath,
+                verb.Trim().ToUpperInvariant(),
+                fact.ContainingSymbolId ?? string.Empty,
+                fact.Path,
+                fact.Span.StartLine));
+        }
+        handlers = list;
         return true;
     }
 
@@ -190,6 +239,20 @@ internal static class StructuralRouteFactAdapter
         out StructuralRouteHandler handler)
     {
         handler = null!;
+        if (TryReadBackendRoutes(fact, symbolsById, out var handlers) && handlers.Count > 0)
+        {
+            handler = handlers[0];
+            return true;
+        }
+        return false;
+    }
+
+    public static bool TryReadBackendRoutes(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out IReadOnlyList<StructuralRouteHandler> handlers)
+    {
+        handlers = [];
         if (!IsBackendRoutePattern(fact.PatternId))
             return false;
 
@@ -201,21 +264,43 @@ internal static class StructuralRouteFactAdapter
         }
 
         var routePath = MetadataString(fact, "effective_route_template")
-            ?? MetadataString(fact, "normalized_route_template");
+            ?? MetadataString(fact, "normalized_route_template")
+            ?? MetadataString(fact, "route_template");
         if (string.IsNullOrWhiteSpace(routePath))
             return false;
 
         if (IsTestFact(fact, symbolsById))
             return false;
 
-        var verb = MetadataString(fact, "verb");
-        handler = new StructuralRouteHandler(
-            fact,
-            routePath,
-            string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant(),
-            fact.ContainingSymbolId ?? string.Empty,
-            fact.Path,
-            fact.Span.StartLine);
+        var verbs = ReadVerbs(fact);
+        if (verbs.Count == 0)
+        {
+            var verb = MetadataString(fact, "verb");
+            handlers =
+            [
+                new StructuralRouteHandler(
+                    fact,
+                    routePath,
+                    string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant(),
+                    fact.ContainingSymbolId ?? string.Empty,
+                    fact.Path,
+                    fact.Span.StartLine),
+            ];
+            return true;
+        }
+
+        var list = new List<StructuralRouteHandler>(verbs.Count);
+        foreach (var verb in verbs)
+        {
+            list.Add(new StructuralRouteHandler(
+                fact,
+                routePath,
+                verb.Trim().ToUpperInvariant(),
+                fact.ContainingSymbolId ?? string.Empty,
+                fact.Path,
+                fact.Span.StartLine));
+        }
+        handlers = list;
         return true;
     }
 
@@ -311,7 +396,9 @@ internal static class StructuralRouteFactAdapter
         MetadataString(fact, "target_path")
         ?? MetadataString(fact, "attribute_value")
         ?? MetadataString(fact, "normalized_route_template")
-        ?? MetadataString(fact, "route_path");
+        ?? MetadataString(fact, "route_template")
+        ?? MetadataString(fact, "route_path")
+        ?? MetadataString(fact, "route");
 
     private static string? FileRoutePath(StructuralFactRecord fact) =>
         string.Equals(fact.PatternId, RazorPageDirectivePattern, StringComparison.Ordinal)
@@ -339,8 +426,83 @@ internal static class StructuralRouteFactAdapter
             "hx-put" => "PUT",
             "hx-patch" => "PATCH",
             "hx-delete" => "DELETE",
+            "hx-head" => "HEAD",
+            "hx-options" => "OPTIONS",
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Reads individual HTTP verbs or parsed verb arrays (e.g. MapMethods, HEAD, OPTIONS) from fact metadata.
+    /// Supports JSON arrays (["GET", "POST"]), comma/pipe-separated strings, and individual verb fields.
+    /// </summary>
+    public static IReadOnlyList<string> ReadVerbs(StructuralFactRecord fact)
+    {
+        var verbs = new List<string>();
+
+        void AddVerbCandidate(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return;
+
+            raw = raw.Trim();
+            if (raw.StartsWith('[') && raw.EndsWith(']'))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(raw);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var element in doc.RootElement.EnumerateArray())
+                        {
+                            if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+                            {
+                                var v = element.GetString();
+                                if (!string.IsNullOrWhiteSpace(v))
+                                {
+                                    var clean = v.Trim().ToUpperInvariant();
+                                    if (!verbs.Contains(clean))
+                                        verbs.Add(clean);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // Fall back to string splitting below
+                }
+            }
+
+            var parts = raw.Split([',', '|', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var part in parts)
+            {
+                var clean = part.Trim().ToUpperInvariant();
+                if (!string.IsNullOrEmpty(clean) && !verbs.Contains(clean))
+                    verbs.Add(clean);
+            }
+        }
+
+        if (fact.Metadata.TryGetValue("verbs", out var verbsVal))
+            AddVerbCandidate(verbsVal);
+        if (fact.Metadata.TryGetValue("http_methods", out var httpMethodsVal))
+            AddVerbCandidate(httpMethodsVal);
+        if (fact.Metadata.TryGetValue("methods", out var methodsVal))
+            AddVerbCandidate(methodsVal);
+        if (fact.Metadata.TryGetValue("verb", out var verbVal))
+            AddVerbCandidate(verbVal);
+        if (fact.Metadata.TryGetValue("http_method", out var httpMethodVal))
+            AddVerbCandidate(httpMethodVal);
+
+        if (verbs.Count == 0 && string.Equals(fact.PatternId, HtmxAttributePattern, StringComparison.Ordinal))
+        {
+            var htmx = HtmxVerb(fact);
+            if (!string.IsNullOrWhiteSpace(htmx))
+                verbs.Add(htmx.Trim().ToUpperInvariant());
+        }
+
+        return verbs;
     }
 
     public static string? MetadataString(StructuralFactRecord fact, string key)

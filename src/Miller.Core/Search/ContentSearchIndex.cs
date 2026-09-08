@@ -161,9 +161,17 @@ public sealed class ContentSearchIndex
                 continue;
 
             double score = hasTokenPhrase ? rawScore * TokenPhraseBoost : rawScore;
-            BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, plan.QueryTokens);
+            BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, plan.QueryTokens, query);
             if (bestLine.DistinctTermCount < plan.RequiredLineCoverage)
                 continue;
+
+            int tier;
+            if (bestLine.HasLiteral || HasLiteralMatch(entry.Lines, query))
+                tier = 1;
+            else if (matchedTerms >= plan.CoverageTerms.Count)
+                tier = 2;
+            else
+                tier = 3;
 
             hits.Add(new ScoredHit(docId,
                 new ContentSearchHit(
@@ -172,7 +180,8 @@ public sealed class ContentSearchIndex
                     bestLine.Line,
                     bestLine.Snippet,
                     entry.Language,
-                    entry.SourceBytes)));
+                    entry.SourceBytes),
+                tier));
         }
 
         if (hits.Count == 0)
@@ -180,6 +189,8 @@ public sealed class ContentSearchIndex
 
         hits.Sort(static (a, b) =>
         {
+            int byTier = a.Tier.CompareTo(b.Tier);
+            if (byTier != 0) return byTier;
             int byScore = b.Hit.Score.CompareTo(a.Hit.Score);
             return byScore != 0 ? byScore : a.DocId.CompareTo(b.DocId);
         });
@@ -232,14 +243,16 @@ public sealed class ContentSearchIndex
     }
 
     // The line with the most query-term hits (earliest on a tie), plus a ±WindowRadius context
-    // window of raw lines joined by '\n'. Returns a 1-based line number. A token-phrase line wins first;
+    // window of raw lines joined by '\n'. Returns a 1-based line number. A literal or token-phrase line wins first;
     // otherwise a line is scored by distinct query terms, then repeated term hits.
     private static BestLineMatch BestLineAndSnippet(
         string[] lines,
         HashSet<string> coverageTerms,
-        IReadOnlyList<string> queryTokens)
+        IReadOnlyList<string> queryTokens,
+        string rawQuery)
     {
         int bestLine = 0;
+        bool bestHasLiteral = false;
         bool bestHasPhrase = false;
         int bestHits = -1;
         int bestTokenHits = -1;
@@ -261,11 +274,15 @@ public sealed class ContentSearchIndex
                 }
             }
 
+            bool hasLiteral = lines[i].Contains(rawQuery, StringComparison.OrdinalIgnoreCase);
             bool hasPhrase = queryTokens.Count > 1 && ContainsTokenPhrase(tokens, queryTokens);
-            if (hasPhrase && !bestHasPhrase ||
-                hasPhrase == bestHasPhrase &&
-                (lineTerms.Count > bestHits || (lineTerms.Count == bestHits && tokenHits > bestTokenHits)))
+            if (hasLiteral && !bestHasLiteral ||
+                hasLiteral == bestHasLiteral && (
+                    hasPhrase && !bestHasPhrase ||
+                    hasPhrase == bestHasPhrase && (
+                        lineTerms.Count > bestHits || (lineTerms.Count == bestHits && tokenHits > bestTokenHits))))
             {
+                bestHasLiteral = hasLiteral;
                 bestHasPhrase = hasPhrase;
                 bestHits = lineTerms.Count;
                 bestTokenHits = tokenHits;
@@ -276,7 +293,17 @@ public sealed class ContentSearchIndex
         int start = Math.Max(0, bestLine - WindowRadius);
         int end = Math.Min(lines.Length - 1, bestLine + WindowRadius);
         string snippet = string.Join('\n', lines[start..(end + 1)]);
-        return new BestLineMatch(bestLine + 1, snippet, bestHits);
+        return new BestLineMatch(bestLine + 1, snippet, bestHits, bestHasLiteral);
+    }
+
+    private static bool HasLiteralMatch(string[] lines, string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        foreach (string line in lines)
+            if (line.Contains(query, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     // Split on '\n' and drop a trailing '\r' so CRLF files do not leak carriage returns into snippets.
@@ -293,7 +320,7 @@ public sealed class ContentSearchIndex
 
     private readonly record struct DocEntry(string Path, string Language, string[] Lines, long SourceBytes);
 
-    private readonly record struct ScoredHit(int DocId, ContentSearchHit Hit);
+    private readonly record struct ScoredHit(int DocId, ContentSearchHit Hit, int Tier);
 
-    private readonly record struct BestLineMatch(int Line, string Snippet, int DistinctTermCount);
+    private readonly record struct BestLineMatch(int Line, string Snippet, int DistinctTermCount, bool HasLiteral = false);
 }

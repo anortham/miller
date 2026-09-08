@@ -2671,6 +2671,117 @@ public sealed partial class ContextToolTests
     }
 
     [Fact]
+    public void Context_UnmatchedExplicitAnchor_PreventsSufficient()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "GetUser",
+            entry_symbols: ["NonExistentOrderSymbol"],
+            max_hops: 0,
+            token_budget: 2000);
+
+        Assert.Contains("## anchor diagnostics", output, StringComparison.Ordinal);
+        Assert.Contains("entry_symbol  NonExistentOrderSymbol  reason=not_found", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("evidence=sufficient", output, StringComparison.Ordinal);
+        Assert.Contains("evidence=partial", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_BroadDiscoveryQuery_ReturnsPartial()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "GetUser repo",
+            max_hops: 0,
+            token_budget: 2000);
+
+        Assert.DoesNotContain("evidence=sufficient", output, StringComparison.Ordinal);
+        Assert.Contains("evidence=partial", output, StringComparison.Ordinal);
+        Assert.Contains("discovery_implementation_present", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_StackTrace_OutsideWorkspace_EmitsDiagnosticAndPreventsSufficient()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "GetUser",
+            entry_symbols: ["GetUser"],
+            stack_trace: "/usr/lib/dotnet/shared/System.Private.CoreLib.dll:line 100",
+            max_hops: 0,
+            token_budget: 2000);
+
+        Assert.Contains("## anchor diagnostics", output, StringComparison.Ordinal);
+        Assert.Contains("outside_workspace", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("evidence=sufficient", output, StringComparison.Ordinal);
+        Assert.Contains("evidence=partial", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_StackTrace_WindowsPathWithSpaces_RelativizesAndMatches()
+    {
+        const string mockRoot = "C:/My Projects/Repo";
+        string stackTrace = @"   at Auth.UserService.GetUser(int id) in C:\My Projects\Repo\auth\UserService.cs:line 10";
+
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", mockRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "npe",
+            stack_trace: stackTrace,
+            max_hops: 0,
+            token_budget: 2000);
+
+        Assert.Contains("GetUser", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("outside_workspace", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_EditedFiles_InboundCallersAdmittedAsPivots()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextPipelineTestDriver.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "orders",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: ["src/OrderRepo.cs"],
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            json: true,
+            out int selectedCount,
+            out _);
+
+        Assert.Contains("OrderService", output, StringComparison.Ordinal);
+        Assert.Contains("edited_file_caller", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Context_SemanticSeedAnchorsConceptualQueryWhenServed()
     {
         var (index, _) = BuildFixture();

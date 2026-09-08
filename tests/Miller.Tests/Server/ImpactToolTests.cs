@@ -299,7 +299,7 @@ public sealed class ImpactToolTests
         Assert.Contains("Process", output);
         Assert.Contains("method", output);
         Assert.Contains("src/Service.cs:", output);
-        Assert.Contains(":20 Process method hop=1", output);
+        Assert.Contains(":20 Process method [exact] hop=1", output);
     }
 
     [Fact]
@@ -316,15 +316,15 @@ public sealed class ImpactToolTests
             "# traversal\n" +
             "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 graph_returned=5 test_candidates=0 likely_tests=1 test_candidates_truncated=False truncated_by_depth=False truncated_by_limit=False\n" +
             "\n" +
-            "# impacted (4)\n" +
-            "src/Service.cs:\n" +
-            $"  :20 Process method hop=1 via={ValidateId} edge=calls source=relationship\n" +
-            $"  :30 Helper class hop=1 via={ValidateId} edge=uses source=relationship\n" +
-            "low_signal hidden: 2 imports/modules (use format=json for full list.)\n" +
-            "\n" +
             "# likely tests (1)\n" +
             "tests/ServiceTests.cs:\n" +
-            $"  :8 ProcessWorks method hop=1 via={ValidateId} edge=calls source=relationship",
+            "  :8 ProcessWorks method [exact] hop=1 via=Validate edge=calls source=relationship\n" +
+            "\n" +
+            "# impacted (4)\n" +
+            "src/Service.cs:\n" +
+            "  :20 Process method [exact] hop=1 via=Validate edge=calls source=relationship\n" +
+            "  :30 Helper class [exact] hop=1 via=Validate edge=uses source=relationship\n" +
+            "low_signal hidden: 2 imports/modules (use format=json for full list.)",
             output);
         Assert.DoesNotContain("ComponentModel", output);
         Assert.DoesNotContain("Service Module", output);

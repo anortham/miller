@@ -453,8 +453,23 @@ public static partial class ReferenceEvidenceReader
         ReferenceFallbackStatus fallbackStatus;
         if (sameNameDefinitionCount > 1)
         {
-            fallback = Array.Empty<ReferenceEvidence>();
-            fallbackStatus = ReferenceFallbackStatus.SuppressedAmbiguousName;
+            var ambiguousCandidates = fallbackCandidates
+                .Where(r => r.ResolutionStatus == ReferenceResolutionStatus.Ambiguous)
+                .ToList();
+
+            if (ambiguousCandidates.Count > 0)
+            {
+                fallback = ambiguousCandidates
+                    .Skip(query.FallbackOffset)
+                    .Take(query.Bounds.FallbackLimit)
+                    .ToArray();
+                fallbackStatus = ReferenceFallbackStatus.Available;
+            }
+            else
+            {
+                fallback = Array.Empty<ReferenceEvidence>();
+                fallbackStatus = ReferenceFallbackStatus.SuppressedAmbiguousName;
+            }
         }
         else
         {
@@ -674,15 +689,47 @@ public static partial class ReferenceEvidenceReader
     }
 
 
-    private static List<ReferenceEvidence> Deduplicate(IEnumerable<ReferenceEvidence> rows) =>
+    internal static bool IsSpanned(ReferenceEvidence row) =>
+        (row.StartByte.HasValue && row.EndByte.HasValue) ||
+        (row.StartLine.HasValue && row.StartColumn.HasValue);
+
+    private static bool IsOutgoingSpanned(OutgoingReferenceEvidence row) =>
+        (row.StartByte.HasValue && row.EndByte.HasValue) ||
+        (row.StartLine.HasValue && row.StartColumn.HasValue);
+
+    internal static List<ReferenceEvidence> Deduplicate(IEnumerable<ReferenceEvidence> rows) =>
         WithoutRedundantSpanlessRows(
             rows.GroupBy(SiteKey)
-                .Select(group => group
-                    .OrderBy(row => SourcePrecedence(row.Source))
-                    .ThenByDescending(row => row.Confidence)
-                    .ThenBy(row => row.ContainingSymbolId, StringComparer.Ordinal)
-                    .First()),
-            row => row.IsExact,
+                .Select(group =>
+                {
+                    ReferenceEvidence best = group
+                        .OrderBy(row => SourcePrecedence(row.Source))
+                        .ThenByDescending(row => row.Confidence)
+                        .ThenBy(row => row.ContainingSymbolId, StringComparer.Ordinal)
+                        .First();
+
+                    var allProvenances = group
+                        .SelectMany(r => r.Provenances ?? (r.SiteProvenance is null ? [] : [r.SiteProvenance]))
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+
+                    string combinedProvenance = allProvenances.Length > 0
+                        ? string.Join("+", allProvenances)
+                        : best.SiteProvenance;
+
+                    var allCandidateTargets = group
+                        .Select(r => r.CandidateTargetIds)
+                        .FirstOrDefault(c => c is { Count: > 0 }) ?? best.CandidateTargetIds;
+
+                    return best with
+                    {
+                        SiteProvenance = combinedProvenance,
+                        Provenances = allProvenances.Length > 0 ? allProvenances : best.Provenances,
+                        CandidateTargetIds = allCandidateTargets,
+                    };
+                }),
+            IsSpanned,
             row => new SpanlessCoverageKey(row.FilePath, row.ContainingSymbolId, row.TargetSymbolId, row.Kind))
             .OrderBy(row => row.FilePath, StringComparer.Ordinal)
             .ThenBy(row => row.StartByte ?? long.MaxValue)
@@ -715,13 +762,37 @@ public static partial class ReferenceEvidenceReader
         IEnumerable<OutgoingReferenceEvidence> rows) =>
         WithoutRedundantSpanlessRows(
             rows.GroupBy(OutgoingSiteKey)
-                .Select(group => group
-                    .OrderBy(row => SourcePrecedence(row.Source))
-                    .ThenByDescending(row => row.Confidence)
-                    .ThenBy(row => row.TargetSymbolId, StringComparer.Ordinal)
-                    .ThenBy(row => row.TargetName, StringComparer.Ordinal)
-                    .First()),
-            row => row.IsExact,
+                .Select(group =>
+                {
+                    OutgoingReferenceEvidence best = group
+                        .OrderBy(row => SourcePrecedence(row.Source))
+                        .ThenByDescending(row => row.Confidence)
+                        .ThenBy(row => row.TargetSymbolId, StringComparer.Ordinal)
+                        .ThenBy(row => row.TargetName, StringComparer.Ordinal)
+                        .First();
+
+                    var allProvenances = group
+                        .SelectMany(r => r.Provenances ?? (r.SiteProvenance is null ? [] : [r.SiteProvenance]))
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+
+                    string combinedProvenance = allProvenances.Length > 0
+                        ? string.Join("+", allProvenances)
+                        : best.SiteProvenance;
+
+                    var allCandidateTargets = group
+                        .Select(r => r.CandidateTargetIds)
+                        .FirstOrDefault(c => c is { Count: > 0 }) ?? best.CandidateTargetIds;
+
+                    return best with
+                    {
+                        SiteProvenance = combinedProvenance,
+                        Provenances = allProvenances.Length > 0 ? allProvenances : best.Provenances,
+                        CandidateTargetIds = allCandidateTargets,
+                    };
+                }),
+            IsOutgoingSpanned,
             row => new SpanlessCoverageKey(row.FilePath, row.ContainingSymbolId, row.TargetSymbolId, row.Kind))
             .OrderBy(row => row.FilePath, StringComparer.Ordinal)
             .ThenBy(row => row.StartByte ?? long.MaxValue)
@@ -738,30 +809,35 @@ public static partial class ReferenceEvidenceReader
         kind is null ? rows : rows.Where(row => row.Kind == kind.Value).ToList();
 
     /// <summary>
-    /// Drops spanless rows that only restate a binding a spanned row already covers, after site-identity
-    /// deduplication has run. Available counts and the rows themselves are one logical reference per occurrence;
-    /// <c>ExactObserved</c> keeps the raw row total.
+    /// Drops spanless rows that only restate a binding a spanned row already covers uniquely, after
+    /// token-span deduplication has run.
     /// </summary>
-    /// <remarks>
-    /// julie-extract emits a schema-5 spanless pending row alongside the spanned identifier
-    /// row for the same occurrence, under its own <c>reference_site_spanless-</c> identity, so site-identity
-    /// deduplication cannot collapse the pair and every consumer counted one call twice. A spanless row with no
-    /// spanned row at the same file, containing symbol, target, and kind is the only evidence that occurrence
-    /// has, so it is kept and still reported as spanless.
-    /// </remarks>
     private static IEnumerable<T> WithoutRedundantSpanlessRows<T>(
         IEnumerable<T> deduplicated,
         Func<T, bool> isSpanned,
         Func<T, SpanlessCoverageKey> coverageKey)
     {
         var rows = deduplicated as IReadOnlyList<T> ?? deduplicated.ToArray();
-        var covered = rows.Where(isSpanned).Select(coverageKey).ToHashSet();
-        return rows.Where(row => isSpanned(row) || !covered.Contains(coverageKey(row)));
+        var spannedCounts = new Dictionary<SpanlessCoverageKey, int>();
+        foreach (T row in rows.Where(isSpanned))
+        {
+            SpanlessCoverageKey key = coverageKey(row);
+            spannedCounts[key] = spannedCounts.GetValueOrDefault(key) + 1;
+        }
+
+        // Collapse spanless row ONLY when containing symbol and kind agree uniquely (count == 1)
+        return rows.Where(row => isSpanned(row) || spannedCounts.GetValueOrDefault(coverageKey(row)) != 1);
     }
 
-    private static ReferenceSiteKey SiteKey(ReferenceEvidence row) => new(row.ReferenceSiteId, row.TargetSymbolId, row.Kind);
+    private static ReferenceSiteKey SiteKey(ReferenceEvidence row) =>
+        IsSpanned(row)
+            ? new ReferenceSiteKey(row.FilePath, row.TargetSymbolId, row.Kind, row.StartByte, row.EndByte, row.StartLine, row.StartColumn, null)
+            : new ReferenceSiteKey(row.FilePath, row.TargetSymbolId, row.Kind, null, null, null, null, row.ReferenceSiteId);
 
-    private static OutgoingReferenceSiteKey OutgoingSiteKey(OutgoingReferenceEvidence row) => new(row.ReferenceSiteId, row.TargetSymbolId, row.TargetName, row.Kind);
+    private static OutgoingReferenceSiteKey OutgoingSiteKey(OutgoingReferenceEvidence row) =>
+        IsOutgoingSpanned(row)
+            ? new OutgoingReferenceSiteKey(row.FilePath, row.ContainingSymbolId, row.TargetSymbolId, row.TargetName, row.Kind, row.StartByte, row.EndByte, row.StartLine, row.StartColumn, null)
+            : new OutgoingReferenceSiteKey(row.FilePath, row.ContainingSymbolId, row.TargetSymbolId, row.TargetName, row.Kind, null, null, null, null, row.ReferenceSiteId);
 
     private static int SourcePrecedence(ReferenceEvidenceSource source) => source switch
     {
@@ -1042,15 +1118,26 @@ public static partial class ReferenceEvidenceReader
         ReferenceKind Kind);
 
     private readonly record struct ReferenceSiteKey(
-        string ReferenceSiteId,
+        string FilePath,
         string? TargetSymbolId,
-        ReferenceKind Kind);
+        ReferenceKind Kind,
+        long? StartByte,
+        long? EndByte,
+        int? StartLine,
+        int? StartColumn,
+        string? FallbackSiteId);
 
     private readonly record struct OutgoingReferenceSiteKey(
-        string ReferenceSiteId,
+        string FilePath,
+        string ContainingSymbolId,
         string? TargetSymbolId,
         string TargetName,
-        ReferenceKind Kind);
+        ReferenceKind Kind,
+        long? StartByte,
+        long? EndByte,
+        int? StartLine,
+        int? StartColumn,
+        string? FallbackSiteId);
 
     private readonly record struct ReferenceEvidenceTargetInfo(
         string Name,

@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
+using Miller.Testing.Daemon;
 
 namespace Miller.Server.Tools;
 
@@ -72,7 +73,8 @@ public sealed record WorkspaceHealthFacts(
     HealthState State,
     string Summary,
     LeaderHealthFacts? Leader = null,
-    MetricHistoryStatus? History = null)
+    MetricHistoryStatus? History = null,
+    CtDiskAccountingSnapshot? CtDisk = null)
 {
     public static WorkspaceHealthFacts Create(
         WorkspaceFacts statusFacts,
@@ -80,11 +82,13 @@ public sealed record WorkspaceHealthFacts(
         TelemetryHealthFacts telemetryHealth,
         WorkspaceExtractionHealthFacts extraction,
         LeaderHealthFacts? leader = null,
-        MetricHistoryStatus? history = null)
+        MetricHistoryStatus? history = null,
+        CtDiskAccountingSnapshot? ctDisk = null)
     {
         var warnings = new List<HealthWarning>();
         var recommended = new List<string>();
 
+        // 1. Availability / corruption
         if (statusFacts.Store?.Wal is { NeedsWarning: true } wal)
         {
             string storeBytes = wal.StoreBytes?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
@@ -95,6 +99,71 @@ public sealed record WorkspaceHealthFacts(
             recommended.Add("run workspace refresh to retry WAL cleanup; if debt persists, inspect checkpoint logs and long-lived readers; never delete a live WAL");
         }
 
+        if (statusFacts.Store?.Maintenance is { } maintenance)
+        {
+            if (!maintenance.IsAvailable)
+            {
+                warnings.Add(new HealthWarning(
+                    "store_maintenance_unavailable",
+                    "usable_with_warnings",
+                    $"family store maintenance inspection unavailable: {maintenance.ErrorMessage ?? maintenance.FailureClass}"));
+                recommended.Add("retry store maintenance inspection when the store is idle");
+            }
+            else
+            {
+                if (maintenance.Retention?.CompactionRequired == true)
+                {
+                    warnings.Add(new HealthWarning(
+                        "store_compaction_required",
+                        "usable_with_warnings",
+                        $"family store compaction required: physical allocated {maintenance.Retention.PhysicalCurrentBytes} bytes exceeds target {maintenance.Retention.PhysicalTargetBytes} bytes (streak {maintenance.Retention.PhysicalBreachStreak}/{maintenance.Retention.PhysicalBreachLimit})"));
+                    recommended.Add("run store maintenance compaction to reclaim physical space; check for long-lived reader pins");
+                }
+
+                if (maintenance.Retention?.Pressure == true)
+                {
+                    warnings.Add(new HealthWarning(
+                        "store_retention_pressure",
+                        "usable_with_warnings",
+                        $"family store retention pressure: retained logical {maintenance.Retention.RetainedLogicalBytes} bytes exceeds target {maintenance.Retention.TargetBytes} bytes"));
+                    recommended.Add("run store maintenance gc or retire inactive views");
+                }
+            }
+        }
+
+        CtDiskAccountingSnapshot? effectiveCtDisk = ctDisk ?? statusFacts.CtDisk;
+        if (effectiveCtDisk is { OverBudget: true })
+        {
+            warnings.Add(new HealthWarning(
+                "ct_generation_disk_over_budget",
+                "usable_with_warnings",
+                $"continuous testing generation disk over budget: {effectiveCtDisk.TotalAllocatedBytes} bytes allocated exceeds budget {effectiveCtDisk.BudgetBytes} bytes (evaluated {effectiveCtDisk.EvaluatedAt:u})"));
+            recommended.Add("run tests maintenance or prune older build generation roots under .miller/ct-*");
+        }
+
+        if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
+            warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
+        if (statusFacts.IndexFresh == false)
+            warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "search_sidecar",
+            statusFacts.SearchSidecar?.State,
+            statusFacts.SearchSidecar?.Error);
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "content_corpus",
+            statusFacts.ContentCorpus?.State,
+            statusFacts.ContentCorpus?.Error);
+        AddVectorWarnings(warnings, recommended, statusFacts.Vectors, statusFacts.IsLeader);
+        AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
+
+        // 2. Leader / version
+        AddLeaderWarnings(warnings, recommended, statusFacts, leader);
+
+        // 3. Capability summaries & telemetry
         long openCapabilityGaps = extraction.CapabilityGaps.Rows
                 .Where(static row => string.Equals(row.Status, "open", StringComparison.Ordinal))
             .Sum(static row => row.Count);
@@ -129,27 +198,6 @@ public sealed record WorkspaceHealthFacts(
             "complexity_metrics_unavailable");
         AddUnavailableSectionWarnings(warnings, extraction.Files.Available, extraction.Files.Error, "files_unavailable");
 
-        if (statusFacts.IndexFresh == false)
-            warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
-        if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
-            warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
-        AddVectorWarnings(warnings, recommended, statusFacts.Vectors, statusFacts.IsLeader);
-        AddSidecarWarning(
-            warnings,
-            recommended,
-            "search_sidecar",
-            statusFacts.SearchSidecar?.State,
-            statusFacts.SearchSidecar?.Error);
-        AddSidecarWarning(
-            warnings,
-            recommended,
-            "content_corpus",
-            statusFacts.ContentCorpus?.State,
-            statusFacts.ContentCorpus?.Error);
-        AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
-
-        AddLeaderWarnings(warnings, recommended, statusFacts, leader);
-
         if (telemetryHealth.ErrorCount > 0)
         {
             warnings.Add(new HealthWarning(
@@ -179,7 +227,8 @@ public sealed record WorkspaceHealthFacts(
             state,
             summary,
             leader,
-            history);
+            history,
+            effectiveCtDisk);
     }
 
     public static string StateName(HealthState state) => state switch

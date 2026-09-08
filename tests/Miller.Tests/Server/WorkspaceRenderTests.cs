@@ -7,6 +7,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
+using Miller.Testing.Daemon;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -351,16 +352,13 @@ public sealed class WorkspaceRenderTests
         JsonElement statusJson = Json(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
         JsonElement healthJson = Json(WorkspaceRender.Health(HealthFacts(facts), json: true));
 
-        const string expected =
-            "store: family=11111111-1111-4111-8111-111111111111  view=view-worktree  " +
-            "generation=7  manifest=blake3:manifest  sequence=91  level=full  " +
-            "migration=legacy_preserved  rollback=available";
+        const string expected = "store: state=ready  level=full  generation=7  members=6";
         Assert.Contains(expected, compact);
         Assert.Contains(expected, healthCompact);
         Assert.DoesNotContain("resolution=", compact);
         Assert.DoesNotContain("resolution=", healthCompact);
-        Assert.Contains("root=/family/store", compact);
-        Assert.Contains("members=alpha-111111111111,bravo-222222222222 (+4 more)", compact);
+        Assert.DoesNotContain("family=", compact);
+        Assert.DoesNotContain("view=", compact);
         Assert.Equal("view-worktree", statusJson.GetProperty("store").GetProperty("view_id").GetString());
         Assert.Equal("/family/store", statusJson.GetProperty("store").GetProperty("store_root").GetString());
         Assert.Equal(6, statusJson.GetProperty("store").GetProperty("member_count").GetInt32());
@@ -1561,14 +1559,51 @@ public sealed class WorkspaceRenderTests
 
         string compact = WorkspaceRender.Health(health, WorkspaceHealthFormat.Compact);
 
-        Assert.Contains("omitted: groups=6 unavailable=0 rows=6 warnings=2 actions=2", compact);
+        Assert.Contains("omitted: groups=6 unavailable=0 rows=6 warnings=0 actions=0", compact);
         Assert.Contains("first warning", compact);
         Assert.Contains("first action", compact);
-        Assert.DoesNotContain("second warning", compact);
-        Assert.DoesNotContain("second action", compact);
+        Assert.Contains("second warning", compact);
+        Assert.Contains("second action", compact);
+        Assert.Contains("third warning", compact);
+        Assert.Contains("third action", compact);
         Assert.DoesNotContain(new string('x', 241), compact);
         Assert.DoesNotContain(new string('y', 241), compact);
-        Assert.True(compact.Split('\n').Length <= 14);
+        Assert.True(compact.Split('\n').Length <= 18);
+    }
+
+    [Fact]
+    public void Health_Compact_OmitsBeyondThreeWarningsAndActions()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings:
+            [
+                new HealthWarning("w1", "degraded", "warning 1"),
+                new HealthWarning("w2", "degraded", "warning 2"),
+                new HealthWarning("w3", "degraded", "warning 3"),
+                new HealthWarning("w4", "degraded", "warning 4"),
+                new HealthWarning("w5", "degraded", "warning 5"),
+            ],
+            RecommendedActions: ["action 1", "action 2", "action 3", "action 4", "action 5"],
+            State: HealthState.Degraded,
+            Summary: "workspace readable but degraded");
+
+        string compact = WorkspaceRender.Health(health, WorkspaceHealthFormat.Compact);
+
+        Assert.Contains("omitted: groups=6 unavailable=0 rows=6 warnings=2 actions=2", compact);
+        Assert.Contains("warning 1", compact);
+        Assert.Contains("warning 2", compact);
+        Assert.Contains("warning 3", compact);
+        Assert.DoesNotContain("warning 4", compact);
+        Assert.DoesNotContain("warning 5", compact);
+        Assert.Contains("action 1", compact);
+        Assert.Contains("action 2", compact);
+        Assert.Contains("action 3", compact);
+        Assert.DoesNotContain("action 4", compact);
+        Assert.DoesNotContain("action 5", compact);
     }
 
     [Fact]
@@ -1989,11 +2024,57 @@ public sealed class WorkspaceRenderTests
                 LastSeenAt: now.AddMinutes(-2)),
         };
 
-        string text = WorkspaceRender.List(rows, json: false, limit: 2);
+        // limit 5 => floor(5/4) = 1 pinned error slot
+        string text = WorkspaceRender.List(rows, json: false, limit: 5);
 
         Assert.Contains("user-relief-2026-08-11-7d6756cc5362", text);
         Assert.Contains("error: store failed", text);
         Assert.DoesNotContain("workspace(s) in error state", text);
+    }
+
+    [Fact]
+    public void List_Compact_NamesOmittedErrorRowsWhenBelowFour()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-ready",
+                DisplayId: "ready-111111111111",
+                Root: "/repo/ready",
+                DbPath: "/repo/ready/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 3,
+                Current: false,
+                LastError: null,
+                LastSeenAt: now),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-ready-2",
+                DisplayId: "ready-222222222222",
+                Root: "/repo/ready-2",
+                DbPath: "/repo/ready-2/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 2,
+                Current: false,
+                LastError: null,
+                LastSeenAt: now.AddMinutes(-1)),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-error",
+                DisplayId: "user-relief-2026-08-11-7d6756cc5362",
+                Root: "/repo/broken",
+                DbPath: "/repo/broken/.miller/symbols.db",
+                State: "error",
+                LastRevision: 1,
+                Current: false,
+                LastError: "store failed",
+                LastSeenAt: now.AddMinutes(-2)),
+        };
+
+        // limit 2 => below 4 => pure recency, oldest error is omitted
+        string text = WorkspaceRender.List(rows, json: false, limit: 2);
+
+        Assert.DoesNotContain("user-relief-2026-08-11-7d6756cc5362", text);
+        Assert.Contains("errors: 1 workspace(s) in error state — filter or raise limit to see them", text);
     }
 
     [Fact]
@@ -2589,5 +2670,174 @@ public sealed class WorkspaceRenderTests
                 Facts() with { Store = StoreFacts() with { Queue = loud } },
                 TelemetrySummary.Empty,
                 json: false));
+    }
+
+    [Fact]
+    public void Prune_RendersIndependentCounts_RetirementOwedAndBlocked()
+    {
+        var result = new WorkspacePruneResult(
+            DryRun: false,
+            Pruned: [new WorkspacePruneEntry("ws-gone-0001", "gone-repo", "/gone/repo")],
+            Kept: 2,
+            SidecarReclaim: default,
+            StoreMaintenance: default,
+            RetirementFailures: [],
+            RetirementOwed: 1,
+            BlockedEntries:
+            [
+                new WorkspacePruneBlockedEntry(
+                    "ws-blocked-0001",
+                    "blocked-repo",
+                    "/blocked/repo",
+                    "unconfirmed_worktree_removal",
+                    "linked-worktree removal is not confirmed",
+                    "workspace remove path=/blocked/repo"),
+            ]);
+
+        string compact = WorkspaceRender.Prune(result, json: false);
+        Assert.Contains("pruned: 1", compact);
+        Assert.Contains("kept: 2", compact);
+        Assert.Contains("retirement owed: 1", compact);
+        Assert.Contains("blocked: 1", compact);
+        Assert.Contains("blocked entries: 1", compact);
+        Assert.Contains("unconfirmed_worktree_removal", compact);
+        Assert.Contains("workspace remove path=/blocked/repo", compact);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Prune(result, json: true));
+        Assert.Equal(1, doc.RootElement.GetProperty("pruned_total").GetInt32());
+        Assert.Equal(2, doc.RootElement.GetProperty("kept").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("retirement_owed").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("blocked").GetInt32());
+        JsonElement blockedEntries = doc.RootElement.GetProperty("blocked_entries");
+        Assert.Equal(1, blockedEntries.GetArrayLength());
+        Assert.Equal("ws-blocked-0001", blockedEntries[0].GetProperty("workspace_id").GetString());
+        Assert.Equal("unconfirmed_worktree_removal", blockedEntries[0].GetProperty("reason_code").GetString());
+        Assert.Equal("workspace remove path=/blocked/repo", blockedEntries[0].GetProperty("suggested_action").GetString());
+    }
+
+    [Fact]
+    public void Status_And_Health_RendersStoreMaintenanceAndCtDiskFacts()
+    {
+        var maintenance = new StoreMaintenanceReport(
+            Action: "inspect",
+            Mode: "plan",
+            Disposition: "ok",
+            FailureClass: "none",
+            ErrorCode: null,
+            ErrorMessage: null,
+            IsAvailable: true,
+            MeasuredAt: DateTimeOffset.Parse("2026-09-07T12:00:00Z"),
+            Retention: new StoreRetentionReport(
+                RetainedLogicalBytes: 75_000_000,
+                TargetBytes: 50_000_000,
+                CeilingBytes: 100_000_000,
+                Pressure: true,
+                PhysicalCurrentBytes: 145_000_000,
+                PhysicalBaselineBytes: 80_000_000,
+                PhysicalTargetBytes: 100_000_000,
+                PhysicalCeilingBytes: 200_000_000,
+                PhysicalTargetBreached: true,
+                PhysicalCeilingBreached: false,
+                PhysicalBreachLimit: 5,
+                PhysicalBreachStreak: 6,
+                CompactionRequired: true),
+            Capacity: new StoreCapacityReport(
+                MeasuredBytes: 95_000_000,
+                FreeBytes: 5_000_000,
+                StorePageBytes: 4096,
+                StoreFreelistBytes: 0,
+                StoreWalBytes: 1_000_000,
+                StagedGenerationBytes: 500_000,
+                GcFits: true,
+                PromotionFits: true),
+            Readers: new StoreReaderSummary(
+                ProtectedReaderCount: 2,
+                DefinitivelyDeadReaderCount: 0,
+                RetainedUnknownReaderCount: 1,
+                RemovedReaderCount: 0,
+                ReaderWarnings: [new StoreReaderWarning("pin-1", "long_lived_pin")]),
+            BlockedReasons: ["compaction_required"],
+            RecoveryActions: ["run store maintenance compaction"],
+            PrunedRequestRows: 0);
+
+        var ctDisk = new CtDiskAccountingSnapshot(
+            TotalAllocatedBytes: 150_000_000,
+            BudgetBytes: 100_000_000,
+            OverBudget: true,
+            FullyMeasured: true,
+            EvaluatedAt: DateTimeOffset.Parse("2026-09-07T12:00:00Z"),
+            RootsTotal: 3,
+            RootsMeasured: 3,
+            ReapDebtBytes: 10_000_000,
+            State: "over_budget");
+
+        WorkspaceFacts facts = Facts() with
+        {
+            Store = StoreFacts() with { Maintenance = maintenance },
+            CtDisk = ctDisk,
+        };
+
+        // Compact Status
+        string compactStatus = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+        Assert.Contains("physical=145000000", compactStatus);
+        Assert.Contains("logical=75000000", compactStatus);
+        Assert.Contains("compaction_required", compactStatus);
+        Assert.Contains("status=OVER_BUDGET", compactStatus);
+        Assert.Contains("allocated=150000000", compactStatus);
+
+        // JSON Status
+        using var statusDoc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement storeMaint = statusDoc.RootElement.GetProperty("store").GetProperty("maintenance");
+        Assert.True(storeMaint.GetProperty("is_available").GetBoolean());
+        Assert.True(storeMaint.GetProperty("retention").GetProperty("compaction_required").GetBoolean());
+        Assert.Equal(145_000_000, storeMaint.GetProperty("retention").GetProperty("physical_current_bytes").GetInt64());
+        JsonElement ctDiskJson = statusDoc.RootElement.GetProperty("ct_generation_disk");
+        Assert.True(ctDiskJson.GetProperty("over_budget").GetBoolean());
+        Assert.Equal(150_000_000, ctDiskJson.GetProperty("total_allocated_bytes").GetInt64());
+
+        // Health Warnings
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            facts,
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(0, 0, 0),
+            ExtractionHealth(),
+            ctDisk: ctDisk);
+
+        Assert.Contains(health.Warnings, w => w.Code == "store_compaction_required");
+        Assert.Contains(health.Warnings, w => w.Code == "store_retention_pressure");
+        Assert.Contains(health.Warnings, w => w.Code == "ct_generation_disk_over_budget");
+    }
+
+    [Fact]
+    public void WorkspaceHealthFacts_WhenMaintenanceUnavailable_EmitsUnavailableWarning()
+    {
+        var maintenance = new StoreMaintenanceReport(
+            Action: "inspect",
+            Mode: "plan",
+            Disposition: "failed",
+            FailureClass: "stale_plan",
+            ErrorCode: "stale_plan",
+            ErrorMessage: "coordinator queue changed",
+            IsAvailable: false,
+            MeasuredAt: DateTimeOffset.UtcNow,
+            Retention: null,
+            Capacity: null,
+            Readers: null,
+            BlockedReasons: [],
+            RecoveryActions: [],
+            PrunedRequestRows: 0);
+
+        WorkspaceFacts facts = Facts() with
+        {
+            Store = StoreFacts() with { Maintenance = maintenance },
+        };
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            facts,
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(0, 0, 0),
+            ExtractionHealth());
+
+        Assert.Contains(health.Warnings, w => w.Code == "store_maintenance_unavailable");
     }
 }

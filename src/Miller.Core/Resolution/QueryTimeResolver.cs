@@ -25,6 +25,7 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
 
         bool attempted = false;
         int? firstAmbiguousCount = null;
+        IReadOnlyList<string>? firstAmbiguousTargetIds = null;
         foreach (ResolutionTier tier in chain)
         {
             if (tier == ResolutionTier.Import && !ResolutionPolicy.IsTier2Language(input.Language))
@@ -49,12 +50,15 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
                     ResolutionPolicy.TierMethod(tier));
             }
 
-            if (acc.Count > 1)
-                firstAmbiguousCount ??= acc.Count;
+            if (acc.Count > 1 && firstAmbiguousCount is null)
+            {
+                firstAmbiguousCount = acc.Count;
+                firstAmbiguousTargetIds = acc.Keys.Select(k => k.SymbolId).Distinct(StringComparer.Ordinal).ToArray();
+            }
         }
 
         return firstAmbiguousCount is { } count
-            ? ResolutionOutcome.Ambiguous(count)
+            ? ResolutionOutcome.Ambiguous(count, firstAmbiguousTargetIds)
             : attempted ? ResolutionOutcome.Missing : ResolutionOutcome.NoContext;
     }
 
@@ -71,7 +75,9 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
         if (visible.Count == 0)
             return ResolutionOutcome.Missing;
         if (visible.Count > 1)
-            return ResolutionOutcome.Ambiguous(visible.Count);
+            return ResolutionOutcome.Ambiguous(
+                visible.Count,
+                visible.Select(v => v.Target.SymbolId).Distinct(StringComparer.Ordinal).ToArray());
 
         QmlVisibleType candidate = visible[0];
         bool local = QmlVisibilityPolicy.ScopeStrength(candidate, request) <= 1;

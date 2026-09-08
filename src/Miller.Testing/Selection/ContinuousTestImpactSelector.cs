@@ -172,15 +172,6 @@ public sealed class ContinuousTestImpactSelector
             testCaseBySymbolId,
             testCases,
             evidence);
-        unmappableEvidence |= AddIdentifierReferenceEvidence(
-            impactedSymbolIds,
-            symbolById,
-            testCaseBySymbolId,
-            testCases,
-            evidence);
-        AddPathStemEvidence(request, changedFiles, testCases, evidence);
-
-        List<ContinuousTestSelectionEvidence> ranked = RankEvidence(evidence);
 
         // Fail-closed gate. A truncated impact read means an incomplete blast radius; unmappable
         // evidence means the read named an impacted test this project knows but cannot run; an
@@ -197,6 +188,26 @@ public sealed class ContinuousTestImpactSelector
             || HasInvalidFileEvidence(changedFiles)
             || HasUnaccountedChangedPath(request, changedFileSymbols, changedFiles, testCases);
         if (unknown)
+        {
+            List<ContinuousTestSelectionEvidence> earlyRanked = RankEvidence(evidence);
+            string[] allIds = testCases
+                .Select(row => row.Id)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            return new ContinuousTestSelectionResult([], allIds, earlyRanked, ContinuousTestSelectionOutcome.Unknown);
+        }
+
+        unmappableEvidence |= AddIdentifierReferenceEvidence(
+            impactedSymbolIds,
+            symbolById,
+            testCaseBySymbolId,
+            testCases,
+            evidence);
+        AddPathStemEvidence(request, changedFiles, testCases, evidence);
+
+        List<ContinuousTestSelectionEvidence> ranked = RankEvidence(evidence);
+
+        if (unmappableEvidence)
         {
             string[] allIds = testCases
                 .Select(row => row.Id)

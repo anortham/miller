@@ -70,6 +70,23 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void ReadInboundExact_UsesReverseDirection_AndRecordsNoForwardPasses()
+    {
+        using ResolutionStoreFixture fixture = PopulateStore();
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        int initialForward = reader.Counters.ForwardPasses;
+        int initialReverse = reader.Counters.ReversePasses;
+
+        Dictionary<string, List<ReferenceEvidence>> exact = reader.ReadInboundExact(connection, [Run, Helper]);
+
+        Assert.NotEmpty(exact);
+        Assert.Equal(initialForward, reader.Counters.ForwardPasses);
+        Assert.True(reader.Counters.ReversePasses > initialReverse);
+    }
+
+    [Fact]
     public void FamilyStoreExportRowsMatchRetiredSqlLiterals()
     {
         using ResolutionStoreFixture fixture = PopulateStore();

@@ -38,6 +38,19 @@ public sealed class PatternsTool
         "attribute_name",
         "directive",
         "key",
+        "value",
+        "route_target",
+        "url",
+        "href",
+        "target",
+        "endpoint",
+        "framework",
+        "query_family",
+        "api_style",
+    ];
+
+    private static readonly string[] SchemaConstantKeys =
+    [
         "framework",
         "query_family",
         "api_style",
@@ -1202,7 +1215,20 @@ public sealed class PatternsTool
         string activeFilters = ActiveFiltersCompact(path, language, metadataFilters);
         if (activeFilters.Length > 0)
             sb.Append("active filters: ").Append(activeFilters).Append('\n');
-        AppendMatchGroups(sb, rows, metadataFilters);
+        var uniformConstants = ResolveUniformSchemaConstants(rows);
+        if (uniformConstants.Count > 0)
+        {
+            sb.Append("constants (page): ")
+              .Append(string.Join(",", uniformConstants.Select(static c => c.Key + "=" + c.Value)))
+              .Append('\n');
+        }
+        AppendMatchGroups(
+            sb,
+            rows,
+            metadataFilters,
+            uniformConstants.Count > 0
+                ? uniformConstants.Select(static c => c.Key).ToHashSet(StringComparer.Ordinal)
+                : null);
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
     }
@@ -1241,10 +1267,74 @@ public sealed class PatternsTool
         {
             if (filters.Length > 0)
                 sb.Append("active filters: ").Append(filters).Append('\n');
-            AppendMatchGroups(sb, rows, metadataFilters);
+            var uniformConstants = ResolveUniformSchemaConstants(rows);
+            if (uniformConstants.Count > 0)
+            {
+                sb.Append("constants (page): ")
+                  .Append(string.Join(",", uniformConstants.Select(static c => c.Key + "=" + c.Value)))
+                  .Append('\n');
+            }
+            AppendMatchGroups(
+                sb,
+                rows,
+                metadataFilters,
+                uniformConstants.Count > 0
+                    ? uniformConstants.Select(static c => c.Key).ToHashSet(StringComparer.Ordinal)
+                    : null);
         }
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
+    }
+
+    private static IReadOnlyList<(string Key, string Value)> ResolveUniformSchemaConstants(
+        IReadOnlyList<PatternMatchRow> rows)
+    {
+        if (rows.Count == 0)
+            return [];
+
+        var uniform = new List<(string Key, string Value)>();
+        foreach (string key in SchemaConstantKeys)
+        {
+            string? firstValue = null;
+            bool isUniform = true;
+
+            foreach (PatternMatchRow row in rows)
+            {
+                if (row.Metadata.ValueKind != JsonValueKind.Object ||
+                    !row.Metadata.TryGetProperty(key, out JsonElement element))
+                {
+                    isUniform = false;
+                    break;
+                }
+
+                string value = element.ValueKind == JsonValueKind.String
+                    ? element.GetString() ?? string.Empty
+                    : element.GetRawText();
+
+                if (string.IsNullOrEmpty(value))
+                {
+                    isUniform = false;
+                    break;
+                }
+
+                if (firstValue is null)
+                {
+                    firstValue = value;
+                }
+                else if (!string.Equals(firstValue, value, StringComparison.Ordinal))
+                {
+                    isUniform = false;
+                    break;
+                }
+            }
+
+            if (isUniform && firstValue is not null)
+            {
+                uniform.Add((key, firstValue));
+            }
+        }
+
+        return uniform;
     }
 
     private static void AppendMatchTruncationCompact(
@@ -1490,7 +1580,8 @@ public sealed class PatternsTool
     private static void AppendMatchGroups(
         StringBuilder sb,
         IReadOnlyList<PatternMatchRow> rows,
-        IReadOnlyList<PatternMetadataFilter> metadataFilters)
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        HashSet<string>? hoistedKeys = null)
     {
         foreach (IGrouping<string, PatternMatchRow> group in rows.GroupBy(static row => row.Path, StringComparer.Ordinal))
         {
@@ -1504,7 +1595,7 @@ public sealed class PatternsTool
                   .Append(' ')
                   .Append(row.PatternId);
 
-                string metadata = MetadataCompact(row, metadataFilters);
+                string metadata = MetadataCompact(row, metadataFilters, hoistedKeys);
                 if (metadata.Length > 0)
                     sb.Append(" metadata=").Append(metadata);
 
@@ -1844,7 +1935,8 @@ public sealed class PatternsTool
 
     private static string MetadataCompact(
         PatternMatchRow row,
-        IReadOnlyList<PatternMetadataFilter> metadataFilters)
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        HashSet<string>? hoistedKeys = null)
     {
         if (row.MetadataError is not null)
             return "error";
@@ -1854,6 +1946,15 @@ public sealed class PatternsTool
         int selectedLimit = Math.Max(4, metadataFilters.Count);
         var selected = new List<(string Name, JsonElement Value)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (hoistedKeys is not null)
+        {
+            foreach (string hoisted in hoistedKeys)
+            {
+                if (!metadataFilters.Any(f => string.Equals(f.Key, hoisted, StringComparison.Ordinal)))
+                    seen.Add(hoisted);
+            }
+        }
+
         foreach (PatternMetadataFilter metadataFilter in metadataFilters)
             Add(metadataFilter.Key);
         foreach (string key in MetadataPriority)
@@ -1970,8 +2071,19 @@ public sealed class PatternsTool
             .Select(static token => token.ToLowerInvariant())
             .ToArray();
 
-    private static string MetadataValueCompact(JsonElement value) =>
-        value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();
+    private const int MaxMetadataValueCompactLength = 80;
+
+    private static string MetadataValueCompact(JsonElement value)
+    {
+        string raw = value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : value.GetRawText();
+
+        if (raw.Length > MaxMetadataValueCompactLength)
+            return raw[..(MaxMetadataValueCompactLength - 1)] + "…";
+
+        return raw;
+    }
 
     private static string NormalizeOperation(string? operation)
     {

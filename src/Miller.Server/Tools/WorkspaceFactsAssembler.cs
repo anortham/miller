@@ -4,6 +4,8 @@ using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
+using Miller.Testing;
+using Miller.Testing.Daemon;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Server.Tools;
@@ -57,6 +59,7 @@ internal static class WorkspaceFactsAssembler
             Queue: queue)
         {
             Wal = storeRoot is null ? null : StoreWalCheckpoint.Observe(storeRoot),
+            Maintenance = storeRoot is null ? null : StoreMaintenanceRunner.TryReadRecordedSnapshot(storeRoot),
         };
     }
 
@@ -258,6 +261,26 @@ internal static class WorkspaceFactsAssembler
         }
     }
 
+    internal static CtDiskAccountingSnapshot? ReadCtDisk(string? canonicalRoot)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalRoot))
+            return null;
+
+        string ctDbPath = CtSchema.DbPathFor(canonicalRoot);
+        if (!File.Exists(ctDbPath))
+            return null;
+
+        try
+        {
+            using var store = new ContinuousTestStore(ctDbPath);
+            return store.ReadDiskAccountingSnapshot();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static WorkspaceFacts FromRegisteredRow(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,
@@ -331,7 +354,8 @@ internal static class WorkspaceFactsAssembler
                         File.Exists(row.IndexDbPath),
                         storeRoot,
                         members,
-                        storeQueue));
+                        storeQueue),
+                    CtDisk: ReadCtDisk(row.CanonicalRoot));
             }
 
             return new WorkspaceFacts(
@@ -358,7 +382,8 @@ internal static class WorkspaceFactsAssembler
                 ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
                 ScanFailure: ScanFailureFacts(row.IndexDbPath),
                 IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy),
-                RebindProvenance: RebindProvenanceFactsFor(row.IndexDbPath, registry));
+                RebindProvenance: RebindProvenanceFactsFor(row.IndexDbPath, registry),
+                CtDisk: ReadCtDisk(row.CanonicalRoot));
         }
         catch (FamilyStoreReadException ex)
         {
@@ -566,34 +591,65 @@ internal static class WorkspaceFactsAssembler
         IReadOnlyList<WorkspaceListEntry> matched,
         int cap)
     {
-        bool keepCurrent = matched.Any(static entry => entry.Current && !IsErrorRow(entry));
-        int reservedCurrentSlots = keepCurrent ? 1 : 0;
-        int errorSlots = Math.Min(matched.Count(IsErrorRow), Math.Max(0, cap - reservedCurrentSlots));
-        int nonErrorSlots = cap - errorSlots;
-        int takenErrors = 0;
-        int takenNonErrors = 0;
-        var returned = new List<WorkspaceListEntry>(Math.Min(cap, matched.Count));
-        foreach (WorkspaceListEntry entry in matched)
-        {
-            if (IsErrorRow(entry))
-            {
-                if (takenErrors >= errorSlots)
-                    continue;
-                takenErrors++;
-            }
-            else
-            {
-                if (takenNonErrors >= nonErrorSlots)
-                    continue;
-                takenNonErrors++;
-            }
+        if (cap <= 0 || matched.Count == 0)
+            return [];
 
-            returned.Add(entry);
-            if (returned.Count == cap)
+        if (matched.Count <= cap)
+            return [.. matched];
+
+        var selectedIndices = new HashSet<int>(cap);
+
+        // 1. Bound current preference: preserve current row if present
+        for (int i = 0; i < matched.Count; i++)
+        {
+            if (matched[i].Current)
+            {
+                selectedIndices.Add(i);
                 break;
+            }
         }
 
-        return [.. returned];
+        // 2. Reserve at most floor(limit / 4) slots for pinned errors (only when cap >= 4)
+        int maxPinnedErrors = cap / 4;
+        if (maxPinnedErrors > 0)
+        {
+            int pinnedErrorsCount = 0;
+            for (int i = 0; i < matched.Count; i++)
+            {
+                if (selectedIndices.Count >= cap)
+                    break;
+                if (pinnedErrorsCount >= maxPinnedErrors)
+                    break;
+
+                if (IsErrorRow(matched[i]) && selectedIndices.Add(i))
+                {
+                    pinnedErrorsCount++;
+                }
+            }
+        }
+
+        // 3. Fill remaining slots by recency (matched is already ordered by Current then recency)
+        for (int i = 0; i < matched.Count; i++)
+        {
+            if (selectedIndices.Count >= cap)
+                break;
+
+            selectedIndices.Add(i);
+        }
+
+        // Return entries in the order they appear in matched
+        var result = new List<WorkspaceListEntry>(cap);
+        for (int i = 0; i < matched.Count; i++)
+        {
+            if (selectedIndices.Contains(i))
+            {
+                result.Add(matched[i]);
+                if (result.Count == cap)
+                    break;
+            }
+        }
+
+        return [.. result];
     }
 
     private static WorkspaceFacts MissingIndexFacts(

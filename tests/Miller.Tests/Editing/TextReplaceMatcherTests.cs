@@ -227,4 +227,21 @@ public sealed class TextReplaceMatcherTests
         Assert.Equal(TextMatchMode.Exact, plan.MatchedMode);
         Assert.Equal(ByteLen("    "), Assert.Single(plan.Edits).StartByte);
     }
+
+    [Fact]
+    public void Plan_NoMatch_ReturnsNearbyCandidates()
+    {
+        const string content = "line 1\nconst int maxRetries = 5;\nline 3\n";
+
+        var plan = TextReplaceMatcher.Plan(content, "const int maxRetry = 5;", Occurrence.First, TextMatchMode.Exact);
+
+        Assert.False(plan.IsSuccess);
+        Assert.NotNull(plan.Error);
+        Assert.NotNull(plan.Error!.Candidates);
+        Assert.NotEmpty(plan.Error.Candidates);
+        Assert.True(plan.Error.Candidates.Count <= 3);
+        var candidate = plan.Error.Candidates[0];
+        Assert.Equal(2, candidate.LineNumber);
+        Assert.Contains("maxRetries", candidate.Snippet);
+    }
 }

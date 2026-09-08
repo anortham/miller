@@ -194,6 +194,66 @@ public sealed class EditPlannerTests
         Assert.Equal(EditErrorKind.MissingArgument, plan.Error!.Kind);
     }
 
+    [Fact]
+    public void ReplaceSymbolBody_RefusesDuplicateDeclarationPrefix()
+    {
+        const string content = "class C\n{\n    public int Total()\n    {\n        return 0;\n    }\n}\n";
+        var span = MethodSpan(
+            start: ByteLen("class C\n{\n    "),
+            end: ByteLen("class C\n{\n    public int Total()\n    {\n        return 0;\n    }"),
+            bodyStart: ByteLen("class C\n{\n    public int Total()\n    "),
+            bodyEnd: ByteLen("class C\n{\n    public int Total()\n    {\n        return 0;\n    }"));
+
+        var plan = EditPlanner.ReplaceSymbolBody(content, span, "public int Total() {\n        return 1;\n    }");
+
+        Assert.False(plan.IsSuccess);
+        Assert.Equal(EditErrorKind.DuplicateDeclaration, plan.Error!.Kind);
+        Assert.Contains("duplicates the declaration header", plan.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("public int Total()", plan.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReplaceSymbolSignature_PreservesOriginalWhitespaceAndLinebreaks()
+    {
+        const string prefix = "class C\n{\n    ";
+        const string signature = "public int Total()";
+        const string whitespace = "\n    ";
+        const string body = "{\n        return 0;\n    }\n}\n";
+        string content = prefix + signature + whitespace + body;
+
+        int start = ByteLen(prefix);
+        int bodyStart = start + ByteLen(signature + whitespace);
+        var span = MethodSpan(start, ByteLen(content), bodyStart, ByteLen(content));
+
+        var plan = EditPlanner.ReplaceSymbolSignature(content, span, "public long Total()");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal(start, edit.StartByte);
+        Assert.Equal(bodyStart, edit.EndByte);
+        Assert.Equal("public long Total()\n    ", edit.Replacement);
+    }
+
+    [Fact]
+    public void ReplaceSymbolSignature_CallerSuppliedWhitespace_UsesCallerWhitespace()
+    {
+        const string prefix = "class C\n{\n    ";
+        const string signature = "public int Total()";
+        const string whitespace = "\n    ";
+        const string body = "{\n        return 0;\n    }\n}\n";
+        string content = prefix + signature + whitespace + body;
+
+        int start = ByteLen(prefix);
+        int bodyStart = start + ByteLen(signature + whitespace);
+        var span = MethodSpan(start, ByteLen(content), bodyStart, ByteLen(content));
+
+        var plan = EditPlanner.ReplaceSymbolSignature(content, span, "public long Total() ");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal("public long Total() ", edit.Replacement);
+    }
+
     // ---- InsertBefore / InsertAfter ------------------------------------------------------------
 
     [Fact]

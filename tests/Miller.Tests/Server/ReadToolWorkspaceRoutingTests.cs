@@ -58,4 +58,38 @@ public sealed class ReadToolWorkspaceRoutingTests
             WorkspaceRefreshMode.None,
             ReadToolWorkspaceRouting.ResolveRefreshMode("target-ws", ensureFresh: false));
     }
+
+    [Fact]
+    public void CompactBanner_IncludesWarningTextWhenPresent()
+    {
+        string? banner = ReadToolWorkspaceRouting.CompactBanner(
+            displayId: "target-111111111111",
+            workspaceId: "target-ws",
+            workspaceRoot: "/target",
+            indexFresh: true,
+            freshnessStatus: "current",
+            revision: 3,
+            requestedWorkspaceId: "target-ws",
+            json: false,
+            warningText: "Background refresh failed");
+
+        Assert.Equal("workspace: target-111111111111\nwarning: Background refresh failed", banner);
+    }
+
+    [Fact]
+    public void CompactBanner_WithRefreshPending_ShowsFreshnessAndRevision()
+    {
+        string? banner = ReadToolWorkspaceRouting.CompactBanner(
+            displayId: "target-111111111111",
+            workspaceId: "target-ws",
+            workspaceRoot: "/target",
+            indexFresh: null,
+            freshnessStatus: "refresh_pending",
+            revision: 3,
+            requestedWorkspaceId: "target-ws",
+            json: false,
+            warningText: null);
+
+        Assert.Equal("workspace: target-111111111111\nfreshness: refresh_pending\nrevision: 3", banner);
+    }
 }

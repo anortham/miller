@@ -1,3 +1,6 @@
+using Miller.Testing;
+using Miller.Testing.Daemon;
+
 namespace Miller.Server.Tools;
 
 /// <summary>
@@ -62,6 +65,28 @@ internal static class CrossToolHandoff
         new(SearchCall(markers, "source"), "find the marker words as literal source text", CompactOnly: true);
 
     /// <summary>
+    /// A requested marker kind was absent, but other extracted marker facts exist matching the requested filters.
+    /// Suggests the real known marker alternative while preserving requested scope.
+    /// </summary>
+    internal static ToolDiagnosticAction SearchMarkerAlternative(
+        string marker,
+        string? filePattern = null,
+        string? language = null,
+        bool? excludeTests = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("search(query=\"").Append(ToolDiagnosticText.EscapeCallArgument(marker)).Append("\", mode=\"markers\"");
+        if (!string.IsNullOrWhiteSpace(filePattern))
+            sb.Append(", file_pattern=\"").Append(ToolDiagnosticText.EscapeCallArgument(filePattern)).Append('"');
+        if (!string.IsNullOrWhiteSpace(language))
+            sb.Append(", language=\"").Append(ToolDiagnosticText.EscapeCallArgument(language)).Append('"');
+        if (excludeTests.HasValue)
+            sb.Append(", exclude_tests=").Append(excludeTests.Value ? "true" : "false");
+        sb.Append(')');
+        return new ToolDiagnosticAction(sb.ToString(), $"search for {marker} markers", CompactOnly: true);
+    }
+
+    /// <summary>
     /// A symbol the reference graph links to nothing. Names reached only through dependency injection,
     /// reflection, or configuration appear as string literals, which the graph cannot resolve into edges.
     /// </summary>
@@ -114,5 +139,138 @@ internal static class CrossToolHandoff
         return mode is null
             ? call
             : $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(query)}\", mode=\"{mode}\")";
+    }
+
+    /// <summary>
+    /// Next-step advice connecting an applied edit to continuous testing.
+    /// Pure compact-only advice for the explicitly selected workspace.
+    /// Zero process spawns, zero background writes.
+    /// </summary>
+    internal static string? AdviceForAppliedEdit(
+        string workspaceRoot,
+        string? workspaceId,
+        IReadOnlyList<string>? touchedFiles)
+    {
+        if (ContinuousTestPolicy.IsKillSwitchOff(Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch)))
+            return null;
+
+        bool optedIn = ContinuousTestPolicy.IsWorkspaceOptedIn(workspaceRoot);
+        if (!optedIn)
+        {
+            // CT disabled: suggest provider direct-run recipe as immediate command
+            string? sampleFile = touchedFiles?.FirstOrDefault();
+            var req = new TestsCoreRequest(workspaceRoot, WorkspaceId: workspaceId);
+            ContinuousTestRunRecipe? recipe = TestsCore.GetRunRecipe(req, testFilePath: sampleFile);
+            if (recipe is not null && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
+            {
+                return NextStepHint.Render(recipe.PrimaryCommand, "run tests directly to verify changes");
+            }
+            return null;
+        }
+
+        // CT enabled: check live daemon state
+        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadLiveStatus(workspaceRoot);
+        if (snapshot.State == CtDaemonLifecycleState.Stopped)
+        {
+            return NextStepHint.Render("tests operation=start", "start daemon to monitor changes");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Selecting || snapshot.Selection is not null)
+        {
+            return NextStepHint.Render("tests operation=status", "selection in progress");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Executing || snapshot.Run is not null)
+        {
+            return NextStepHint.Render("tests operation=status", "tests executing");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Queued)
+        {
+            return NextStepHint.Render("tests operation=status", "command queued, awaiting execution");
+        }
+
+        // CT enabled and idle: read status projection
+        var statusReq = new TestsCoreRequest(workspaceRoot, WorkspaceId: workspaceId);
+        TestsStatusResult status = TestsCore.Status(statusReq);
+
+        if (status.Verdict == ContinuousTestVerdict.Red)
+        {
+            return NextStepHint.Render("tests operation=failures", "inspect red cases");
+        }
+
+        if (status.StaleCount > 0)
+        {
+            return NextStepHint.Render("tests operation=run wait=true", $"execute {status.StaleCount} stale cases");
+        }
+
+        // If edit was just applied and StaleCount is 0, indexer/debounce has not yet caught up
+        return NextStepHint.Render("tests operation=status", "check test status once indexed");
+    }
+
+    /// <summary>
+    /// Next-step advice connecting impact analysis to continuous testing.
+    /// Pure compact-only advice for the explicitly selected workspace.
+    /// </summary>
+    internal static string? AdviceForImpact(
+        string workspaceRoot,
+        string? workspaceId,
+        ContinuousTestRunRecipe? runnerRecipe,
+        int likelyTestCount)
+    {
+        if (ContinuousTestPolicy.IsKillSwitchOff(Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch)))
+            return null;
+
+        bool optedIn = ContinuousTestPolicy.IsWorkspaceOptedIn(workspaceRoot);
+        if (!optedIn)
+        {
+            if (runnerRecipe is not null && !string.IsNullOrWhiteSpace(runnerRecipe.PrimaryCommand))
+            {
+                return NextStepHint.Render(runnerRecipe.PrimaryCommand, "run likely impacted tests directly");
+            }
+            return null;
+        }
+
+        // CT enabled
+        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadLiveStatus(workspaceRoot);
+        if (snapshot.State == CtDaemonLifecycleState.Stopped)
+        {
+            return NextStepHint.Render("tests operation=start", "start daemon to run continuous tests");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Selecting || snapshot.Selection is not null)
+        {
+            return NextStepHint.Render("tests operation=status", "selection in progress");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Executing || snapshot.Run is not null)
+        {
+            return NextStepHint.Render("tests operation=status", "tests executing");
+        }
+
+        if (snapshot.Activity == CtDaemonActivity.Queued)
+        {
+            return NextStepHint.Render("tests operation=status", "command queued, awaiting execution");
+        }
+
+        var statusReq = new TestsCoreRequest(workspaceRoot, WorkspaceId: workspaceId);
+        TestsStatusResult status = TestsCore.Status(statusReq);
+
+        if (status.Verdict == ContinuousTestVerdict.Red)
+        {
+            return NextStepHint.Render("tests operation=failures", "inspect red cases");
+        }
+
+        if (status.StaleCount > 0)
+        {
+            return NextStepHint.Render("tests operation=run wait=true", $"execute {status.StaleCount} stale cases");
+        }
+
+        if (likelyTestCount > 0)
+        {
+            return NextStepHint.Render("tests operation=status", "check test status");
+        }
+
+        return null;
     }
 }

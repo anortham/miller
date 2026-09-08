@@ -235,6 +235,165 @@ public sealed class TestsWaitOutcomeTests
     }
 
     [Fact]
+    public void Wait_completes_when_ack_transitions_to_completed()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-ack-completed-").FullName;
+        var clock = new ManualTimeProvider();
+        const string commandId = "cmd-123";
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+
+            int pollCount = 0;
+            TestsCoreRequest request = Request(
+                root,
+                wait: true,
+                waitTimeout: TimeSpan.FromSeconds(30),
+                hooks: new TestsCoreHooks(
+                    SubmitRun: (_, _) => new CtRunResult(
+                        CtRunExecution.Daemon,
+                        new CtDaemonCommandAck(
+                            commandId,
+                            CtDaemonCommandState.Acknowledged,
+                            DateTimeOffset.UtcNow,
+                            "accepted"),
+                        null,
+                        commandId))
+                {
+                    WaitProbe = new TestsWaitProbe(
+                        ReadStatus: _ => Idle(),
+                        IsLeaseLive: _ => true,
+                        Clock: clock,
+                        Delay: clock.Advance,
+                        TryReadAck: (_, id) =>
+                        {
+                            pollCount++;
+                            return new CtDaemonCommandAck(
+                                id,
+                                pollCount >= 2 ? CtDaemonCommandState.Completed : CtDaemonCommandState.Acknowledged,
+                                DateTimeOffset.UtcNow,
+                                "done");
+                        }),
+                });
+
+            TestsRunResult result = TestsCore.Run(request);
+
+            Assert.NotNull(result.Wait);
+            Assert.Equal(TestsWaitState.Completed, result.Wait.State);
+            Assert.True(result.Wait.WaitComplete);
+            Assert.Equal(commandId, result.Wait.CommandId);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Wait_cancels_when_ack_transitions_to_cancelled()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-ack-cancelled-").FullName;
+        var clock = new ManualTimeProvider();
+        const string commandId = "cmd-cancel";
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+
+            TestsCoreRequest request = Request(
+                root,
+                wait: true,
+                waitTimeout: TimeSpan.FromSeconds(30),
+                hooks: new TestsCoreHooks(
+                    SubmitRun: (_, _) => new CtRunResult(
+                        CtRunExecution.Daemon,
+                        new CtDaemonCommandAck(
+                            commandId,
+                            CtDaemonCommandState.Acknowledged,
+                            DateTimeOffset.UtcNow,
+                            "accepted"),
+                        null,
+                        commandId))
+                {
+                    WaitProbe = new TestsWaitProbe(
+                        ReadStatus: _ => Idle(),
+                        IsLeaseLive: _ => true,
+                        Clock: clock,
+                        Delay: clock.Advance,
+                        TryReadAck: (_, id) => new CtDaemonCommandAck(
+                            id,
+                            CtDaemonCommandState.Cancelled,
+                            DateTimeOffset.UtcNow,
+                            "cancelled")),
+                });
+
+            TestsRunResult result = TestsCore.Run(request);
+
+            Assert.NotNull(result.Wait);
+            Assert.Equal(TestsWaitState.Cancelled, result.Wait.State);
+            Assert.False(result.Wait.WaitComplete);
+            Assert.Equal(commandId, result.Wait.CommandId);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Wait_utilizes_full_wait_timeout_before_reporting_not_picked_up()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-full-timeout-").FullName;
+        var clock = new ManualTimeProvider();
+        const string commandId = "cmd-timeout";
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+
+            TestsCoreRequest request = Request(
+                root,
+                wait: true,
+                waitTimeout: TimeSpan.FromSeconds(8),
+                hooks: new TestsCoreHooks(
+                    SubmitRun: (_, _) => new CtRunResult(
+                        CtRunExecution.Daemon,
+                        new CtDaemonCommandAck(
+                            commandId,
+                            CtDaemonCommandState.Acknowledged,
+                            DateTimeOffset.UtcNow,
+                            "accepted"),
+                        null,
+                        commandId))
+                {
+                    WaitProbe = new TestsWaitProbe(
+                        ReadStatus: _ => Idle(),
+                        IsLeaseLive: _ => true,
+                        Clock: clock,
+                        Delay: clock.Advance,
+                        TryReadAck: (_, id) => new CtDaemonCommandAck(
+                            id,
+                            CtDaemonCommandState.Acknowledged,
+                            DateTimeOffset.UtcNow,
+                            "still pending")),
+                });
+
+            TestsRunResult result = TestsCore.Run(request);
+
+            Assert.NotNull(result.Wait);
+            Assert.Equal(TestsWaitState.NotPickedUp, result.Wait.State);
+            Assert.False(result.Wait.WaitComplete);
+            Assert.Equal(8.0, result.Wait.TimeoutSeconds);
+            Assert.True(result.Wait.ElapsedSeconds >= 8.0);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void Start_maps_publication_readiness_from_an_injected_probe()
     {
         string root = Directory.CreateTempSubdirectory("miller-start-readiness-").FullName;

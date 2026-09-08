@@ -122,7 +122,7 @@ calls and optional only for the CLI.
   beyond js/ts. Route-fact audits: `patterns operation=search query=route`,
   `patterns operation=search pattern_id=htmx.attribute.v1`,
   `patterns operation=search pattern_id=http.client_request.v1`,
-  `patterns operation=search pattern_id=vue.route_reference.v1`. For callers/callees use `inspect depth=full`. If
+  `patterns operation=search pattern_id=vue.route_reference.v1`. For callers/callees use `inspect depth=overview` (escalating to `depth=full` only for complete bodies or full relation lists). If
   ambiguous, retry with `scope=<file>`. A `mode=path` no-path result is not proof the code is unrelated; follow its
   `Next:` actions.
 - **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.

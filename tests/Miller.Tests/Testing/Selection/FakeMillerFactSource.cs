@@ -23,6 +23,12 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
     /// <summary>When set, <see cref="Impact"/> reports a truncated read (an incomplete blast radius).</summary>
     public bool ImpactTruncatedByLimit { get; set; }
 
+    /// <summary>When set, <see cref="Impact"/> reports a depth-truncated read.</summary>
+    public bool ImpactTruncatedByDepth { get; set; }
+
+    /// <summary>Counts how many times <see cref="IdentifierEvidenceTo"/> was called.</summary>
+    public int IdentifierEvidenceToCalls { get; private set; }
+
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths)
     {
         HashSet<string> paths = changedPaths
@@ -53,6 +59,7 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
 
     public IReadOnlyList<CtReferenceFact> IdentifierEvidenceTo(IReadOnlyList<string> symbolIds)
     {
+        IdentifierEvidenceToCalls++;
         HashSet<string> ids = symbolIds.ToHashSet(StringComparer.Ordinal);
         return Identifiers.Where(row => ids.Contains(row.TargetSymbolId)).ToArray();
     }
@@ -63,7 +70,7 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
             return new CtImpactResult([], [], 0, false, false);
 
         return new CtImpactResult(
-            Impacted, Tests, Impacted.Count + Tests.Count, false, ImpactTruncatedByLimit);
+            Impacted, Tests, Impacted.Count + Tests.Count, ImpactTruncatedByDepth, ImpactTruncatedByLimit);
     }
 
     public static CtSymbolFact Symbol(

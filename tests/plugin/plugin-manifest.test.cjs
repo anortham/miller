@@ -108,6 +108,42 @@ test('plugin hook commands run existing scripts with an explicit event argument'
   }
 });
 
+test('Cursor plugin manifest wires the cursor hooks file', () => {
+  const cursor = readJson('.cursor-plugin/plugin.json');
+  assert.equal(
+    cursor.hooks,
+    './hooks/cursor-hooks.json',
+    '.cursor-plugin/plugin.json should reference the cursor hooks file',
+  );
+
+  const hooksPath = path.join(repoRoot, cursor.hooks);
+  assert.ok(
+    fs.existsSync(hooksPath),
+    `.cursor-plugin/plugin.json references a missing hooks file: ${cursor.hooks}`,
+  );
+
+  const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+  assert.equal(hooks.version, 1);
+  assert.ok(hooks.hooks, 'cursor hooks file should declare a hooks object');
+  assert.deepEqual(Object.keys(hooks.hooks), ['sessionStart']);
+
+  const entries = hooks.hooks.sessionStart;
+  assert.ok(Array.isArray(entries) && entries.length > 0);
+  for (const entry of entries) {
+    const scriptMatch = entry.command.match(/\$\{CURSOR_PLUGIN_ROOT\}\/([^"']+\.cjs)/);
+    assert.ok(scriptMatch, `Cursor hook command should run a plugin-root script: ${entry.command}`);
+    assert.ok(
+      fs.existsSync(path.join(repoRoot, scriptMatch[1])),
+      `Cursor hook command references a missing script: ${scriptMatch[1]}`,
+    );
+    assert.equal(
+      entry.command.trim().split(/\s+/).pop(),
+      'cursor-session-start',
+      `Cursor sessionStart command should end with cursor-session-start: ${entry.command}`,
+    );
+  }
+});
+
 test('Claude, Cursor, and Codex plugin manifests point at the release launcher', () => {
   const config = readJson('miller-plugin.json');
   const claude = readJson('.claude-plugin/plugin.json');

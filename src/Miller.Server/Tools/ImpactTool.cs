@@ -12,6 +12,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
+using Miller.Testing;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -105,7 +106,13 @@ public sealed class ImpactTool
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Opaque token from an impact_output_page response. Repeat the same call arguments to read the next byte-identical fragment.")]
-        string? continuation = null)
+        string? continuation = null,
+        [Description("Result view: all|tests. Default all. When tests, non-test symbols are omitted.")]
+        string view = "all",
+        [Description("Dedicated limit for test cases (1-1000). When omitted, falls back to limit.")]
+        int? tests_limit = null,
+        [Description("Dedicated limit for impacted symbols (1-1000). When omitted, falls back to limit.")]
+        int? symbols_limit = null)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
@@ -114,6 +121,29 @@ public sealed class ImpactTool
         {
             max_depth = NormalizeDepth(max_depth);
             limit = NormalizeLimit(limit);
+            bool isAllView = string.Equals(view, "all", StringComparison.OrdinalIgnoreCase);
+            bool isTestsView = string.Equals(view, "tests", StringComparison.OrdinalIgnoreCase);
+            if (!isAllView && !isTestsView)
+            {
+                string usage = Usage(json);
+                string refusal = ToolDiagnosticRenderer.Attach(
+                    "impact",
+                    ReadToolWorkspaceRouting.PrefixCompact(usage, null),
+                    ToolDiagnostic.Refusal(
+                        "invalid_input_selection",
+                        "Impact view must be 'all' or 'tests'."),
+                    json,
+                    telemetry);
+                return PageMcpOutput(
+                    refusal,
+                    json,
+                    continuationWorkspaceId,
+                    continuation);
+            }
+
+            int? normalizedTestsLimit = tests_limit.HasValue ? NormalizeLimit(tests_limit.Value) : null;
+            int? normalizedSymbolsLimit = symbols_limit.HasValue ? NormalizeLimit(symbols_limit.Value) : null;
+
             ImpactTelemetrySnapshot? impactTelemetry = null;
             WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, refresh);
@@ -149,6 +179,7 @@ public sealed class ImpactTool
 
             bool noArgDefault = provided == 0;
             bool useGitDiff = explicitGit || noArgDefault;
+            bool revisionDelta = from_index_revision.HasValue;
 
             bool emptyGitDiff = false;
             bool stagedChangesExist = false;
@@ -202,7 +233,7 @@ public sealed class ImpactTool
             IReadOnlyList<string> unseededPaths;
             ImpactEmptyReason? emptyReason;
             string? diagnosticTraceTarget;
-            bool revisionDelta = from_index_revision.HasValue;
+            ImpactExecution? execution = null;
             if (revisionDelta)
             {
                 ImpactRevisionDeltaSnapshot snapshot = PrepareIndexRevisionDelta(
@@ -211,14 +242,17 @@ public sealed class ImpactTool
                     context.ReadSession,
                     from_index_revision!.Value,
                     from_artifact_id);
-                ImpactExecution execution = RunIndexRevisionDeltaExecution(
+                execution = RunIndexRevisionDeltaExecution(
                     snapshot,
                     context.Index,
                     context.Graph,
                     max_depth,
                     limit,
                     json,
-                    indexAvailable: true);
+                    indexAvailable: true,
+                    view: view,
+                    testsLimit: normalizedTestsLimit,
+                    symbolsLimit: normalizedSymbolsLimit);
                 output = execution.Output;
                 impactedCount = execution.ImpactedCount;
                 returnedCount = execution.ReturnedCount;
@@ -240,7 +274,7 @@ public sealed class ImpactTool
             }
             else
             {
-                ImpactExecution execution = RunCore(
+                execution = RunCore(
                     context.Index,
                     context.Graph,
                     context.Resolver,
@@ -249,7 +283,12 @@ public sealed class ImpactTool
                     diff,
                     max_depth,
                     limit,
-                    json);
+                    json,
+                    view: view,
+                    testsLimit: normalizedTestsLimit,
+                    symbolsLimit: normalizedSymbolsLimit,
+                    workspaceRoot: context.WorkspaceRoot,
+                    workspaceId: continuationWorkspaceId);
                 output = execution.Output;
                 impactedCount = execution.ImpactedCount;
                 returnedCount = execution.ReturnedCount;
@@ -309,6 +348,24 @@ public sealed class ImpactTool
                 telemetry.SetMetadata("test_candidates_truncated", facts.TestCandidatesTruncated);
                 telemetry.SetMetadata("truncated_by_depth", facts.TruncatedByDepth);
                 telemetry.SetMetadata("truncated_by_limit", facts.TruncatedByLimit);
+            }
+            bool isNewContract = isTestsView || tests_limit.HasValue || symbols_limit.HasValue ||
+                (!string.IsNullOrWhiteSpace(continuation) && IsPopulationContinuation(continuation));
+            if (json && isNewContract && execution?.Traversal is not null)
+            {
+                int totalBytes = Encoding.UTF8.GetByteCount(output);
+                if (totalBytes > ToolOutputBudget.ImpactMcpMaxBytes || !string.IsNullOrWhiteSpace(continuation))
+                {
+                    return PageMcpJson(
+                        execution.Traversal,
+                        output,
+                        max_depth,
+                        limit,
+                        continuationWorkspaceId,
+                        continuation,
+                        diagnostic,
+                        telemetry);
+                }
             }
             if (diagnostic is not null)
             {
@@ -526,18 +583,20 @@ public sealed class ImpactTool
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string? target, IReadOnlyList<string>? changedPaths, string? diff,
         int maxDepth, int limit, bool json,
-        out int impactedCount, out int nodesVisited)
+        out int impactedCount, out int nodesVisited,
+        string view = "all", int? testsLimit = null, int? symbolsLimit = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         return Run(index, index.Graph, resolver, target, changedPaths, diff, maxDepth, limit, json,
-            out impactedCount, out nodesVisited);
+            out impactedCount, out nodesVisited, view, testsLimit, symbolsLimit);
     }
 
     public static string Run(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
         string? target, IReadOnlyList<string>? changedPaths, string? diff,
         int maxDepth, int limit, bool json,
-        out int impactedCount, out int nodesVisited)
+        out int impactedCount, out int nodesVisited,
+        string view = "all", int? testsLimit = null, int? symbolsLimit = null)
     {
         ImpactExecution execution = RunCore(
             index,
@@ -548,7 +607,10 @@ public sealed class ImpactTool
             diff,
             maxDepth,
             limit,
-            json);
+            json,
+            view,
+            testsLimit,
+            symbolsLimit);
         impactedCount = execution.ImpactedCount;
         nodesVisited = execution.NodesVisited;
         return execution.Output;
@@ -557,7 +619,9 @@ public sealed class ImpactTool
     private static ImpactExecution RunCore(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
         string? target, IReadOnlyList<string>? changedPaths, string? diff,
-        int maxDepth, int limit, bool json)
+        int maxDepth, int limit, bool json,
+        string view = "all", int? testsLimit = null, int? symbolsLimit = null,
+        string? workspaceRoot = null, string? workspaceId = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
@@ -628,7 +692,10 @@ public sealed class ImpactTool
             var noSeedTraversal = new ImpactTraversal(
                 [], [], null, seededPaths, unseededPaths, [],
                 0, false,
-                "not_run", "no_seeds");
+                "not_run", "no_seeds",
+                View: view,
+                WorkspaceRoot: workspaceRoot,
+                WorkspaceId: workspaceId);
             string output = json
                 ? RenderJson(noSeedTraversal, note, maxDepth, limit)
                 : RenderCompact(noSeedTraversal, note, maxDepth, limit);
@@ -638,13 +705,31 @@ public sealed class ImpactTool
                 0,
                 0,
                 unseededPaths,
-                ImpactEmptyReason.NoSeedSymbols);
+                ImpactEmptyReason.NoSeedSymbols,
+                Traversal: noSeedTraversal,
+                Note: note);
         }
 
         RankedImpactResult rankedImpact =
-            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit);
+            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit, view, testsLimit, symbolsLimit);
         if (rankedImpact.Impacted.Count == 0 && rankedImpact.Tests.Count == 0 && note is null)
             note = NoDependentsNote(index, seedIds);
+
+        ContinuousTestRunRecipe? runnerRecipe = null;
+        if (rankedImpact.Tests.Count > 0 && !string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            try
+            {
+                var req = new TestsCoreRequest(workspaceRoot, WorkspaceId: workspaceId);
+                string firstTestPath = rankedImpact.Tests[0].Symbol.FilePath;
+                string firstTestName = rankedImpact.Tests[0].Symbol.Name;
+                runnerRecipe = TestsCore.GetRunRecipe(req, testSelector: firstTestName, testFilePath: firstTestPath, scope: TestSelectorScope.SingleTest);
+            }
+            catch
+            {
+                // Non-fatal if recipe resolution fails
+            }
+        }
 
         var traversal = new ImpactTraversal(
             rankedImpact.Impacted,
@@ -657,7 +742,11 @@ public sealed class ImpactTool
             rankedImpact.TestCandidatesTruncated,
             rankedImpact.Status,
             rankedImpact.Reason,
-            rankedImpact.Telemetry);
+            rankedImpact.Telemetry,
+            view,
+            runnerRecipe,
+            workspaceRoot,
+            workspaceId);
         string rendered = json
             ? RenderJson(traversal, note, maxDepth, limit)
             : RenderCompact(traversal, note, maxDepth, limit);
@@ -671,7 +760,9 @@ public sealed class ImpactTool
                 ? ImpactEmptyReason.NoDependents
                 : null,
             targetWasFile ? seedIds.FirstOrDefault() : target,
-            rankedImpact.Telemetry);
+            rankedImpact.Telemetry,
+            traversal,
+            note);
     }
 
     // ---------- index-revision delta (CT revision-delta contract R0–R2) ----------
@@ -759,7 +850,10 @@ public sealed class ImpactTool
         int maxDepth,
         int limit,
         bool json,
-        bool indexAvailable)
+        bool indexAvailable,
+        string view = "all",
+        int? testsLimit = null,
+        int? symbolsLimit = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return RenderIndexRevisionDeltaExecution(
@@ -777,7 +871,10 @@ public sealed class ImpactTool
             snapshot.FromArtifactId,
             snapshot.Reason,
             indexAvailable,
-            snapshot.DeletedPaths);
+            snapshot.DeletedPaths,
+            view,
+            testsLimit,
+            symbolsLimit);
     }
 
     /// <summary>
@@ -839,7 +936,10 @@ public sealed class ImpactTool
         string? fromArtifactId,
         string deltaReason,
         bool indexAvailable,
-        IReadOnlyList<string>? deletedPaths)
+        IReadOnlyList<string>? deletedPaths,
+        string view = "all",
+        int? testsLimit = null,
+        int? symbolsLimit = null)
     {
         ArgumentNullException.ThrowIfNull(changedPaths);
         maxDepth = NormalizeDepth(maxDepth);
@@ -857,7 +957,7 @@ public sealed class ImpactTool
         else if (!indexAvailable || index is null || graph is null)
             traversal = NotRun("index_unavailable", deleted);
         else
-            traversal = ReachFromChangedPaths(index, graph, paths, deleted, maxDepth, limit);
+            traversal = ReachFromChangedPaths(index, graph, paths, deleted, maxDepth, limit, view, testsLimit, symbolsLimit);
 
         string output = json
             ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId,
@@ -872,7 +972,8 @@ public sealed class ImpactTool
             traversal.UnseededPaths,
             null,
             null,
-            traversal.Telemetry);
+            traversal.Telemetry,
+            traversal);
 
         static ImpactTraversal NotRun(string reason, IReadOnlyList<string> deleted) =>
             new([], [], null, [], [], deleted, 0, false, "not_run", reason);
@@ -883,7 +984,10 @@ public sealed class ImpactTool
         IReadOnlyList<string> changedPaths,
         IReadOnlyList<string> deletedPaths,
         int maxDepth,
-        int limit)
+        int limit,
+        string view = "all",
+        int? testsLimit = null,
+        int? symbolsLimit = null)
     {
         var seedIds = new List<string>();
         var seededPaths = new List<string>();
@@ -903,10 +1007,11 @@ public sealed class ImpactTool
             return new(
                 [], [], null, seededPaths, unseededPaths, deletedPaths,
                 0, false,
-                "not_run", "no_seeds");
+                "not_run", "no_seeds",
+                View: view);
 
         RankedImpactResult rankedImpact =
-            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit);
+            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit, view, testsLimit, symbolsLimit);
         return new(
             rankedImpact.Impacted,
             rankedImpact.Tests,
@@ -918,7 +1023,8 @@ public sealed class ImpactTool
             rankedImpact.TestCandidatesTruncated,
             rankedImpact.Status,
             rankedImpact.Reason,
-            rankedImpact.Telemetry);
+            rankedImpact.Telemetry,
+            view);
     }
 
     private static RankedImpactResult TraverseAndRankImpact(
@@ -926,11 +1032,23 @@ public sealed class ImpactTool
         ISymbolGraphReachability graph,
         IReadOnlyList<string> seedIds,
         int maxDepth,
-        int limit)
+        int limit,
+        string view = "all",
+        int? testsLimit = null,
+        int? symbolsLimit = null)
     {
-        ImpactAnalysisResult computed = ImpactAnalysis.Compute(index, graph, seedIds, maxDepth, limit);
-        var impacted = computed.Impacted.Select(static hit => new Reached(hit.Symbol, hit.Evidence)).ToArray();
-        var tests = computed.Tests.Select(static hit => new Reached(hit.Symbol, hit.Evidence)).ToArray();
+        ImpactAnalysisResult computed = ImpactAnalysis.Compute(
+            index, graph, seedIds, maxDepth, limit, view, testsLimit, symbolsLimit);
+        var impacted = computed.Impacted.Select(hit =>
+        {
+            string? predName = ResolvePredecessorName(index, hit.Evidence.ReachedVia);
+            return new Reached(hit.Symbol, hit.Evidence, predName);
+        }).ToArray();
+        var tests = computed.Tests.Select(hit =>
+        {
+            string? predName = ResolvePredecessorName(index, hit.Evidence.ReachedVia);
+            return new Reached(hit.Symbol, hit.Evidence, predName);
+        }).ToArray();
         int returnedTestCandidateCount = computed.Impacted.Concat(computed.Tests)
             .Count(static hit => string.Equals(hit.Evidence.EdgeSource, "filename_role", StringComparison.Ordinal));
         (string status, string reason) =
@@ -953,6 +1071,14 @@ public sealed class ImpactTool
             status,
             reason,
             telemetry);
+    }
+
+    private static string? ResolvePredecessorName(ISymbolLookupIndex index, string? reachedVia)
+    {
+        if (string.IsNullOrEmpty(reachedVia))
+            return "seed";
+        IndexedSymbol? pred = index.FindBySymbolId(reachedVia);
+        return pred?.Name ?? reachedVia;
     }
 
     private static (string Status, string Reason) TraversalDisposition(
@@ -989,6 +1115,7 @@ public sealed class ImpactTool
             w.WriteString("delta_reason", deltaReason);
             w.WriteNumber("from_revision", fromRevision);
             w.WriteNumber("to_revision", toRevision);
+            w.WriteString("view", traversal.View);
             w.WritePropertyName("changed_paths");
             w.WriteStartArray();
             foreach (string path in changedPaths)
@@ -999,6 +1126,10 @@ public sealed class ImpactTool
             w.WritePropertyName("tests");
             WriteReachedArray(w, traversal.Tests);
             WriteTestEvidenceScope(w);
+            if (traversal.RunnerRecipe is not null)
+            {
+                WriteRunnerRecipe(w, traversal.RunnerRecipe);
+            }
             w.WritePropertyName("traversal");
             WriteTraversalJson(w, traversal, maxDepth, limit);
             w.WriteEndObject();
@@ -1106,12 +1237,12 @@ public sealed class ImpactTool
     }
 
     /// <summary>A reached symbol carrying its blast-radius hop distance (for provenance ordering + display).</summary>
-    private readonly record struct Reached(IndexedSymbol Symbol, ReachedNode Evidence)
+    internal readonly record struct Reached(IndexedSymbol Symbol, ReachedNode Evidence, string? PredecessorName = null)
     {
         public int Hop => Evidence.Hop;
     }
 
-    private sealed record ImpactTraversal(
+    internal sealed record ImpactTraversal(
         IReadOnlyList<Reached> Impacted,
         IReadOnlyList<Reached> Tests,
         GraphReachResult? Graph,
@@ -1122,7 +1253,11 @@ public sealed class ImpactTool
         bool TestCandidatesTruncated,
         string Status,
         string Reason,
-        ImpactTelemetrySnapshot? Telemetry = null);
+        ImpactTelemetrySnapshot? Telemetry = null,
+        string View = "all",
+        ContinuousTestRunRecipe? RunnerRecipe = null,
+        string? WorkspaceRoot = null,
+        string? WorkspaceId = null);
 
     private sealed record RankedImpactResult(
         IReadOnlyList<Reached> Impacted,
@@ -1166,7 +1301,9 @@ public sealed class ImpactTool
         IReadOnlyList<string> UnseededPaths,
         ImpactEmptyReason? EmptyReason,
         string? DiagnosticTraceTarget = null,
-        ImpactTelemetrySnapshot? Telemetry = null);
+        ImpactTelemetrySnapshot? Telemetry = null,
+        ImpactTraversal? Traversal = null,
+        string? Note = null);
 
     // ---------- seed resolution ----------
 
@@ -1353,37 +1490,17 @@ public sealed class ImpactTool
         }
         else
         {
-            sb.Append("\n# impacted (").Append(impacted.Count).Append(")\n");
-            var visibleImpacted = impacted.Where(r => !IsLowSignalKind(r.Symbol.Kind)).ToList();
-            int hiddenLowSignal = impacted.Count - visibleImpacted.Count;
-            if (impacted.Count == 0)
-                sb.Append("(none)\n");
-            else if (visibleImpacted.Count == 0)
-                sb.Append("(only low_signal rows hidden; use format=json for full list.)\n");
-            else
-            {
-                int shownImpacted = Math.Min(visibleImpacted.Count, CompactImpactedLimit);
-                AppendReachedGroups(sb, visibleImpacted.Take(shownImpacted).ToList());
-
-                int hiddenImpacted = visibleImpacted.Count - shownImpacted;
-                if (hiddenImpacted > 0)
-                {
-                    sb.Append("... ").Append(hiddenImpacted)
-                        .Append(" more impacted; use format=json for full list.\n");
-                }
-            }
-
-            if (hiddenLowSignal > 0)
-            {
-                sb.Append("low_signal hidden: ").Append(hiddenLowSignal)
-                    .Append(" imports/modules (use format=json for full list.)\n");
-            }
-
             if (tests.Count > 0)
             {
                 sb.Append("\n# likely tests (").Append(tests.Count).Append(")\n");
                 int shown = Math.Min(tests.Count, CompactLikelyTestsLimit);
                 AppendReachedGroups(sb, tests.Take(shown).ToList());
+
+                if (traversal.RunnerRecipe is not null && !string.IsNullOrWhiteSpace(traversal.RunnerRecipe.PrimaryCommand))
+                {
+                    sb.Append("\n# test command\n");
+                    sb.Append(traversal.RunnerRecipe.PrimaryCommand).Append('\n');
+                }
 
                 int hidden = tests.Count - shown;
                 if (hidden > 0)
@@ -1391,6 +1508,48 @@ public sealed class ImpactTool
                     sb.Append("... ").Append(hidden)
                         .Append(" more likely tests; use format=json for full list.\n");
                 }
+            }
+
+            if (!string.Equals(traversal.View, "tests", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.Append("\n# impacted (").Append(impacted.Count).Append(")\n");
+                var visibleImpacted = impacted.Where(r => !IsLowSignalKind(r.Symbol.Kind)).ToList();
+                int hiddenLowSignal = impacted.Count - visibleImpacted.Count;
+                if (impacted.Count == 0)
+                    sb.Append("(none)\n");
+                else if (visibleImpacted.Count == 0)
+                    sb.Append("(only low_signal rows hidden; use format=json for full list.)\n");
+                else
+                {
+                    int shownImpacted = Math.Min(visibleImpacted.Count, CompactImpactedLimit);
+                    AppendReachedGroups(sb, visibleImpacted.Take(shownImpacted).ToList());
+
+                    int hiddenImpacted = visibleImpacted.Count - shownImpacted;
+                    if (hiddenImpacted > 0)
+                    {
+                        sb.Append("... ").Append(hiddenImpacted)
+                            .Append(" more impacted; use format=json for full list.\n");
+                    }
+                }
+
+                if (hiddenLowSignal > 0)
+                {
+                    sb.Append("low_signal hidden: ").Append(hiddenLowSignal)
+                        .Append(" imports/modules (use format=json for full list.)\n");
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(traversal.WorkspaceRoot) && (impacted.Count > 0 || tests.Count > 0))
+        {
+            string? ctHint = CrossToolHandoff.AdviceForImpact(
+                traversal.WorkspaceRoot,
+                traversal.WorkspaceId,
+                traversal.RunnerRecipe,
+                tests.Count);
+            if (!string.IsNullOrWhiteSpace(ctHint))
+            {
+                sb.Append('\n').Append(ctHint);
             }
         }
 
@@ -1436,7 +1595,9 @@ public sealed class ImpactTool
     private static string ReachedLine(Reached r)
     {
         var s = r.Symbol;
-        return $"  :{s.StartLine} {s.Name} {s.Kind} hop={r.Hop} via={r.Evidence.ReachedVia ?? "seed"} " +
+        string certainty = r.Evidence.PathCertainty.ToString().ToLowerInvariant();
+        string via = r.PredecessorName ?? r.Evidence.ReachedVia ?? "seed";
+        return $"  :{s.StartLine} {s.Name} {s.Kind} [{certainty}] hop={r.Hop} via={via} " +
                $"edge={r.Evidence.EdgeKind ?? "unknown"} source={r.Evidence.EdgeSource ?? "unknown"}";
     }
 
@@ -1455,11 +1616,16 @@ public sealed class ImpactTool
         {
             w.WriteStartObject();
             if (note is null) w.WriteNull("note"); else w.WriteString("note", note);
+            w.WriteString("view", traversal.View);
             w.WritePropertyName("impacted");
             WriteReachedArray(w, traversal.Impacted);
             w.WritePropertyName("tests");
             WriteReachedArray(w, traversal.Tests);
             WriteTestEvidenceScope(w);
+            if (traversal.RunnerRecipe is not null)
+            {
+                WriteRunnerRecipe(w, traversal.RunnerRecipe);
+            }
             w.WritePropertyName("traversal");
             WriteTraversalJson(w, traversal, maxDepth, limit);
             w.WriteEndObject();
@@ -1553,15 +1719,26 @@ public sealed class ImpactTool
             w.WriteString("symbol_id", r.Symbol.SymbolId);
             w.WritePropertyName("impact_evidence");
             w.WriteStartObject();
-            if (r.Evidence.ReachedVia is null) w.WriteNull("reached_via_symbol_id");
-            else w.WriteString("reached_via_symbol_id", r.Evidence.ReachedVia);
+            if (r.Evidence.ReachedVia is null)
+            {
+                w.WriteNull("reached_via_symbol_id");
+                w.WriteNull("reached_via_symbol_name");
+            }
+            else
+            {
+                w.WriteString("reached_via_symbol_id", r.Evidence.ReachedVia);
+                if (r.PredecessorName is not null)
+                    w.WriteString("reached_via_symbol_name", r.PredecessorName);
+                else
+                    w.WriteNull("reached_via_symbol_name");
+            }
             if (r.Evidence.EdgeKind is null) w.WriteNull("edge_kind");
             else w.WriteString("edge_kind", r.Evidence.EdgeKind);
             if (r.Evidence.EdgeConfidence is double confidence) w.WriteNumber("edge_confidence", confidence);
             else w.WriteNull("edge_confidence");
             if (r.Evidence.EdgeSource is null) w.WriteNull("edge_source");
             else w.WriteString("edge_source", r.Evidence.EdgeSource);
-            w.WriteString("tier", ImpactRanker.IsExactSource(r.Evidence.EdgeSource) ? "exact" : "heuristic");
+            w.WriteString("tier", r.Evidence.PathCertainty.ToString().ToLowerInvariant());
             w.WriteNumber("centrality", r.Evidence.Centrality);
             if (r.Evidence.Visibility is null) w.WriteNull("visibility");
             else w.WriteString("visibility", r.Evidence.Visibility);
@@ -1571,6 +1748,207 @@ public sealed class ImpactTool
             w.WriteEndObject();
         }
         w.WriteEndArray();
+    }
+
+    private static void WriteRunnerRecipe(Utf8JsonWriter w, ContinuousTestRunRecipe recipe)
+    {
+        w.WritePropertyName("test_runner_recipe");
+        w.WriteStartObject();
+        w.WriteString("primary_command", recipe.PrimaryCommand);
+        w.WriteString("workspace_id", recipe.WorkspaceId);
+        w.WriteString("project_path", recipe.ProjectPath);
+        w.WriteString("framework", recipe.Framework);
+        w.WriteString("working_directory", recipe.WorkingDirectory);
+        w.WriteString("scope", recipe.Scope.ToString().ToLowerInvariant());
+        if (recipe.TargetSelector is null) w.WriteNull("target_selector");
+        else w.WriteString("target_selector", recipe.TargetSelector);
+        w.WriteBoolean("is_exact", recipe.IsExact);
+        if (recipe.UnavailableReason is null) w.WriteNull("unavailable_reason");
+        else w.WriteString("unavailable_reason", recipe.UnavailableReason);
+        w.WritePropertyName("steps");
+        w.WriteStartArray();
+        foreach (var step in recipe.Steps)
+        {
+            w.WriteStartObject();
+            w.WriteString("executable", step.Executable);
+            w.WriteString("display_command", step.DisplayCommand);
+            w.WriteString("working_directory", step.WorkingDirectory);
+            w.WriteString("step_kind", step.StepKind);
+            w.WritePropertyName("arguments");
+            w.WriteStartArray();
+            foreach (var arg in step.Arguments)
+                w.WriteStringValue(arg);
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static bool IsPopulationContinuation(string token)
+    {
+        try
+        {
+            byte[] bytes = System.Buffers.Text.Base64Url.DecodeFromChars(token);
+            return bytes.Length > 1 && bytes[1] == 2;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string PageMcpJson(
+        ImpactTraversal traversal,
+        string fullOutput,
+        int maxDepth,
+        int limit,
+        string workspaceId,
+        string? continuation,
+        ToolDiagnostic? diagnostic,
+        TelemetryScope? telemetry)
+    {
+        string popKey = string.Join(';', traversal.Tests.Select(t => t.Symbol.SymbolId).Concat(traversal.Impacted.Select(i => i.Symbol.SymbolId)));
+        string populationFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(popKey)));
+        string reqKey = $"{traversal.View}:{maxDepth}:{limit}:{traversal.SeededPaths.Count}:{string.Join(',', traversal.SeededPaths)}";
+        string requestFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(reqKey)));
+
+        var identity = new ToolPopulationContinuationIdentity(
+            Kind: "impact",
+            WorkspaceId: workspaceId,
+            PopulationFingerprint: populationFingerprint,
+            RequestFingerprint: requestFingerprint);
+
+        int populationCount = traversal.Tests.Count + traversal.Impacted.Count;
+        int consumed = 0;
+        if (!string.IsNullOrWhiteSpace(continuation))
+        {
+            ToolPopulationContinuationCursor cursor = ToolOutputBudget.DecodePopulationCursor(continuation, identity);
+            consumed = (int)cursor.Offset;
+        }
+
+        if (consumed < 0 || consumed > populationCount)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "stale_continuation",
+                "Continuation no longer matches the requested result population."));
+        }
+
+        int testsConsumed = Math.Min(consumed, traversal.Tests.Count);
+        int impactedConsumed = Math.Max(0, consumed - traversal.Tests.Count);
+        var remainingTests = traversal.Tests.Skip(testsConsumed).ToList();
+        var remainingImpacted = traversal.Impacted.Skip(impactedConsumed).ToList();
+
+        var pageTests = remainingTests.ToList();
+        var pageImpacted = remainingImpacted.ToList();
+
+        while (pageTests.Count + pageImpacted.Count > 0)
+        {
+            int candidateNextOffset = consumed + pageTests.Count + pageImpacted.Count;
+            string? candidateContinuation = candidateNextOffset < populationCount
+                ? ToolOutputBudget.EncodePopulationCursor(identity, new ToolPopulationContinuationCursor(candidateNextOffset))
+                : null;
+            bool candidateTruncated = candidateContinuation is not null;
+
+            string candidatePage = RenderResultPageJson(
+                traversal,
+                pageTests,
+                pageImpacted,
+                traversal.Tests.Count,
+                pageTests.Count,
+                traversal.Impacted.Count,
+                pageImpacted.Count,
+                maxDepth,
+                limit,
+                candidateContinuation,
+                candidateTruncated);
+
+            if (diagnostic is not null)
+            {
+                candidatePage = ToolDiagnosticRenderer.Attach(
+                    "impact",
+                    candidatePage,
+                    diagnostic,
+                    json: true,
+                    telemetry);
+            }
+
+            if (Encoding.UTF8.GetByteCount(candidatePage) <= ToolOutputBudget.ImpactMcpMaxBytes)
+            {
+                return candidatePage;
+            }
+
+            if (pageImpacted.Count > 0)
+                pageImpacted.RemoveAt(pageImpacted.Count - 1);
+            else
+                pageTests.RemoveAt(pageTests.Count - 1);
+        }
+
+        if (traversal.Tests.Count + traversal.Impacted.Count > 0)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "impact_item_too_large",
+                "A single impact row exceeds the 12 KiB output budget."));
+        }
+
+        return RenderResultPageJson(
+            traversal,
+            [],
+            [],
+            traversal.Tests.Count,
+            0,
+            traversal.Impacted.Count,
+            0,
+            maxDepth,
+            limit,
+            null,
+            false);
+    }
+
+    private static string RenderResultPageJson(
+        ImpactTraversal traversal,
+        IReadOnlyList<Reached> pageTests,
+        IReadOnlyList<Reached> pageImpacted,
+        int testsTotal,
+        int testsReturned,
+        int impactedTotal,
+        int impactedReturned,
+        int maxDepth,
+        int limit,
+        string? continuation,
+        bool truncated)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("schema_version", 1);
+            w.WriteString("kind", "impact_result_page");
+            w.WriteString("format", "json");
+            w.WriteString("view", traversal.View);
+            w.WritePropertyName("traversal");
+            WriteTraversalJson(w, traversal, maxDepth, limit);
+            w.WritePropertyName("tests");
+            WriteReachedArray(w, pageTests);
+            w.WritePropertyName("impacted");
+            WriteReachedArray(w, pageImpacted);
+            WriteTestEvidenceScope(w);
+            w.WriteNumber("tests_total", testsTotal);
+            w.WriteNumber("tests_returned", testsReturned);
+            w.WriteNumber("impacted_total", impactedTotal);
+            w.WriteNumber("impacted_returned", impactedReturned);
+            if (continuation is null)
+                w.WriteNull("continuation");
+            else
+                w.WriteString("continuation", continuation);
+            w.WriteBoolean("truncated", truncated);
+            if (traversal.RunnerRecipe is not null)
+            {
+                WriteRunnerRecipe(w, traversal.RunnerRecipe);
+            }
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
     }
 
     private static void WriteTestEvidence(Utf8JsonWriter w, TestRoleEvidence evidence)

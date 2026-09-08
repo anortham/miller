@@ -1448,6 +1448,36 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal(["tc:fresh", "tc:hit"], result.StaleTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
         Assert.False(result.MayExecute);
+        Assert.Equal(0, facts.IdentifierEvidenceToCalls);
+    }
+
+    [Fact]
+    public void Select_depth_truncated_impact_read_fails_closed_to_unknown_with_zero_identifier_calls()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:hit", "sym:test-hit", "tests/payments/HitTests.cs", "test_hit");
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        var facts = new FakeMillerFactSource { ImpactTruncatedByDepth = true };
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit(
+            "sym:test-hit",
+            "test_hit",
+            "tests/payments/HitTests.cs",
+            isTest: true,
+            edgeKind: "calls",
+            edgeSource: "relationship"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/payments/service.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:fresh", "tc:hit"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
+        Assert.Equal(0, facts.IdentifierEvidenceToCalls);
     }
 
     /// <summary>

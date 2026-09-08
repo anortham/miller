@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Miller.Core.Editing;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -44,9 +45,15 @@ public sealed class EditTool
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly ILogger<EditTool> _logger;
+    private readonly MillerHostPaths? _hostPaths;
+    private readonly WorkspaceRegistry? _registry;
 
     /// <summary>Construct the stateless target-bound edit shell used by the MCP host.</summary>
-    public EditTool(WorkspaceEditContextFactory editContextFactory, ILogger<EditTool> logger)
+    public EditTool(
+        WorkspaceEditContextFactory editContextFactory,
+        ILogger<EditTool> logger,
+        MillerHostPaths? hostPaths = null,
+        WorkspaceRegistry? registry = null)
     {
         ArgumentNullException.ThrowIfNull(editContextFactory);
         ArgumentNullException.ThrowIfNull(logger);
@@ -56,6 +63,8 @@ public sealed class EditTool
         _applier = null!;
         _writeThrough = null!;
         _logger = logger;
+        _hostPaths = hostPaths;
+        _registry = registry;
     }
 
     /// <summary>Construct over the singleton symbol-read and apply/write-through seams.</summary>
@@ -82,16 +91,16 @@ public sealed class EditTool
         "Edit indexed code with proof: previews a diff and writes NOTHING by default; set apply=true to commit " +
         "the change. Operations: replace_text (match_mode + query/anchor/line selectors avoid full-file reads; " +
         "returns match proof), replace_symbol_body, replace_symbol_signature, rename_symbol (workspace-wide), " +
-        "insert_before/insert_after, add_doc. If the index is stale Miller converges it first; allow_stale may " +
+        "insert_before/insert_after, add_doc, batch. If the index is stale Miller converges it first; allow_stale may " +
         "bypass refusal only for disk-derived replace_text edits. NOT for: creating new files (use your " +
         "file tools) or bulk text audits (search mode=markers first). Example: edit operation=replace_text " +
         "target=src/App.cs old_text=\"retries: 3\" new_text=\"retries: 5\".")]
     public string Edit(
-        [Description("replace_text | replace_symbol_body | replace_symbol_signature | rename_symbol | insert_before | insert_after | add_doc.")]
+        [Description("replace_text | replace_symbol_body (body block only) | replace_symbol_signature (preserves trailing whitespace) | rename_symbol | insert_before | insert_after | add_doc | batch.")]
         string operation,
-        [Description("A file path or a symbol (name, Parent.Member, or id) — smart-resolved.")] string target,
+        [Description("A file path or a symbol (name, Parent.Member, or id) — smart-resolved. Optional for operation=batch.")] string? target = null,
         [Description("The literal text to replace, for replace_text.")] string? old_text = null,
-        [Description("The replacement text, or the new name for rename_symbol.")] string? new_text = null,
+        [Description("The replacement text (for replace_symbol_body supply block only, e.g. { ... }), or the new name for rename_symbol.")] string? new_text = null,
         [Description("Which match of old_text to replace: first | last | all. Default first.")] string occurrence = "first",
         [Description(
             "replace_text matching. Default auto already ladders exact→normalized→fuzzy; pass " +
@@ -104,13 +113,17 @@ public sealed class EditTool
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
         [Description("rename_symbol safety: exact (default) or include_fallback (explicit name-based fallback).")]
         string rename_mode = "exact",
+        [Description("Optional comma-separated or JSON list of candidate site/span identifiers bound to content hash (<site>@<hash>) to exclude from rename.")]
+        string? exclude_sites = null,
+        [Description("JSON array of operation objects for operation=batch.")] string? edits = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null)
     {
         var telemetry = TelemetryContext.Current;
         try
         {
-            var request = new EditRequest(operation, target)
+            string resolvedTarget = target ?? (string.Equals(operation, "batch", StringComparison.OrdinalIgnoreCase) ? "workspace" : string.Empty);
+            var request = new EditRequest(operation, resolvedTarget)
             {
                 OldText = old_text,
                 NewText = new_text,
@@ -123,17 +136,20 @@ public sealed class EditTool
                 AllowStale = allow_stale,
                 Scope = scope,
                 RenameMode = rename_mode,
+                ExcludeSites = exclude_sites,
+                Edits = edits,
                 Format = format,
             };
 
             if (telemetry is not null)
             {
                 telemetry.Op = string.IsNullOrWhiteSpace(operation) ? "unknown" : operation.Trim().ToLowerInvariant();
-                telemetry.SetTarget(target);
+                telemetry.SetTarget(resolvedTarget);
                 telemetry.SetMetadata("format", string.Equals(format, "json", StringComparison.OrdinalIgnoreCase) ? "json" : "compact");
                 telemetry.SetMetadata("apply", apply);
                 telemetry.SetMetadata("allow_stale", allow_stale);
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                telemetry.SetMetadata("has_exclude_sites", !string.IsNullOrWhiteSpace(exclude_sites));
                 telemetry.SetMetadata("rename_mode",
                     string.IsNullOrWhiteSpace(rename_mode) ? "exact" : rename_mode.Trim().ToLowerInvariant());
                 telemetry.SetMetadata("match_mode", string.IsNullOrWhiteSpace(match_mode) ? "auto" : match_mode.Trim().ToLowerInvariant());
@@ -142,16 +158,31 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_line", line is not null);
             }
 
+            if (!EditService.ValidateRequest(request, out EditOperation op, out Occurrence _, out EditService.EditResult? invalidResult))
+            {
+                if (telemetry is not null)
+                {
+                    telemetry.Outcome = TelemetryOutcome.Error;
+                    telemetry.SetMetadata(FailureReasonMetadataKey, invalidResult!.Value.FailureReason ?? EditService.FailureInvalidRequest);
+                    if (invalidResult.Value.Diagnostic is not null)
+                        ToolDiagnosticRenderer.ApplyTelemetry(telemetry, invalidResult.Value.Diagnostic);
+                }
+                return BoundMcpOutput(invalidResult!.Value, string.Equals(format, "json", StringComparison.OrdinalIgnoreCase));
+            }
+
+            bool completeRecall = string.Equals(operation, "batch", StringComparison.OrdinalIgnoreCase) || op != EditOperation.ReplaceText;
+
             EditService.EditResult result;
             if (_editContextFactory is not null)
             {
-                using WorkspaceEditContext editContext = _editContextFactory.Create(workspace_id);
+                using WorkspaceEditContext editContext = _editContextFactory.Create(workspace_id, completeRecall);
                 result = editContext.Service.Execute(request);
             }
             else
             {
-                using WorkspaceSymbolReadContext readContext =
-                    _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead();
+                using WorkspaceSymbolReadContext readContext = completeRecall
+                    ? _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead()
+                    : _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
                 var service = new EditService(
                     readContext.Index,
                     new SmartTargetResolver(readContext.Index),
@@ -160,8 +191,9 @@ public sealed class EditTool
                     _applier,
                     _writeThrough,
                     readSession: readContext.ReadSession,
-                    resolveFreshContext: () =>
-                        _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead());
+                    resolveFreshContext: () => completeRecall
+                        ? _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead()
+                        : _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None));
                 result = service.Execute(request);
             }
 
@@ -191,6 +223,26 @@ public sealed class EditTool
                 if (telemetry.Outcome == TelemetryOutcome.Empty && result.Diagnostic is null)
                     telemetry.SetEmptyReason("edit_noop");
             }
+
+            if (!string.Equals(format, "json", StringComparison.OrdinalIgnoreCase)
+                && apply
+                && result.Applied
+                && string.Equals(result.Outcome, "ok", StringComparison.OrdinalIgnoreCase))
+            {
+                (string targetRoot, string? targetWorkspaceId) = ResolveWorkspaceForAdvice(workspace_id);
+                if (!string.IsNullOrWhiteSpace(targetRoot))
+                {
+                    string? ctHint = CrossToolHandoff.AdviceForAppliedEdit(
+                        targetRoot,
+                        targetWorkspaceId,
+                        result.FilesLeftModified);
+                    if (!string.IsNullOrWhiteSpace(ctHint))
+                    {
+                        result = result with { Output = result.Output + "\n" + ctHint };
+                    }
+                }
+            }
+
             return BoundMcpOutput(result, string.Equals(format, "json", StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex)
@@ -283,5 +335,56 @@ public sealed class EditTool
         using (var writer = new Utf8JsonWriter(buffer))
             write(writer);
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private (string Root, string? WorkspaceId) ResolveWorkspaceForAdvice(string? workspaceId)
+    {
+        if (_workspace is not null)
+        {
+            return (_workspace.CanonicalRoot ?? _workspace.WorkspaceRoot, _workspace.WorkspaceId);
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceId)
+            || string.Equals(workspaceId, "current", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workspaceId, "primary", StringComparison.OrdinalIgnoreCase))
+        {
+            return (string.Empty, null);
+        }
+
+        if (Directory.Exists(workspaceId))
+        {
+            string root = Path.GetFullPath(workspaceId);
+            return (root, WorkspaceId.FromCanonicalRoot(root));
+        }
+
+        try
+        {
+            WorkspaceRegistry? registry = _registry;
+            bool disposeRegistry = false;
+            if (registry is null && _hostPaths?.RegistryDbPath is { } dbPath)
+            {
+                registry = WorkspaceRegistry.Open(dbPath);
+                disposeRegistry = true;
+            }
+            if (registry is not null)
+            {
+                try
+                {
+                    WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, workspaceId, WorkspaceSelectorIntent.Read);
+                    return (row.CanonicalRoot, row.WorkspaceId);
+                }
+                finally
+                {
+                    if (disposeRegistry)
+                        registry.Dispose();
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort workspace resolution for advice
+        }
+
+        return (string.Empty, null);
     }
 }

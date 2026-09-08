@@ -44,6 +44,15 @@ public sealed record EditRequest(string Operation, string Target)
     /// <summary>rename_symbol safety mode: exact | include_fallback. Default exact.</summary>
     public string RenameMode { get; init; } = "exact";
 
+    /// <summary>Optional list or delimited string of candidate site/span identifiers bound to content hash (<site>@<hash>) to exclude from rename.</summary>
+    public string? ExcludeSites { get; init; }
+
     /// <summary>Output format: compact | json. Default compact.</summary>
     public string Format { get; init; } = "compact";
+
+    /// <summary>Raw JSON array string of operations for operation=batch.</summary>
+    public string? Edits { get; init; }
+
+    /// <summary>Parsed child operations for operation=batch.</summary>
+    public IReadOnlyList<EditRequest>? BatchItems { get; init; }
 }

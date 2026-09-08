@@ -625,7 +625,7 @@ public sealed class WorkspaceTool
                     CurrentBootstrapSnapshot),
                 currentFacts,
                 "workspace(operation=\"health\")",
-                StaleRegistryHint(json));
+                hint: null);
         }
 
         WorkspaceRegistryRow row = target.Row
@@ -651,7 +651,7 @@ public sealed class WorkspaceTool
                 leader),
             facts,
             "workspace(operation=\"health\", workspace_id=\"" + row.DisplayId + "\")",
-            StaleRegistryHint(json));
+            hint: null);
     }
 
     private static WorkspaceOperationResult StatusResult(
@@ -1028,7 +1028,8 @@ public sealed class WorkspaceTool
                 ScanGovernorKey.For(current) ?? current.WorkspaceRoot, _governor),
             ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(current.ExtractDbPath),
             RebindProvenance: WorkspaceFactsAssembler.RebindProvenanceFactsFor(
-                current.ExtractDbPath, _registry));
+                current.ExtractDbPath, _registry),
+            CtDisk: WorkspaceFactsAssembler.ReadCtDisk(current.CanonicalRoot ?? current.WorkspaceRoot));
     }
 
     private WorkspaceFacts? TryAssembleCurrentStoreFacts()
@@ -1285,6 +1286,12 @@ public sealed class WorkspaceTool
                     WorkspaceRender.Action(result, json),
                     1,
                     TelemetryOutcome.Ok),
+            WorkspaceRefreshStatus.Queued =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    0,
+                    TelemetryOutcome.Empty,
+                    QueuedRefusal(operation, refresh.WarningText)),
             WorkspaceRefreshStatus.LockBusy =>
                 new WorkspaceOperationResult(
                     WorkspaceRender.Action(result, json),
@@ -1525,8 +1532,26 @@ public sealed class WorkspaceTool
             result.StoreMaintenance,
             result.RetirementFailures
                 .Select(e => new WorkspacePruneRetirementFailure(e.WorkspaceId, e.DisplayId, e.Root, e.Outcome))
+                .ToArray(),
+            result.RetirementOwed,
+            result.Blocked
+                ?.Select(b => new WorkspacePruneBlockedEntry(
+                    b.WorkspaceId,
+                    b.DisplayId,
+                    b.Root,
+                    b.ReasonCode,
+                    b.Message,
+                    b.SuggestedAction))
                 .ToArray());
         int count = result.Pruned.Count;
+        ToolDiagnostic? diagnostic = null;
+        if (count == 0 && result.BlockedCount > 0)
+        {
+            diagnostic = ToolDiagnostic.Refusal(
+                "workspace_prune_retirement_failed",
+                "Producer view retirement failed for one or more stale workspaces. Their registry entries were kept; retry after resolving the producer error.");
+        }
+
         return new WorkspaceOperationResult(
             WorkspaceRender.PruneWithinBudget(
                 rendered,
@@ -1534,11 +1559,7 @@ public sealed class WorkspaceTool
                 ToolOutputBudget.WorkspaceMcpMaxBytes),
             count,
             count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty,
-            result.RetirementFailures.Count == 0
-                ? null
-                : ToolDiagnostic.Refusal(
-                    "workspace_prune_retirement_failed",
-                    "Producer view retirement failed for one or more stale workspaces. Their registry entries were kept; retry after resolving the producer error."));
+            diagnostic);
     }
 
     // ---------- remove ----------

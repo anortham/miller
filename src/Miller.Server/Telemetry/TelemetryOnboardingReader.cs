@@ -70,7 +70,13 @@ public static class TelemetryOnboardingReader
 {
     private const int DefaultLimit = 10;
 
-    public static TelemetryOnboardingFacts Read(string dbPath, string? workspaceId, int windowDays = 30, int limit = DefaultLimit)
+    public static TelemetryOnboardingFacts Read(
+        string dbPath,
+        string? workspaceId,
+        int windowDays = 7,
+        int limit = DefaultLimit,
+        TimeProvider? timeProvider = null,
+        DateTimeOffset? anchor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         if (!File.Exists(dbPath))
@@ -90,11 +96,10 @@ public static class TelemetryOnboardingReader
                 return TelemetryOnboardingFacts.Unavailable("missing_telemetry_table");
 
             using SqliteTransaction transaction = connection.BeginTransaction();
-            string? windowEnd = ReadMaxTimestamp(connection, transaction, workspaceId);
-            if (string.IsNullOrWhiteSpace(windowEnd))
-                return EmptyAvailable("sparse");
+            DateTimeOffset now = anchor ?? (timeProvider ?? TimeProvider.System).GetUtcNow();
+            int boundedDays = Math.Max(1, windowDays);
+            string cutoff = now.AddDays(-boundedDays).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
 
-            string cutoff = ComputeCutoff(windowEnd, windowDays);
             WindowSummary window = ReadWindowSummary(connection, transaction, workspaceId, cutoff);
             if (window.TotalCalls == 0)
                 return EmptyAvailable("sparse");
@@ -402,6 +407,12 @@ public static class TelemetryOnboardingReader
             WITH scoped AS (
                 SELECT tool, op,
                        CAST(COALESCE(
+                           CASE WHEN json_valid(metadata_json)
+                                     AND json_type(metadata_json, '$.diagnostic_code') = 'text'
+                                THEN json_extract(metadata_json, '$.diagnostic_code') END,
+                           CASE WHEN json_valid(metadata_json)
+                                     AND json_type(metadata_json, '$.code') = 'text'
+                                THEN json_extract(metadata_json, '$.code') END,
                            CASE WHEN json_valid(metadata_json)
                                      AND json_type(metadata_json, '$.empty_reason') = 'text'
                                 THEN json_extract(metadata_json, '$.empty_reason') END,

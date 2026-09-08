@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -567,7 +568,11 @@ public sealed class DashboardRegistryReadTests : IDisposable
             bytesReturned: 100,
             sourceBytes: 0);
 
-        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-a");
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
+            _registryDb,
+            _telemetryDb,
+            workspaceId: "ws-a",
+            anchor: DateTimeOffset.Parse("2026-05-31T10:05:00.000Z", CultureInfo.InvariantCulture));
 
         DashboardWorkspaceFacts facts = Assert.Single(snapshot.WorkspaceFacts);
         Assert.Same(facts, snapshot.SelectedWorkspaceFacts);

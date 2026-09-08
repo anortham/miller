@@ -2413,7 +2413,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar is enabled but missing", ex.Message);
@@ -2437,7 +2437,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        Assert.Throws<InvalidOperationException>(() =>
+        Assert.Throws<SidecarUnavailableException>(() =>
             provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         WriteSearchDbFor(target, revision: 1);
         WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
@@ -2465,7 +2465,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar", ex.Message);
@@ -2523,7 +2523,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar is enabled but missing", ex.Message);
@@ -2541,7 +2541,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        Assert.Throws<InvalidOperationException>(() =>
+        Assert.Throws<SidecarUnavailableException>(() =>
             provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None));
         WriteSearchDbFor(current, revision: 1);
         WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None);
@@ -3673,7 +3673,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
 
         Assert.Equal("refresh_pending", context.FreshnessStatus);
-        Assert.False(context.IndexFresh);
+        Assert.Null(context.IndexFresh);
         Assert.Equal(3, context.Revision);
 
         string? banner = ReadToolWorkspaceRouting.CompactBanner(context, "target-ws", json: false);
@@ -3819,6 +3819,76 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         now += 5_000;
         provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
         Assert.Equal(2, scheduled.Count);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_DuringCooldownAfterFinishedRefresh_DoesNotForceRefreshPending()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-cooldown-pending");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var scheduled = new List<Action>();
+        long now = 1_000;
+        var gate = new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => now);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true),
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate);
+
+        // First call: schedules background refresh, state is Queued
+        using (WorkspaceReadContext ctx1 = provider.Resolve("target-ws", WorkspaceRefreshMode.Background))
+        {
+            Assert.Equal("refresh_pending", ctx1.FreshnessStatus);
+        }
+
+        // Run the scheduled refresh to completion
+        Assert.Single(scheduled);
+        scheduled[0]();
+
+        // Second call during cooldown: refresh is already finished (Unchanged), so it should not be refresh_pending
+        using (WorkspaceReadContext ctx2 = provider.Resolve("target-ws", WorkspaceRefreshMode.Background))
+        {
+            Assert.NotEqual("refresh_pending", ctx2.FreshnessStatus);
+            Assert.Equal("unchanged", ctx2.FreshnessStatus);
+        }
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_FailedRefreshSurfacesWarningText()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-warning");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var scheduled = new List<Action>();
+        long now = 1_000;
+        var gate = new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => now);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: _ => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Failed, "target-ws", root, target.DbPath, Revision: 3, Scanned: true, Error: "Scan timeout"),
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate);
+
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Single(scheduled);
+        scheduled[0]();
+
+        using WorkspaceReadContext ctx = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
+        Assert.Contains("Scan timeout", ctx.WarningText);
     }
 
     [Fact]
@@ -4217,7 +4287,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         // results forever. Only the artifact id separates the two generations.
         ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
 
-        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+        SidecarUnavailableException failure = Assert.Throws<SidecarUnavailableException>(
             () => provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
     }
@@ -4246,7 +4316,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
 
-        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+        SidecarUnavailableException failure = Assert.Throws<SidecarUnavailableException>(
             () => provider.ResolveTextContentSearch("target-ws", WorkspaceRefreshMode.None));
         Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
     }

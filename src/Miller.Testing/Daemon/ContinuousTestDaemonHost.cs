@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Testing;
+
 
 /// <summary>
 /// <paramref name="Activity"/>, <paramref name="Run"/> and <paramref name="LoopHealth"/> are trailing
@@ -32,7 +34,9 @@ public sealed record ContinuousTestDaemonSnapshot(
     CtDaemonRunProgress? Run = null,
     CtLoopHealthVerdict? LoopHealth = null,
     bool AutoRunsPaused = false,
-    string? PauseReason = null);
+    string? PauseReason = null,
+    CtDaemonSelectionProgress? Selection = null);
+
 
 public sealed class ContinuousTestDaemonHostOptions
 {
@@ -149,10 +153,13 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 
     internal bool ExplicitRunOwed;
 
+    internal List<string> TrackedCommandIds { get; } = [];
+
 
     public IReadOnlyList<ContinuousTestProject> Projects { get; init; } = [];
 
-    public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
+    public IContinuousTestDaemonEnqueuer? Enqueuer { get; internal set; }
+
 
     /// <summary>
     /// What the host disposes when this context detaches - usually the context's own store. After
@@ -363,6 +370,65 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private volatile bool _drainInFlight;
 
+    private sealed record PendingSelectionRequest(
+        ContinuousTestWorkspaceContext Context,
+        ContinuousTestDaemonChange Change,
+        bool RequireCompleteDelta,
+        bool ExplicitRun,
+        bool IdleDrain,
+        DateTimeOffset EnqueuedAtUtc);
+
+    private sealed class ActiveSelectionWorker : IDisposable
+    {
+        public ActiveSelectionWorker(
+            PendingSelectionRequest request,
+            Task<ContinuousTestSelectionResult> task,
+            CancellationTokenSource cts,
+            IDisposable? session,
+            DateTimeOffset startedAtUtc)
+        {
+            Request = request;
+            Task = task;
+            Cts = cts;
+            Session = session;
+            StartedAtUtc = startedAtUtc;
+            ProgressTimestampUtc = startedAtUtc;
+        }
+
+        public PendingSelectionRequest Request { get; }
+        public Task<ContinuousTestSelectionResult> Task { get; }
+        public CancellationTokenSource Cts { get; }
+        public IDisposable? Session { get; }
+        public DateTimeOffset StartedAtUtc { get; }
+        public DateTimeOffset ProgressTimestampUtc { get; set; }
+
+        public void Dispose()
+        {
+            try { Cts.Cancel(); } catch (ObjectDisposedException) { }
+            try { Cts.Dispose(); } catch (ObjectDisposedException) { }
+            Session?.Dispose();
+        }
+    }
+
+    private sealed class HostSelectionEnqueuer : IContinuousTestDaemonEnqueuer
+    {
+        private readonly ContinuousTestDaemonHost _host;
+        private readonly ContinuousTestWorkspaceContext _context;
+
+        public HostSelectionEnqueuer(ContinuousTestDaemonHost host, ContinuousTestWorkspaceContext context)
+        {
+            _host = host;
+            _context = context;
+        }
+
+        public ContinuousTestDaemonEnqueueResult Enqueue(ContinuousTestDaemonChange change) =>
+            _host.EnqueueSelection(_context, change, requireCompleteDelta: true, explicitRun: false, idleDrain: false);
+    }
+
+    private readonly Dictionary<string, List<PendingSelectionRequest>> _pendingSelectionsByWorkspace = new(PathKeyComparer);
+    private readonly List<string> _workspaceSelectionOrder = new();
+    private ActiveSelectionWorker? _activeSelection;
+
     public ContinuousTestDaemonHost(string workspaceRoot, ContinuousTestDaemonHostOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -381,6 +447,10 @@ public sealed class ContinuousTestDaemonHost
             Projects = _options.Projects ?? [],
             Enqueuer = _options.Enqueuer,
         };
+        if (_primary.Enqueuer is null && _primary.Queue is not null)
+        {
+            _primary.Enqueuer = new HostSelectionEnqueuer(this, _primary);
+        }
         _idleDrainPolicy = new CtIdleDrainPolicy(
             _options.IdleDrainQuietPeriod
                 ?? ContinuousTestRevisionPoller.ResolveDebounceDelay(
@@ -393,6 +463,7 @@ public sealed class ContinuousTestDaemonHost
         _adopted = new Dictionary<string, ContinuousTestWorkspaceContext>(PathKeyComparer);
         _stopDetached = new HashSet<string>(PathKeyComparer);
     }
+
 
     /// <summary>
     /// The one stdout line the daemon prints at start. The launcher redirects daemon stdout into
@@ -510,8 +581,10 @@ public sealed class ContinuousTestDaemonHost
             // must.
             LoopHealth: CtDaemonLoopHealth.Evaluate(record),
             AutoRunsPaused: record?.AutoRunsPaused ?? false,
-            PauseReason: record?.PauseReason);
+            PauseReason: record?.PauseReason,
+            Selection: record?.Selection);
     }
+
 
     /// <summary>
     /// Whether the process that published <paramref name="record"/> is still alive.
@@ -604,8 +677,10 @@ public sealed class ContinuousTestDaemonHost
         while (!cancellationToken.IsCancellationRequested)
         {
             StampLoopTick();
+            CollectCompletedSelection();
 
             bool stopRequested;
+
             try
             {
                 stopRequested = ProcessCommands(lease, cancellationToken);
@@ -684,6 +759,7 @@ public sealed class ContinuousTestDaemonHost
                         foreach (ContinuousTestWorkspaceContext context in ready)
                         {
                             await context.Queue!.DrainReadyAsync(now, cancellationToken).ConfigureAwait(false);
+                            CompleteTrackedCommands(context, "completed");
 
                             // A run is activity: the idle drain's quiet window restarts behind it,
                             // so a follow-up drain needs both fresh quiet and the cooldown.
@@ -758,10 +834,24 @@ public sealed class ContinuousTestDaemonHost
             }
         }
 
+        foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+        {
+            CancelTrackedCommands(context, "stopped");
+        }
+
         TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stopped");
         Publish(Evaluate("stopped", CtDaemonLifecycleState.Stopped, executing: false));
 
+        if (_activeSelection is { } shuttingDownSelection)
+        {
+            shuttingDownSelection.Dispose();
+            _activeSelection = null;
+        }
+        _pendingSelectionsByWorkspace.Clear();
+        _workspaceSelectionOrder.Clear();
+
         await pollCancellation.CancelAsync().ConfigureAwait(false);
+
         Task<ContinuousTestRevisionReadResult>[] inFlight = EnumerateContexts()
             .Where(c => c.PollReadTask is { IsCompleted: false })
             .Select(c => c.PollReadTask!)
@@ -923,8 +1013,10 @@ public sealed class ContinuousTestDaemonHost
                     LoopTick(),
                     LoopAgeSeconds(),
                     AutoRunsPaused: pauseReason is not null,
-                    PauseReason: pauseReason));
+                    PauseReason: pauseReason,
+                    Selection: ReadSelectionProgress()));
         }
+
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
@@ -963,9 +1055,20 @@ public sealed class ContinuousTestDaemonHost
     /// while it is blocked in a drain — an idle record with a frozen loop tick is exactly the shape a reader
     /// judges as a wedged loop.
     /// </summary>
-    private (CtDaemonActivity Activity, CtDaemonRunProgress? Run) ReadActivity() =>
-        _runActivity?.Read()
-            ?? (_drainInFlight ? CtDaemonActivity.Executing : CtDaemonActivity.Idle, null);
+    private (CtDaemonActivity Activity, CtDaemonRunProgress? Run) ReadActivity()
+    {
+        (CtDaemonActivity activity, CtDaemonRunProgress? run) = _runActivity?.Read()
+            ?? (_drainInFlight ? (CtDaemonActivity.Executing, null) : (CtDaemonActivity.Idle, null));
+
+        if (activity == CtDaemonActivity.Executing)
+            return (activity, run);
+
+        if (_activeSelection is not null)
+            return (CtDaemonActivity.Selecting, null);
+
+        return (activity, run);
+    }
+
 
     /// <summary>
     /// Drains the file command channel. Returns <c>true</c> when a live stop request asked this
@@ -1099,6 +1202,11 @@ public sealed class ContinuousTestDaemonHost
                 return false;
             }
 
+            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+            {
+                CancelTrackedCommands(context, "stopped");
+            }
+
             TryWriteAck(id, "stopping");
             TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stop");
             return true;
@@ -1115,27 +1223,52 @@ public sealed class ContinuousTestDaemonHost
                 return false;
             }
 
-            if (target.PollReadTask is not null)
+            string runReason = request.Reason ?? "run";
+
+            if (target.Projects.Count == 0)
             {
-                if (target.Queue is not null && target.Projects.Count > 0)
-                    target.ExplicitRunOwed = true;
-                TryWriteAck(id, "run");
+                TryWriteAck(id, runReason, CtDaemonCommandState.Completed);
                 return false;
             }
 
-            if (!EnqueueExplicitRun(target, request.Freshness))
+            if (target.PollReadTask is not null)
+            {
+                if (target.Queue is not null && target.Projects.Count > 0)
+                {
+                    target.ExplicitRunOwed = true;
+                    target.TrackedCommandIds.Add(id);
+                }
+                TryWriteAck(id, runReason, CtDaemonCommandState.Acknowledged);
+                return false;
+            }
+
+            if (!EnqueueExplicitRun(target, request.Freshness, out int totalImpactedTests))
             {
                 TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
                 return false;
             }
+
+            if (totalImpactedTests == 0)
+            {
+                TryWriteAck(id, runReason, CtDaemonCommandState.Completed);
+                return false;
+            }
+
+            TryWriteAck(id, runReason, CtDaemonCommandState.Acknowledged);
+            target.TrackedCommandIds.Add(id);
+            return false;
         }
 
-        TryWriteAck(id, "run");
+        TryWriteAck(id, request.Reason ?? "run");
         return false;
     }
 
-    private bool EnqueueExplicitRun(ContinuousTestWorkspaceContext target, CtFreshnessKey? requested)
+    private bool EnqueueExplicitRun(ContinuousTestWorkspaceContext target, CtFreshnessKey? requested) =>
+        EnqueueExplicitRun(target, requested, out _);
+
+    private bool EnqueueExplicitRun(ContinuousTestWorkspaceContext target, CtFreshnessKey? requested, out int totalImpactedTests)
     {
+        totalImpactedTests = 0;
         if (target.Queue is null || target.Projects.Count == 0)
             return true;
 
@@ -1146,7 +1279,7 @@ public sealed class ContinuousTestDaemonHost
         foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
                      target.Projects, target.WorkspaceRoot))
         {
-            target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            ContinuousTestDaemonEnqueueResult result = target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
                 item.Workspace,
                 freshness.Revision.ToString(CultureInfo.InvariantCulture),
                 freshness.IndexIdentity,
@@ -1154,6 +1287,7 @@ public sealed class ContinuousTestDaemonHost
                 ObservedAt: DateTimeOffset.UtcNow,
                 Command: item.Project.Command,
                 Framework: item.Project.Framework));
+            totalImpactedTests += result.Pending.TestCaseIds.Count;
         }
 
         return true;
@@ -1163,9 +1297,35 @@ public sealed class ContinuousTestDaemonHost
     {
         if (!context.ExplicitRunOwed)
             return;
-        if (!EnqueueExplicitRun(context, requested: null))
+        if (!EnqueueExplicitRun(context, requested: null, out int totalImpactedTests))
             return;
         context.ExplicitRunOwed = false;
+        if (totalImpactedTests == 0)
+        {
+            CompleteTrackedCommands(context, "no-work");
+        }
+    }
+
+    private void CompleteTrackedCommands(ContinuousTestWorkspaceContext context, string reason)
+    {
+        if (context.TrackedCommandIds.Count == 0)
+            return;
+        foreach (string commandId in context.TrackedCommandIds)
+        {
+            TryWriteAck(commandId, reason, CtDaemonCommandState.Completed);
+        }
+        context.TrackedCommandIds.Clear();
+    }
+
+    private void CancelTrackedCommands(ContinuousTestWorkspaceContext context, string reason)
+    {
+        if (context.TrackedCommandIds.Count == 0)
+            return;
+        foreach (string commandId in context.TrackedCommandIds)
+        {
+            TryWriteAck(commandId, reason, CtDaemonCommandState.Cancelled);
+        }
+        context.TrackedCommandIds.Clear();
     }
 
     /// <summary>
@@ -1233,8 +1393,10 @@ public sealed class ContinuousTestDaemonHost
             Enabled: true,
             Executing: executing,
             Activity: activity,
-            Run: run);
+            Run: run,
+            Selection: ReadSelectionProgress());
     }
+
 
     private ContinuousTestDaemonSnapshot DisabledSnapshot() =>
         new(CtDaemonLifecycleState.Stopped, "disabled", ContinuousTestVerdict.Unknown, null, 0, 0, false, false);
@@ -1433,13 +1595,14 @@ public sealed class ContinuousTestDaemonHost
         var observation = new CtIdleDrainObservation(
             Now: now,
             StaleCount: ReadStaleCount(context, freshness),
-            QueueHasPendingWork: queue.HasPendingWork(),
+            QueueHasPendingWork: queue.HasPendingWork() || HasPendingOrActiveSelection(context.WorkspaceId),
             RunExecuting: _drainInFlight,
             PollSettled: context.PollSettled,
             AutoRunsPaused: context.Unavailable.StuckReason is not null || !context.Backoff.CanEnqueue,
             LastActivityAt: context.LastActivityAt,
             LastDrainAt: context.LastIdleDrainAt);
-        if (!_idleDrainPolicy.ShouldDrain(observation))
+        CtIdleDrainDecision decision = _idleDrainPolicy.Evaluate(observation);
+        if (!decision.ShouldDrain)
             return;
 
         context.LastIdleDrainAt = now;
@@ -1455,6 +1618,8 @@ public sealed class ContinuousTestDaemonHost
                 Command: item.Project.Command,
                 Framework: item.Project.Framework));
         }
+
+
 
         Diagnostic($"ct idle drain scheduled workspace={context.WorkspaceId} "
             + $"revision={freshness.Revision} stale={observation.StaleCount}");
@@ -1603,17 +1768,30 @@ public sealed class ContinuousTestDaemonHost
 
         if (context is null)
             return null;
+        if (context.Enqueuer is null && context.Queue is not null)
+            context.Enqueuer = new HostSelectionEnqueuer(this, context);
         _adopted[root] = context;
         return context;
     }
 
     private void DetachWorktree(string key, ContinuousTestWorkspaceContext context, string reason)
     {
+        CancelTrackedCommands(context, reason);
         _adopted.Remove(key);
+        _pendingSelectionsByWorkspace.Remove(context.WorkspaceId);
+        _workspaceSelectionOrder.Remove(context.WorkspaceId);
+        if (_activeSelection is { } active && active.Request.Context.WorkspaceId == context.WorkspaceId)
+        {
+            active.Dispose();
+            _activeSelection = null;
+            DispatchNextSelection();
+        }
+
         try
         {
             context.Dispose();
         }
+
         catch (Exception exception)
         {
             // A detach must never kill the daemon; the remaining contexts still depend on it.
@@ -1708,13 +1886,18 @@ public sealed class ContinuousTestDaemonHost
         string? pauseReason = state == CtDaemonLifecycleState.Stopped
             ? null
             : PauseReasonOf(context.Unavailable.StuckReason);
+        CtDaemonSelectionProgress? selection = _activeSelection?.Request.Context.WorkspaceId == context.WorkspaceId
+            ? ReadSelectionProgress()
+            : null;
         var record = new CtDaemonStatusRecord(
             state,
             reason,
             _leaseIdentity,
             _options.Clock(),
             AutoRunsPaused: pauseReason is not null,
-            PauseReason: pauseReason);
+            PauseReason: pauseReason,
+            Selection: selection);
+
         try
         {
             if (_options.AdoptedStatusWriter is { } writer)
@@ -1844,4 +2027,239 @@ public sealed class ContinuousTestDaemonHost
         LastSnapshot = snapshot;
         _options.StatusSink?.Invoke(snapshot);
     }
+
+    private ContinuousTestDaemonEnqueueResult EnqueueSelection(
+        ContinuousTestWorkspaceContext context,
+        ContinuousTestDaemonChange change,
+        bool requireCompleteDelta,
+        bool explicitRun,
+        bool idleDrain)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(change);
+
+        if (requireCompleteDelta && change.DeltaCompleteness != ContinuousTestDeltaCompleteness.Complete)
+        {
+            var empty = new ContinuousTestSelectionResult([], [], []);
+            var rejected = new ContinuousTestDaemonPendingRun(
+                change.Workspace,
+                change.CurrentRevision,
+                change.CurrentRevision,
+                change.IndexIdentity,
+                [],
+                change.FilterArguments,
+                change.Command,
+                change.Framework,
+                false,
+                change.ObservedAt,
+                change.ObservedAt);
+            return new ContinuousTestDaemonEnqueueResult(empty, rejected);
+        }
+
+        if (!_pendingSelectionsByWorkspace.TryGetValue(context.WorkspaceId, out List<PendingSelectionRequest>? list))
+        {
+            list = new List<PendingSelectionRequest>();
+            _pendingSelectionsByWorkspace[context.WorkspaceId] = list;
+        }
+
+        string projectPath = change.Workspace.ProjectPath;
+        int existingIndex = list.FindIndex(req =>
+            string.Equals(req.Change.Workspace.ProjectPath, projectPath, StringComparison.OrdinalIgnoreCase));
+
+        DateTimeOffset now = _options.Clock();
+        if (existingIndex >= 0)
+        {
+            PendingSelectionRequest existing = list[existingIndex];
+            list[existingIndex] = new PendingSelectionRequest(
+                context,
+                change,
+                RequireCompleteDelta: existing.RequireCompleteDelta && requireCompleteDelta,
+                ExplicitRun: existing.ExplicitRun || explicitRun,
+                IdleDrain: existing.IdleDrain || idleDrain,
+                now);
+        }
+        else
+        {
+            list.Add(new PendingSelectionRequest(
+                context,
+                change,
+                requireCompleteDelta,
+                explicitRun,
+                idleDrain,
+                now));
+        }
+
+        if (!_workspaceSelectionOrder.Contains(context.WorkspaceId))
+        {
+            _workspaceSelectionOrder.Add(context.WorkspaceId);
+        }
+
+        DispatchNextSelection();
+
+        var enqueuedSelection = new ContinuousTestSelectionResult([], [], []);
+        var placeholderPending = new ContinuousTestDaemonPendingRun(
+            change.Workspace,
+            change.CurrentRevision,
+            change.CurrentRevision,
+            change.IndexIdentity,
+            [],
+            change.FilterArguments,
+            change.Command,
+            change.Framework,
+            false,
+            change.ObservedAt,
+            change.ObservedAt);
+        return new ContinuousTestDaemonEnqueueResult(enqueuedSelection, placeholderPending);
+    }
+
+
+    private bool HasPendingOrActiveSelection(string workspaceId)
+    {
+        if (_activeSelection is { } active && active.Request.Context.WorkspaceId == workspaceId)
+            return true;
+
+        return _pendingSelectionsByWorkspace.TryGetValue(workspaceId, out List<PendingSelectionRequest>? list)
+            && list.Count > 0;
+    }
+
+    private void CollectCompletedSelection()
+    {
+        if (_activeSelection is not { } active || !active.Task.IsCompleted)
+            return;
+
+        try
+        {
+            if (active.Task.IsCompletedSuccessfully)
+            {
+                ContinuousTestSelectionResult result = active.Task.Result;
+                ContinuousTestWorkspaceContext context = active.Request.Context;
+                CtFreshnessKey? requestedKey = active.Request.Change.Freshness;
+                bool isObsolete = false;
+                if (context.LatestFreshness is { } latest && requestedKey is { } requested)
+                {
+                    if (!string.Equals(latest.IndexIdentity, requested.IndexIdentity, StringComparison.Ordinal)
+                        || latest.Revision > requested.Revision)
+                    {
+                        isObsolete = true;
+                    }
+                }
+
+                if (isObsolete)
+                {
+                    Diagnostic($"ct selection discarded (obsolete) workspace={context.WorkspaceId} project={active.Request.Change.Workspace.ProjectPath} requested={requestedKey} latest={context.LatestFreshness}");
+                }
+                else if (context.Queue is not null)
+                {
+                    context.Queue.ApplyCompletedSelection(
+                        active.Request.Change,
+                        result,
+                        active.Request.RequireCompleteDelta,
+                        active.Request.ExplicitRun,
+                        active.Request.IdleDrain);
+                }
+            }
+            else if (active.Task.IsFaulted)
+            {
+                Exception? ex = active.Task.Exception?.InnerException ?? active.Task.Exception;
+                Diagnostic($"ct selection failed workspace={active.Request.Context.WorkspaceId} project={active.Request.Change.Workspace.ProjectPath} error={ex?.Message}");
+            }
+        }
+        finally
+        {
+            active.Dispose();
+            _activeSelection = null;
+        }
+
+        DispatchNextSelection();
+    }
+
+    private void DispatchNextSelection()
+    {
+        if (_activeSelection is not null)
+            return;
+
+        while (_workspaceSelectionOrder.Count > 0)
+        {
+            string workspaceId = _workspaceSelectionOrder[0];
+            _workspaceSelectionOrder.RemoveAt(0);
+
+            if (_pendingSelectionsByWorkspace.TryGetValue(workspaceId, out List<PendingSelectionRequest>? list)
+                && list.Count > 0)
+            {
+                PendingSelectionRequest request = list[0];
+                list.RemoveAt(0);
+
+                if (list.Count > 0)
+                {
+                    _workspaceSelectionOrder.Add(workspaceId);
+                }
+                else
+                {
+                    _pendingSelectionsByWorkspace.Remove(workspaceId);
+                }
+
+                if (request.Context.Queue is { } queue)
+                {
+                    var cts = new CancellationTokenSource();
+                    IDisposable? session = null;
+                    try
+                    {
+                        string dbPath = Path.Combine(request.Context.WorkspaceRoot, ".miller", "symbols.db");
+                        if (File.Exists(dbPath))
+                        {
+                            session = WorkspaceReadSessionFactory.Open(dbPath, request.Context.WorkspaceRoot, request.Context.WorkspaceId);
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    ContinuousTestImpactSelector selector = queue.Selector;
+                    ContinuousTestDaemonChange change = request.Change;
+                    CancellationToken token = cts.Token;
+                    Task<ContinuousTestSelectionResult> task = Task.Run(() =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
+                            WorkspaceId: change.Workspace.WorkspaceId,
+                            ChangedPaths: change.ChangedPaths,
+                            ImpactedSymbols: change.ImpactedSymbols,
+                            ImpactedTests: change.ImpactedTests,
+                            WorkspaceScope: change.WorkspaceScope,
+                            ProjectPath: change.Workspace.ProjectPath),
+                            change.Freshness);
+                    }, token);
+
+                    DateTimeOffset now = _options.Clock();
+                    _activeSelection = new ActiveSelectionWorker(request, task, cts, session, now);
+                    return;
+                }
+            }
+            else
+            {
+                _pendingSelectionsByWorkspace.Remove(workspaceId);
+            }
+        }
+    }
+
+    private CtDaemonSelectionProgress? ReadSelectionProgress()
+    {
+        if (_activeSelection is { } active)
+        {
+            ContinuousTestDaemonChange change = active.Request.Change;
+            return new CtDaemonSelectionProgress(
+                WorkspaceId: active.Request.Context.WorkspaceId,
+                ProjectPath: change.Workspace.ProjectPath,
+                Phase: "selecting",
+                Freshness: change.Freshness,
+                StartedAtUtc: active.StartedAtUtc,
+
+
+                ProgressTimestampUtc: active.ProgressTimestampUtc,
+                ItemsProcessed: 0);
+        }
+
+        return null;
+    }
 }
+

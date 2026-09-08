@@ -21,7 +21,15 @@ public enum EditErrorKind
 
     /// <summary>A required argument (e.g. <c>old_text</c>, <c>new_text</c>) was missing or empty.</summary>
     MissingArgument,
+
+    /// <summary>The input text duplicates a signature/declaration header when a body was expected.</summary>
+    DuplicateDeclaration,
 }
+
+/// <summary>
+/// A nearby candidate line examined during <c>replace_text</c> matching (Task N5).
+/// </summary>
+public sealed record TextReplaceCandidate(int LineNumber, string Snippet, int Distance);
 
 /// <summary>
 /// A typed planning failure (M6 Components/1). Planners return this instead of throwing for expected,
@@ -30,7 +38,11 @@ public enum EditErrorKind
 /// </summary>
 /// <param name="Kind">The failure category.</param>
 /// <param name="Message">A human-readable, actionable description.</param>
-public sealed record EditError(EditErrorKind Kind, string Message);
+/// <param name="Candidates">Optional nearby candidate lines examined when matching failed.</param>
+public sealed record EditError(
+    EditErrorKind Kind,
+    string Message,
+    IReadOnlyList<TextReplaceCandidate>? Candidates = null);
 
 /// <summary>
 /// The outcome of planning a single-file operation: either the byte-span <see cref="TextEdit"/>s to apply, or a

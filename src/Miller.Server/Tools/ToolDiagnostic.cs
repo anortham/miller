@@ -96,6 +96,15 @@ public sealed record ToolDiagnostic(
 
         return exception switch
         {
+            SidecarUnavailableException sidecar =>
+                Unavailable(
+                    $"sidecar_{sidecar.ArtifactKind.ToString().ToLowerInvariant()}_{FormatSidecarReason(sidecar.Reason)}",
+                    sidecar.Message,
+                    [new ToolDiagnosticAction(
+                        sidecar.WorkspaceId is not null
+                            ? $"workspace(operation=\"refresh\", workspace_id=\"{sidecar.WorkspaceId}\")"
+                            : "workspace(operation=\"refresh\")",
+                        $"refresh and converge the {sidecar.ArtifactKind.ToString().ToLowerInvariant()} sidecar")]),
             FamilyStoreReadException { IsReaderAdmissionBusy: true } =>
                 Unavailable(
                     "reader_admission_busy",
@@ -175,6 +184,18 @@ public sealed record ToolDiagnostic(
     /// </summary>
     private static bool IsIndexGenerationMovement(string message) =>
         message.StartsWith("The family-store generation changed", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatSidecarReason(SidecarRecoveryReason reason) =>
+        reason switch
+        {
+            SidecarRecoveryReason.Missing => "missing",
+            SidecarRecoveryReason.Stale => "stale",
+            SidecarRecoveryReason.GenerationMismatch => "generation_mismatch",
+            SidecarRecoveryReason.Disabled => "disabled",
+            SidecarRecoveryReason.LogSequenceMismatch => "log_sequence_mismatch",
+            SidecarRecoveryReason.ClassificationPolicyOutdated => "classification_outdated",
+            _ => reason.ToString().ToLowerInvariant(),
+        };
 
     public string ClassName() => Class switch
     {

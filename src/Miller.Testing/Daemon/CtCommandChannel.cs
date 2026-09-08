@@ -12,7 +12,8 @@ public enum CtDaemonStopStatus
 public sealed record CtRunResult(
     CtRunExecution Execution,
     CtDaemonCommandAck? Ack,
-    string? Reason);
+    string? Reason,
+    string? CommandId = null);
 
 public sealed record CtDaemonStopResult(CtDaemonStopStatus Status, string? Reason);
 
@@ -106,7 +107,7 @@ public static class CtCommandChannel
         CtDaemonCommandRequest request = WriteRequest(
             workspaceRoot, CtDaemonCommandKind.Run, reason, freshness);
         CtDaemonCommandAck? ack = WaitForAck(workspaceRoot, request.CommandId, ackTimeout ?? DefaultAckTimeout);
-        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null);
+        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId);
     }
 
     public static CtDaemonStopResult Stop(

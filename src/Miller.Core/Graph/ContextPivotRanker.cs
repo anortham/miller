@@ -74,19 +74,20 @@ public static class ContextPivotRanker
         AddWhere(static (pivot, state) =>
             !state.Keys.Contains(pivot.DiversityKey) &&
             (pivot.FilePath is null || !state.Files.Contains(pivot.FilePath)) &&
-            (!pivot.IsTest || !state.HasTest),
+            (!pivot.IsTest || !state.HasTest || HasExplicitTestAnchor(pivot)),
             diverseFileTarget);
         AddWhere(static (pivot, state) =>
             !state.Keys.Contains(pivot.DiversityKey) &&
-            (!pivot.IsTest || !state.HasTest) &&
+            (!pivot.IsTest || !state.HasTest || HasExplicitTestAnchor(pivot)) &&
             (pivot.FilePath is null || state.FileCounts.GetValueOrDefault(pivot.FilePath) < 2),
             limit);
         AddWhere(static (pivot, state) =>
-            (!pivot.IsTest || !state.HasTest) &&
+            (!pivot.IsTest || !state.HasTest || HasExplicitTestAnchor(pivot)) &&
             (pivot.FilePath is null ||
              !state.KeyFiles.Contains((pivot.DiversityKey, pivot.FilePath))) &&
             (pivot.FilePath is null || state.FileCounts.GetValueOrDefault(pivot.FilePath) < 2),
             limit);
+        AddWhere(static (pivot, _) => !pivot.IsTest || HasExplicitTestAnchor(pivot), limit);
         AddWhere(static (_, _) => true, limit);
         return selected;
 
@@ -126,4 +127,7 @@ public static class ContextPivotRanker
             }
         }
     }
+
+    private static bool HasExplicitTestAnchor(ContextPivot pivot) =>
+        pivot.IsPinned || pivot.AnchorStrength >= 65;
 }

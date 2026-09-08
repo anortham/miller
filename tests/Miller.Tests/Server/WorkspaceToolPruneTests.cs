@@ -246,8 +246,58 @@ public sealed class WorkspaceToolPruneTests : IDisposable
 
         Assert.Contains("retirement failures: 1", output);
         Assert.Contains("linked-worktree removal is not confirmed", output);
+        Assert.Contains("diagnostic_code=workspace_prune_retirement_failed", output);
         Assert.NotNull(registry.Get(MissingWs));
         Assert.NotNull(registry.GetStoreMember(MissingWs));
+    }
+
+    [Fact]
+    public void Prune_PartialPrune_SucceedsWithoutRefusalDiagnostic()
+    {
+        const string secondMissingWs = "ws-prune-second-missing";
+        string secondMissingRoot = Path.Combine(NewTempDir("second-gone-parent"), "second-missing-repo");
+
+        (WorkspaceTool tool, WorkspaceRegistry registry, _) = BuildTool(
+            (reg, _, _, missingRoot) =>
+            {
+                // MissingWs is part of store family and fails retirement check (blocked)
+                StoreFamilyRegistryRow family = reg.GetOrCreateStoreFamily(
+                    "prune-retirement-failure",
+                    canonicalCommonDir: null,
+                    commonDirCreatedAtUtc: null,
+                    storesRoot: NewTempDir("retirement-failure-store"));
+                reg.UpsertStoreMember(
+                    MissingWs,
+                    family.FamilyId,
+                    "view-prune-retirement-failure",
+                    missingRoot,
+                    WorkspaceRootIdentity.Unknown);
+
+                // secondMissingWs has no store family and will prune cleanly
+                reg.UpsertSeen(
+                    secondMissingWs,
+                    "second-missing-repo",
+                    Path.GetFullPath(secondMissingRoot),
+                    Path.Combine(secondMissingRoot, ".miller", "symbols.db"),
+                    WorkspaceRegistryState.Stale);
+            },
+            appBaseDirectory: NewTempDir("retirement-failure-tools"));
+
+        string output = tool.Workspace(operation: "prune");
+
+        // Pruned cleanly: 1
+        Assert.Contains("pruned: 1", output);
+        Assert.Contains("second-missing-repo", output);
+        Assert.Null(registry.Get(secondMissingWs));
+
+        // Blocked / retirement failure: 1
+        Assert.Contains("retirement failures: 1", output);
+        Assert.Contains("blocked: 1", output);
+        Assert.NotNull(registry.Get(MissingWs));
+
+        // Partial prune: NO whole-call refusal diagnostic attached
+        Assert.DoesNotContain("workspace refused", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workspace_prune_retirement_failed", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -422,19 +472,6 @@ public sealed class WorkspaceToolPruneTests : IDisposable
     }
 
     [Fact]
-    public void Status_Compact_NamesTheDeadRegistryRowsAboveTheThreshold()
-    {
-        (WorkspaceTool tool, _, _) = BuildTool((registry, _, _, _) => SeedDeadRows(registry, count: 12));
-
-        string output = tool.Workspace(operation: "status");
-
-        Assert.Contains(
-            "next: workspace(operation=\"prune\", dry_run=true) — 13 of 15 registered roots are gone from disk",
-            output,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void Status_Compact_SaysNothingBelowTheThreshold()
     {
         (WorkspaceTool tool, _, _) = BuildTool();
@@ -442,6 +479,18 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         string output = tool.Workspace(operation: "status");
 
         Assert.DoesNotContain("dry_run=true", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace(operation=\"prune\"", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_SaysNothingAboveTheThreshold()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool((registry, _, _, _) => SeedDeadRows(registry, count: 12));
+
+        string output = tool.Workspace(operation: "status");
+
+        Assert.DoesNotContain("dry_run=true", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace(operation=\"prune\"", output, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -2,7 +2,7 @@
 name: miller-search-debug
 description: Use when Miller search misses expected results, ranks surprising hits, returns noisy output, or needs mode/content/region troubleshooting.
 user-invocable: true
-arguments: "<query and expected result>"
+argument-hint: "<query and expected result>"
 allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__workspace
 ---
 
@@ -37,7 +37,7 @@ search(workspace_id="<id>", query="<source body text>", mode="source")
 search(workspace_id="<id>", query="<imported log text>", mode="external")
 search(workspace_id="<id>", query="<imported web text>", mode="web")
 search(workspace_id="<id>", query="<broad text>", mode="all-text")
-search(workspace_id="<id>", query="<comment or literal>", regions="comment|string_literal|doc_comment")
+search(workspace_id="<id>", query="<comment or literal>", regions="comment,string_literal,doc_comment")
 search(workspace_id="<id>", query="<known area>", file_pattern="src/ui/**", language="typescript")
 ```
 
@@ -46,7 +46,7 @@ search(workspace_id="<id>", query="<known area>", file_pattern="src/ui/**", lang
 - Natural-language search hides test code by default; use `exclude_tests=false` when tests are expected.
 - Symbol search ranks `name + signature`; docs/prose belong in `mode=content`.
 - Source bodies belong in `mode=source`; imported logs/reports and web markdown belong in `mode=external` or `mode=web`.
-- Cross-workspace exact-text audits should use `content(operation="search", workspace_id="all", query="<term>", content_kind="source|docs|config|external_file|web")` (the `miller-text-audit` skill).
+- Cross-workspace exact-text audits should use `content(operation="search", workspace_id="all", query="<term>", content_kind="source")` (or `docs`, `config`, `external_file`, `web`; see the `miller-text-audit` skill).
 - Comment, doc-comment, and string-literal searches require region indexing and a fresh sidecar.
 - File/path queries should use `mode=file` when auto mode looks noisy.
 - Scoped workflows should use `file_pattern` and `language` before raising `limit`.

@@ -164,4 +164,95 @@ public sealed class SymbolGraphShortestPathTests
 
         Assert.Equal(["a", "b", "c", "d"], path);
     }
+
+    // =========================================================================
+    // Multi-source ShortestPathWithEvidence
+    // =========================================================================
+
+    [Fact]
+    public void ShortestPathWithEvidence_MultiSource_PicksGlobalShortestPathAcrossStarts()
+    {
+        // Topology:
+        //   StartA -> HopA1 -> HopA2 -> Target (3 hops)
+        //   StartB -> HopB1 -> Target          (2 hops)
+        //   StartC -> Target                   (1 hop, winning)
+        //   StartD (disconnected)
+        var graph = SymbolGraph.Build(
+            [
+                N("StartA"), N("StartB"), N("StartC"), N("StartD"),
+                N("HopA1"), N("HopA2"), N("HopB1"), N("Target")
+            ],
+            [
+                E("StartA", "HopA1"),
+                E("HopA1", "HopA2"),
+                E("HopA2", "Target"),
+                E("StartB", "HopB1"),
+                E("HopB1", "Target"),
+                E("StartC", "Target"),
+            ]);
+
+        // Multi-source with all 4 starts -> Should select StartC (1 hop)
+        var path = graph.ShortestPathWithEvidence(
+            fromNodes: ["StartA", "StartB", "StartC", "StartD"],
+            to: "Target",
+            maxDepth: 5,
+            edge => edge.EdgeKind == "calls");
+
+        Assert.NotNull(path);
+        Assert.Equal(["StartC", "Target"], path.Nodes);
+        Assert.Single(path.Edges);
+
+        // Without StartC -> Should select StartB (2 hops)
+        var pathWithoutC = graph.ShortestPathWithEvidence(
+            fromNodes: ["StartA", "StartB", "StartD"],
+            to: "Target",
+            maxDepth: 5,
+            edge => edge.EdgeKind == "calls");
+
+        Assert.NotNull(pathWithoutC);
+        Assert.Equal(["StartB", "HopB1", "Target"], pathWithoutC.Nodes);
+        Assert.Equal(2, pathWithoutC.Edges.Count);
+    }
+
+    [Fact]
+    public void ShortestPathWithEvidence_MultiSource_EdgeCasesHandledCorrectly()
+    {
+        var graph = SymbolGraph.Build(
+            [N("StartA"), N("StartB"), N("HopB1"), N("Target")],
+            [
+                E("StartA", "Target"),
+                E("StartB", "HopB1"),
+                E("HopB1", "Target"),
+            ]);
+
+        // 1. Target itself in fromNodes -> 0-hop path
+        var zeroHop = graph.ShortestPathWithEvidence(
+            fromNodes: ["StartB", "Target"],
+            to: "Target",
+            maxDepth: 5,
+            edge => true);
+
+        Assert.NotNull(zeroHop);
+        Assert.Equal(["Target"], zeroHop.Nodes);
+        Assert.Empty(zeroHop.Edges);
+
+        // 2. fromNodes contains missing/null/unreachable nodes
+        var missingNodes = graph.ShortestPathWithEvidence(
+            fromNodes: ["nonexistent1", "StartB", "nonexistent2"],
+            to: "Target",
+            maxDepth: 5,
+            edge => true);
+
+        Assert.NotNull(missingNodes);
+        Assert.Equal(["StartB", "HopB1", "Target"], missingNodes.Nodes);
+
+        // 3. maxDepth too shallow to reach Target
+        var shallow = graph.ShortestPathWithEvidence(
+            fromNodes: ["StartB"],
+            to: "Target",
+            maxDepth: 1, // Requires 2 hops
+            edge => true);
+
+        Assert.Null(shallow);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -52,7 +53,8 @@ public sealed class TelemetryOnboardingReaderTests : IDisposable
         Insert("2026-06-23T10:05:00.000Z", "search", "auto", "other-ws", "ok", 20, 9, 999, 99, Sha256Hex("Other"));
         Insert("2026-05-01T10:05:00.000Z", "search", "auto", "ws-a", "ok", 20, 9, 999, 99, Sha256Hex("Old"));
 
-        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-a", windowDays: 30);
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-06-23T10:05:00.000Z");
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-a", windowDays: 30, anchor: anchor);
 
         Assert.True(facts.Available);
         Assert.Equal("ready", facts.State);
@@ -93,8 +95,9 @@ public sealed class TelemetryOnboardingReaderTests : IDisposable
                 Sha256Hex($"target-{i}"));
         }
 
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-06-23T10:01:00.000Z");
         TelemetryOnboardingFacts facts =
-            TelemetryOnboardingReader.Read(_dbPath, "ws-a", windowDays: 30, limit: 2);
+            TelemetryOnboardingReader.Read(_dbPath, "ws-a", windowDays: 30, limit: 2, anchor: anchor);
 
         Assert.Equal(2, facts.ToolMix.Count);
         Assert.Equal(5, facts.ToolMixTotal);
@@ -137,13 +140,114 @@ public sealed class TelemetryOnboardingReaderTests : IDisposable
             null,
             """{"empty_reason":123}""");
 
-        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-a");
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-06-23T10:05:00.000Z");
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-a", anchor: anchor);
 
         Assert.True(facts.Available);
         TelemetryMiss miss = Assert.Single(facts.CommonMisses);
         Assert.Equal("empty", miss.Reason);
         Assert.Equal(2, miss.Calls);
         Assert.Equal(1, facts.CommonMissesTotal);
+    }
+
+    [Fact]
+    public void Read_DormantWorkspace_ReturnsSparseWithZeroCalls()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-dormant"))
+        {
+        }
+        DateTimeOffset anchor = DateTimeOffset.UtcNow;
+        // Insert events from 30 days ago (outside the 7-day onboarding window)
+        Insert(
+            anchor.AddDays(-30).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture),
+            "search",
+            "auto",
+            "ws-dormant",
+            "error",
+            50,
+            0,
+            100,
+            20,
+            null,
+            """{"diagnostic_code":"old_error"}""");
+
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-dormant", windowDays: 7, anchor: anchor);
+
+        Assert.True(facts.Available);
+        Assert.Equal("sparse", facts.State);
+        Assert.Equal(0, facts.TotalCalls);
+        Assert.Empty(facts.Friction);
+        Assert.Empty(facts.CommonMisses);
+    }
+
+    [Fact]
+    public void Read_RecentSuccess_ReturnsReadyWithOnlyRecentSignals()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-recent"))
+        {
+        }
+        DateTimeOffset anchor = DateTimeOffset.UtcNow;
+        // Insert old error from 30 days ago
+        Insert(
+            anchor.AddDays(-30).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture),
+            "search",
+            "auto",
+            "ws-recent",
+            "error",
+            500,
+            0,
+            100,
+            20,
+            null);
+        // Insert 3 recent successes within 2 days
+        for (int i = 0; i < 3; i++)
+        {
+            Insert(
+                anchor.AddDays(-2).AddMinutes(i).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture),
+                "search",
+                "auto",
+                "ws-recent",
+                "ok",
+                20,
+                1,
+                100,
+                20,
+                null);
+        }
+
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-recent", windowDays: 7, anchor: anchor);
+
+        Assert.True(facts.Available);
+        Assert.Equal("ready", facts.State);
+        Assert.Equal(3, facts.TotalCalls);
+        Assert.DoesNotContain(facts.Friction, f => f.ErrorCount > 0);
+    }
+
+    [Fact]
+    public void Read_DiagnosticCodeInMetadata_PreferredOverGenericOutcome()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-code"))
+        {
+        }
+        DateTimeOffset anchor = DateTimeOffset.UtcNow;
+        Insert(
+            anchor.AddMinutes(-5).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture),
+            "search",
+            "auto",
+            "ws-code",
+            "error",
+            25,
+            0,
+            10,
+            2,
+            null,
+            """{"diagnostic_code":"symbol_not_found"}""");
+
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-code", windowDays: 7, anchor: anchor);
+
+        Assert.True(facts.Available);
+        TelemetryMiss miss = Assert.Single(facts.CommonMisses);
+        Assert.Equal("symbol_not_found", miss.Reason);
     }
 
     private void Insert(

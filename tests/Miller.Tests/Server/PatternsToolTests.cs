@@ -1541,6 +1541,114 @@ public sealed class PatternsToolTests
         Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
     }
 
+    [Fact]
+    public void Patterns_ActionableValueKeys_RetainedAheadOfSchemaConstants()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-hx-actionable', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.actionable.v1', 'attr', 'attr', 'sym-orders',
+                 1, 1, 1, 50, 0, 50, 1.0,
+                 '{"name":"hx-get","value":"/orders","route_target":"/api/orders","framework":"htmx","query_family":"markup","api_style":"rest"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string compact = tool.Patterns(operation: "search", pattern_id: "htmx.actionable.v1");
+
+        Assert.Contains("name=hx-get", compact, StringComparison.Ordinal);
+        Assert.Contains("value=/orders", compact, StringComparison.Ordinal);
+        Assert.Contains("route_target=/api/orders", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_SchemaConstants_HoistedWhenUniformAcrossPage()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-uniform-1', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'aspnet.uniform.v1', 'route', 'route', 'sym-auth',
+                 1, 1, 1, 20, 0, 20, 1.0,
+                 '{"verb":"GET","route_template":"/orders","framework":"aspnet","query_family":"routing"}'),
+                ('fact-uniform-2', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'aspnet.uniform.v1', 'route', 'route', 'sym-auth',
+                 2, 1, 2, 20, 21, 40, 1.0,
+                 '{"verb":"POST","route_template":"/orders","framework":"aspnet","query_family":"routing"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string compact = tool.Patterns(operation: "search", pattern_id: "aspnet.uniform.v1");
+
+        Assert.Contains("constants (page): framework=aspnet,query_family=routing", compact, StringComparison.Ordinal);
+        // The per-row metadata should not repeat the hoisted constants
+        Assert.DoesNotContain("metadata=verb=GET,route_template=/orders,framework=aspnet", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_SchemaConstants_HoistingSuppressedWhenMixed()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-mixed-1', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'mixed.pattern.v1', 'match', 'match', 'sym-auth',
+                 1, 1, 1, 20, 0, 20, 1.0,
+                 '{"verb":"GET","framework":"aspnet","query_family":"routing"}'),
+                ('fact-mixed-2', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'mixed.pattern.v1', 'match', 'match', 'sym-orders',
+                 1, 1, 1, 20, 0, 20, 1.0,
+                 '{"verb":"GET","framework":"htmx","query_family":"markup"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string compact = tool.Patterns(operation: "search", pattern_id: "mixed.pattern.v1");
+
+        Assert.DoesNotContain("constants (page):", compact, StringComparison.Ordinal);
+        Assert.Contains("framework=aspnet", compact, StringComparison.Ordinal);
+        Assert.Contains("framework=htmx", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_MetadataValueCompact_TruncatesLongValues()
+    {
+        using var fx = CreatePatternFixture();
+        string longVal = new string('a', 120);
+        Exec(fx.DbPath, $$"""
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-long-val', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'long.value.v1', 'match', 'match', 'sym-auth',
+                 1, 1, 1, 20, 0, 20, 1.0,
+                 '{"name":"query","value":"{{longVal}}"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string compact = tool.Patterns(operation: "search", pattern_id: "long.value.v1");
+        string expectedTruncated = new string('a', 79) + "…";
+        Assert.Contains("value=" + expectedTruncated, compact, StringComparison.Ordinal);
+        Assert.DoesNotContain(longVal, compact, StringComparison.Ordinal);
+
+        // JSON preserves verbatim full string without truncation
+        string json = tool.Patterns(operation: "search", pattern_id: "long.value.v1", format: "json");
+        Assert.Contains(longVal, json, StringComparison.Ordinal);
+    }
+
     private static void Exec(string dbPath, string sql)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder

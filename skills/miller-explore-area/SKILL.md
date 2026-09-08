@@ -2,7 +2,7 @@
 name: miller-explore-area
 description: Use when orienting on an unfamiliar code area with Miller, explaining a module, finding entry points, or gathering context before a change.
 user-invocable: true
-arguments: "<area, concept, module, file, or task>"
+argument-hint: "<area, concept, module, file, or task>"
 allowed-tools: mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__workspace
 ---
 
@@ -48,12 +48,12 @@ Omitted `inspect` depth is `summary`. Use `depth=overview` for the first symbol 
 search(workspace_id="<id>", query="<identifier or phrase>")
 search(workspace_id="<id>", query="<docs/prose phrase>", mode="content")
 search(workspace_id="<id>", query="<source-body literal>", mode="source")
-search(workspace_id="<id>", query="<imported log or web phrase>", mode="external|web")
-search(workspace_id="<id>", query="<comment or literal>", regions="comment|string_literal|doc_comment")
+search(workspace_id="<id>", query="<imported log phrase>", mode="external")
+search(workspace_id="<id>", query="<comment or literal>", regions="comment,string_literal,doc_comment")
 ```
 
 For exact-text audits across registered workspaces, use
-`content(operation="search", workspace_id="all", query="<term>", content_kind="source|docs|config|external_file|web")`
+`content(operation="search", workspace_id="all", query="<term>", content_kind="source")` (or `docs`, `config`, `external_file`, `web`)
 and bounded `content(operation="read", ...)` windows (the `miller-text-audit` skill) before escalating to broader context.
 
 `context` integration from content hits remains opt-in: use it only when the user asks for surrounding code context after an audit or text-search hit.

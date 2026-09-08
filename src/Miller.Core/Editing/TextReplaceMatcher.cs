@@ -61,9 +61,15 @@ public static class TextReplaceMatcher
             from = at + oldText.Length;
         }
 
-        return matches.Count == 0
-            ? Failure(TextMatchMode.Exact, requestedMode, EditErrorKind.TextNotFound, $"old_text not found: \"{oldText}\".")
-            : Success(matches, occurrence, requestedMode, TextMatchMode.Exact);
+        if (matches.Count == 0)
+        {
+            var contentLines = SplitContentLines(content);
+            var targetLines = NormalizedTargetLines(oldText);
+            var targetText = string.Join('\n', targetLines);
+            var candidates = CollectNearbyCandidates(contentLines, targetLines, targetText);
+            return Failure(TextMatchMode.Exact, requestedMode, EditErrorKind.TextNotFound, $"old_text not found: \"{oldText}\".", candidates);
+        }
+        return Success(matches, occurrence, requestedMode, TextMatchMode.Exact);
     }
 
     private static TextReplaceMatchPlan PlanNormalized(string content, string oldText, Occurrence occurrence, TextMatchMode requestedMode)
@@ -84,7 +90,11 @@ public static class TextReplaceMatcher
         }
 
         if (matches.Count == 0)
-            return Failure(TextMatchMode.Normalized, requestedMode, EditErrorKind.TextNotFound, "old_text not found with normalized matching.");
+        {
+            var targetText = string.Join('\n', target);
+            var candidates = CollectNearbyCandidates(contentLines, target, targetText);
+            return Failure(TextMatchMode.Normalized, requestedMode, EditErrorKind.TextNotFound, "old_text not found with normalized matching.", candidates);
+        }
         IReadOnlyList<TextReplaceMatch> selectionPool =
             occurrence == Occurrence.All ? NonOverlapping(matches) : matches;
         return Success(
@@ -133,7 +143,10 @@ public static class TextReplaceMatcher
         }
 
         if (matches.Count == 0)
-            return Failure(TextMatchMode.Fuzzy, requestedMode, EditErrorKind.TextNotFound, "old_text not found with bounded fuzzy matching.");
+        {
+            var candidates = CollectNearbyCandidates(contentLines, targetLines, targetText);
+            return Failure(TextMatchMode.Fuzzy, requestedMode, EditErrorKind.TextNotFound, "old_text not found with bounded fuzzy matching.", candidates);
+        }
 
         int bestDistance = matches.Min(static match => match.Distance);
         var bestMatches = matches
@@ -193,9 +206,51 @@ public static class TextReplaceMatcher
             ambiguousMatchCount ?? allMatches.Count);
     }
 
-    private static TextReplaceMatchPlan Failure(TextMatchMode attemptedMode, TextMatchMode requestedMode, EditErrorKind kind, string message) =>
+    private static IReadOnlyList<TextReplaceCandidate> CollectNearbyCandidates(
+        IReadOnlyList<LineInfo> contentLines,
+        IReadOnlyList<string> targetLines,
+        string targetText)
+    {
+        if (contentLines.Count == 0 || targetLines.Count == 0 || targetText.Length == 0)
+            return [];
+
+        int maxDistance = Math.Min(4, Math.Max(MaxFuzzyDistance(targetText.Length) + 1, 2));
+        var candidates = new List<TextReplaceCandidate>();
+
+        for (var i = 0; i <= contentLines.Count - targetLines.Count; i++)
+        {
+            var candidateText = NormalizedWindow(contentLines, i, targetLines.Count);
+            if (candidateText.Length == 0)
+                continue;
+
+            if (Math.Abs(candidateText.Length - targetText.Length) > maxDistance)
+                continue;
+
+            var distance = BoundedLevenshteinDistance(candidateText, targetText, maxDistance);
+            if (distance <= maxDistance)
+            {
+                candidates.Add(new TextReplaceCandidate(
+                    contentLines[i].LineNumber,
+                    candidateText.Length > 120 ? candidateText[..120] + "…" : candidateText,
+                    distance));
+            }
+        }
+
+        return candidates
+            .OrderBy(static c => c.Distance)
+            .ThenBy(static c => c.LineNumber)
+            .Take(3)
+            .ToArray();
+    }
+
+    private static TextReplaceMatchPlan Failure(
+        TextMatchMode attemptedMode,
+        TextMatchMode requestedMode,
+        EditErrorKind kind,
+        string message,
+        IReadOnlyList<TextReplaceCandidate>? candidates = null) =>
         new(
-            EditPlan.Failure(new EditError(kind, message + " " + RecoveryAction(attemptedMode, requestedMode, kind))),
+            EditPlan.Failure(new EditError(kind, message + " " + RecoveryAction(attemptedMode, requestedMode, kind), candidates)),
             requestedMode,
             MatchedMode: null,
             Matches: [],

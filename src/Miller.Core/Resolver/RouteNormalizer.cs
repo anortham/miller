@@ -11,7 +11,8 @@ namespace Miller.Core.Resolver;
 /// <param name="Verb">The canonical upper-case HTTP verb (e.g. <c>GET</c>), or null when the verb is unknown.</param>
 /// <param name="Route">The canonical route: lowercased, params folded to <c>{}</c>, no leading/trailing slash, no query.</param>
 /// <param name="VerbKnown">True when <see cref="Verb"/> was derivable; false for a verb-less carrier (route-only match).</param>
-public sealed record NormalizedRoute(string? Verb, string Route, bool VerbKnown);
+/// <param name="RawRoute">The original raw route literal or template before canonicalization.</param>
+public sealed record NormalizedRoute(string? Verb, string Route, bool VerbKnown, string? RawRoute = null);
 
 /// <summary>
 /// Canonicalizes HTTP routes on both sides of the call bridge (design §4 Leg 1). Two entry points:
@@ -33,13 +34,13 @@ public static class RouteNormalizer
         "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
     ];
 
-    // [[...param]] | [...param] | [param] | ${param} | {param} | :param  ->  {}. Compiled once; each
-    // alternative consumes one path segment placeholder.
-    // The :param alternative is bounded to an identifier run (not "everything up to the next /") so a trailing literal
-    // extension/suffix is preserved — "/files/:id.json" folds to "files/{}.json", matching the C# "{id}.json" side,
-    // which stops folding at the '}'. The over-broad ":[^/]+" form folded the extension away on only the client side.
+    // [[...param]] | [...param] | [param] | ${param} | {param} | @Esc(...) | @(...) | @param | :param  ->  {}.
+    // Compiled once; each alternative consumes one path segment placeholder.
+    // The :param and @param alternatives are bounded so trailing literal suffixes and multi-segment templates
+    // are preserved (e.g. "/files/:id.json" -> "files/{}.json", "/api/projects/{0}/builds/{1}/cancel" ->
+    // "api/projects/{}/builds/{}/cancel", "/tests/@Esc(id)/start" -> "tests/{}/start").
     private static readonly Regex ParamPattern = new(
-        @"\[\[\.\.\.[^\]/]+\]\]|\[\.\.\.[^\]/]+\]|\[[^\]/]+\]|\$\{[^}]*\}|\{[^}]*\}|:[A-Za-z_][A-Za-z0-9_]*",
+        @"\[\[\.\.\.[^\]/]+\]\]|\[\.\.\.[^\]/]+\]|\[[^\]/]+\]|\$\{[^}]*\}|\{[^}]*\}|@[A-Za-z_][A-Za-z0-9_]*\([^\)]*\)|@\([^\)]*\)|@[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|:[A-Za-z_][A-Za-z0-9_]*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -57,7 +58,7 @@ public static class RouteNormalizer
 
         var verb = VerbFromCarrier(carrier);
         var route = Canonicalize(literalText);
-        return new NormalizedRoute(verb, route, verb is not null);
+        return new NormalizedRoute(verb, route, verb is not null, literalText);
     }
 
     /// <summary>
@@ -109,7 +110,27 @@ public static class RouteNormalizer
             combined = Join(prefix, tail);
         }
 
-        return new NormalizedRoute(verb, Canonicalize(combined), verb is not null);
+        return new NormalizedRoute(verb, Canonicalize(combined), verb is not null, combined);
+    }
+
+    /// <summary>
+    /// Normalize a route template or literal directly, preserving the raw route.
+    /// </summary>
+    public static NormalizedRoute NormalizeRoute(string route, string? verb = null)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        var canonical = Canonicalize(route);
+        var normalizedVerb = string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant();
+        return new NormalizedRoute(normalizedVerb, canonical, normalizedVerb is not null, route);
+    }
+
+    /// <summary>
+    /// Canonicalize a route path: fold dynamic parameters to {}, strip query/fragment, lowercase, and trim slashes.
+    /// </summary>
+    public static string CanonicalizeRoute(string route)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        return Canonicalize(route);
     }
 
     /// <summary>Map an annotation key like <c>httpget</c> to <c>GET</c>, or null when it carries no verb.</summary>

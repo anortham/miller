@@ -857,6 +857,280 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal(ConfidenceBand.High, hits.Band);
     }
 
+    [Fact]
+    public void StructuralFacts_MinimalApiMapMethods_YieldsHitsEdgesForBothVerbs()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("client.get", "GetItems", "component", file: "web/GetItems.tsx"),
+            Type("client.post", "CreateItem", "component", file: "web/CreateItem.tsx"),
+            Method("cs.items", "ItemsAsync", "Task<IResult> ItemsAsync()", string.Empty, "Api/ItemsEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-client-get",
+                "react.route_reference.v1",
+                "tsx",
+                "web/GetItems.tsx",
+                "client.get",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "react",
+                    ["target_path"] = "/api/items",
+                    ["verb"] = "GET",
+                }),
+            Fact(
+                "sf-client-post",
+                "react.route_reference.v1",
+                "tsx",
+                "web/CreateItem.tsx",
+                "client.post",
+                110,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "react",
+                    ["target_path"] = "/api/items",
+                    ["verb"] = "POST",
+                }),
+            Fact(
+                "sf-route-items",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/ItemsEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/api/items",
+                    ["verbs"] = "[\"GET\", \"POST\"]",
+                    ["handler_name"] = "ItemsAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var getHit = Assert.Single(graph.Incident("client.get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.items", getHit.Edge.TargetRef.SymbolId);
+        Assert.Equal(ConfidenceBand.Medium, getHit.Band);
+
+        var postHit = Assert.Single(graph.Incident("client.post"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.items", postHit.Edge.TargetRef.SymbolId);
+        Assert.Equal(ConfidenceBand.Medium, postHit.Band);
+
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+    }
+
+    [Fact]
+    public void Adversarial_MultiVerb_MapMethods_ThreeVerbs_BridgesMatchingClientRequests_AndRejectsUnmatchedVerb()
+    {
+        // 1. Verify StructuralRouteFactAdapter.ReadVerbs across varied formats
+        var jsonFact = Fact("f1", "p1", "cs", "A.cs", "s1", 1, new Dictionary<string, string> { ["verbs"] = "[\"GET\", \"POST\", \"DELETE\"]" });
+        Assert.Equal(["GET", "POST", "DELETE"], StructuralRouteFactAdapter.ReadVerbs(jsonFact));
+
+        var pipeFact = Fact("f2", "p1", "cs", "A.cs", "s1", 1, new Dictionary<string, string> { ["verbs"] = "GET | POST | PATCH" });
+        Assert.Equal(["GET", "POST", "PATCH"], StructuralRouteFactAdapter.ReadVerbs(pipeFact));
+
+        var commaFact = Fact("f3", "p1", "cs", "A.cs", "s1", 1, new Dictionary<string, string> { ["verbs"] = "GET, OPTIONS, HEAD" });
+        Assert.Equal(["GET", "OPTIONS", "HEAD"], StructuralRouteFactAdapter.ReadVerbs(commaFact));
+
+        // Malformed JSON falls back to string splitting on commas; trailing tokens are parsed
+        var malformedFact = Fact("f4", "p1", "cs", "A.cs", "s1", 1, new Dictionary<string, string> { ["verbs"] = "[GET, POST" });
+        Assert.Contains("POST", StructuralRouteFactAdapter.ReadVerbs(malformedFact));
+
+        // 2. Bridge Graph integration test: MapMethods with GET, POST, DELETE
+        var symbols = new List<SymbolDetail>
+        {
+            Type("client.get", "GetOrder", "component", file: "web/GetOrder.tsx"),
+            Type("client.post", "CreateOrder", "component", file: "web/CreateOrder.tsx"),
+            Type("client.delete", "DeleteOrder", "component", file: "web/DeleteOrder.tsx"),
+            Type("client.put", "UpdateOrder", "component", file: "web/UpdateOrder.tsx"), // PUT is NOT declared in MapMethods
+            Method("cs.orderHandler", "OrderHandlerAsync", "Task<IResult> OrderHandlerAsync()", string.Empty, "Api/OrderEndpoints.cs"),
+        };
+
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-get", "http.client_request.v1", "typescript", "web/GetOrder.ts", "client.get", 10,
+                new Dictionary<string, string> { ["url_kind"] = "path", ["target_path"] = "/api/orders/{}", ["verb"] = "GET", ["verb_source"] = "attested", ["client"] = "axios" }),
+            Fact("sf-post", "http.client_request.v1", "typescript", "web/CreateOrder.ts", "client.post", 20,
+                new Dictionary<string, string> { ["url_kind"] = "path", ["target_path"] = "/api/orders/{}", ["verb"] = "POST", ["verb_source"] = "attested", ["client"] = "axios" }),
+            Fact("sf-delete", "http.client_request.v1", "typescript", "web/DeleteOrder.ts", "client.delete", 30,
+                new Dictionary<string, string> { ["url_kind"] = "path", ["target_path"] = "/api/orders/{}", ["verb"] = "DELETE", ["verb_source"] = "attested", ["client"] = "axios" }),
+            Fact("sf-put", "http.client_request.v1", "typescript", "web/UpdateOrder.ts", "client.put", 40,
+                new Dictionary<string, string> { ["url_kind"] = "path", ["target_path"] = "/api/orders/{}", ["verb"] = "PUT", ["verb_source"] = "attested", ["client"] = "axios" }),
+            Fact("sf-map", "aspnet.minimal_api.route.v1", "csharp", "Api/OrderEndpoints.cs", "cs.map", 100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/api/orders/{id}",
+                    ["verbs"] = "[\"GET\", \"POST\", \"DELETE\"]",
+                    ["handler_name"] = "OrderHandlerAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        // GET, POST, DELETE must all bridge to cs.orderHandler
+        var getHit = Assert.Single(graph.Incident("client.get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.orderHandler", getHit.Edge.TargetRef.SymbolId);
+
+        var postHit = Assert.Single(graph.Incident("client.post"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.orderHandler", postHit.Edge.TargetRef.SymbolId);
+
+        var deleteHit = Assert.Single(graph.Incident("client.delete"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.orderHandler", deleteHit.Edge.TargetRef.SymbolId);
+
+        // PUT was NOT declared on the endpoint, so client.put must NOT have a Hits edge to cs.orderHandler
+        Assert.DoesNotContain(graph.Incident("client.put"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void StructuralFacts_MinimalApiHeadAndOptions_YieldsHitsEdges()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("client.head", "HeadPing", "component", file: "web/HeadPing.ts"),
+            Type("client.options", "OptionsPing", "component", file: "web/OptionsPing.ts"),
+            Method("cs.headPing", "HeadPingAsync", "Task<IResult> HeadPingAsync()", string.Empty, "Api/PingEndpoints.cs"),
+            Method("cs.optionsPing", "OptionsPingAsync", "Task<IResult> OptionsPingAsync()", string.Empty, "Api/PingEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-client-head",
+                "http.client_request.v1",
+                "typescript",
+                "web/HeadPing.ts",
+                "client.head",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["url_kind"] = "path",
+                    ["target_path"] = "/api/ping",
+                    ["verb"] = "HEAD",
+                    ["verb_source"] = "attested",
+                    ["client"] = "axios",
+                }),
+            Fact(
+                "sf-client-options",
+                "http.client_request.v1",
+                "typescript",
+                "web/OptionsPing.ts",
+                "client.options",
+                110,
+                new Dictionary<string, string>
+                {
+                    ["url_kind"] = "path",
+                    ["target_path"] = "/api/ping",
+                    ["verb"] = "OPTIONS",
+                    ["verb_source"] = "attested",
+                    ["client"] = "axios",
+                }),
+            Fact(
+                "sf-route-head",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/PingEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/api/ping",
+                    ["verb"] = "HEAD",
+                    ["handler_name"] = "HeadPingAsync",
+                }),
+            Fact(
+                "sf-route-options",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/PingEndpoints.cs",
+                "cs.map",
+                210,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/api/ping",
+                    ["verb"] = "OPTIONS",
+                    ["handler_name"] = "OptionsPingAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var headHit = Assert.Single(graph.Incident("client.head"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.headPing", headHit.Edge.TargetRef.SymbolId);
+
+        var optionsHit = Assert.Single(graph.Incident("client.options"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.optionsPing", optionsHit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void StructuralFacts_AttributeRouteAcceptVerbs_YieldsHitsEdgesForBothVerbs()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("client.get", "GetOrder", "component", file: "web/GetOrder.tsx"),
+            Type("client.head", "HeadOrder", "component", file: "web/HeadOrder.tsx"),
+            Type("ctrl.orders", "OrdersController", "class", "Api.Controllers", "Api/OrdersController.cs"),
+            Method("cs.orderAction", "OrderAction", "IActionResult OrderAction()", "OrdersController", "Api/OrdersController.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-client-get",
+                "react.route_reference.v1",
+                "tsx",
+                "web/GetOrder.tsx",
+                "client.get",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "react",
+                    ["target_path"] = "/api/orders/status",
+                    ["verb"] = "GET",
+                }),
+            Fact(
+                "sf-client-head",
+                "http.client_request.v1",
+                "typescript",
+                "web/HeadOrder.tsx",
+                "client.head",
+                110,
+                new Dictionary<string, string>
+                {
+                    ["url_kind"] = "path",
+                    ["target_path"] = "/api/orders/status",
+                    ["verb"] = "HEAD",
+                    ["verb_source"] = "attested",
+                    ["client"] = "fetch",
+                }),
+            Fact(
+                "sf-attr-route",
+                "aspnet.attribute_route.v1",
+                "csharp",
+                "Api/OrdersController.cs",
+                "cs.orderAction",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["attribute_kind"] = "http_method",
+                    ["effective_route_template"] = "/api/orders/status",
+                    ["verbs"] = "GET, HEAD",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var getHit = Assert.Single(graph.Incident("client.get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.orderAction", getHit.Edge.TargetRef.SymbolId);
+
+        var headHit = Assert.Single(graph.Incident("client.head"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.orderAction", headHit.Edge.TargetRef.SymbolId);
+    }
+
     [Theory]
     [InlineData("vue.route_reference.v1", "vue", "web/CalendarLink.vue", "vue.link", "target_path", "/calendar")]
     [InlineData("react.route_reference.v1", "tsx", "web/App.tsx", "react.link", "target_path", "/calendar")]

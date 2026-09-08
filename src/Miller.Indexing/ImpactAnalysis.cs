@@ -1,4 +1,5 @@
 using Miller.Core.Graph;
+using Miller.Core.References;
 
 namespace Miller.Indexing;
 
@@ -46,7 +47,18 @@ public static class ImpactAnalysis
         ISymbolGraphReachability graph,
         IReadOnlyList<string> seedIds,
         int maxDepth,
-        int limit)
+        int limit) =>
+        Compute(index, graph, seedIds, maxDepth, limit, view: "all", testsLimit: null, symbolsLimit: null);
+
+    public static ImpactAnalysisResult Compute(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth,
+        int limit,
+        string view = "all",
+        int? testsLimit = null,
+        int? symbolsLimit = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
@@ -54,38 +66,116 @@ public static class ImpactAnalysis
 
         maxDepth = NormalizeDepth(maxDepth);
         limit = NormalizeLimit(limit);
-        int traversalCandidateLimit = RankingCandidateLimit(limit);
+        bool isTestsOnly = string.Equals(view, "tests", StringComparison.OrdinalIgnoreCase);
+        int effectiveTestsLimit = testsLimit.HasValue ? NormalizeLimit(testsLimit.Value) : limit;
+        int effectiveSymbolsLimit = isTestsOnly ? 0 : (symbolsLimit.HasValue ? NormalizeLimit(symbolsLimit.Value) : limit);
+
+        int candidateLimitBase = Math.Max(limit, Math.Max(effectiveTestsLimit, effectiveSymbolsLimit));
+        int traversalCandidateLimit = RankingCandidateLimit(candidateLimitBase);
         GraphReachResult graphResult =
             graph.ReachWithEvidence(seedIds, maxDepth, traversalCandidateLimit, Direction.Reverse);
+
+        IReadOnlyDictionary<string, IndexedSymbol> seeds =
+            SymbolLookupBatch.FindBySymbolIds(index, seedIds);
+
+        var changedTestNodes = new List<ReachedNode>();
+        foreach (IndexedSymbol seed in seeds.Values
+                     .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
+                     .ThenBy(static symbol => symbol.StartLine)
+                     .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
+        {
+            if (seed.IsTest && !seed.TestLifecycle)
+            {
+                changedTestNodes.Add(new ReachedNode(
+                    seed.SymbolId,
+                    Hop: 0,
+                    ReachedVia: null,
+                    EdgeKind: "changed_test",
+                    EdgeConfidence: 1.0,
+                    EdgeSource: "seed",
+                    PathCertainty: ReferenceResolutionStatus.Exact,
+                    Visibility: seed.Visibility));
+            }
+        }
+
+        var combinedGraphNodes = changedTestNodes.Concat(graphResult.Nodes).ToList();
         HeuristicExpansion expansion = AddHeuristicTestCandidates(
-            index, seedIds, graphResult.Nodes, graphResult.Nodes.Count + limit);
+            index, seedIds, combinedGraphNodes, combinedGraphNodes.Count + effectiveTestsLimit, seeds);
         var symbolsById =
             SymbolLookupBatch.FindBySymbolIds(index, expansion.Nodes.Select(static node => node.Id));
-        ImpactRankSignal[] selected = ImpactRanker.Rank(expansion.Nodes
+
+        var allSignals = expansion.Nodes
             .Where(node => symbolsById.ContainsKey(node.Id))
             .Select(node =>
             {
                 IndexedSymbol symbol = symbolsById[node.Id];
-                return new ImpactRankSignal(node, symbol.FilePath, symbol.StartLine, symbol.Name, symbol.SymbolId);
-            }))
-            .Take(limit)
-            .ToArray();
+                return (Signal: new ImpactRankSignal(node, symbol.FilePath, symbol.StartLine, symbol.Name, symbol.SymbolId), Symbol: symbol);
+            })
+            .ToList();
 
+        bool useDedicatedBudgets = isTestsOnly || testsLimit.HasValue || symbolsLimit.HasValue;
+        ImpactRankSignal[] selectedTests;
+        ImpactRankSignal[] selectedSymbols;
         var impacted = new List<ImpactSymbolHit>();
         var tests = new List<ImpactSymbolHit>();
-        foreach (ImpactRankSignal candidate in selected)
+
+        if (useDedicatedBudgets)
         {
-            IndexedSymbol symbol = symbolsById[candidate.SymbolId];
-            var hit = new ImpactSymbolHit(symbol, candidate.Evidence);
-            if (symbol.IsTest)
-                tests.Add(hit);
-            else
-                impacted.Add(hit);
+            var testSignals = allSignals.Where(x => x.Symbol.IsTest).Select(x => x.Signal);
+            var symbolSignals = allSignals.Where(x => !x.Symbol.IsTest).Select(x => x.Signal);
+
+            selectedTests = ImpactRanker.Rank(testSignals)
+                .Take(effectiveTestsLimit)
+                .ToArray();
+
+            selectedSymbols = isTestsOnly
+                ? Array.Empty<ImpactRankSignal>()
+                : ImpactRanker.Rank(symbolSignals)
+                    .Take(effectiveSymbolsLimit)
+                    .ToArray();
+
+            foreach (ImpactRankSignal candidate in selectedTests)
+            {
+                IndexedSymbol symbol = symbolsById[candidate.SymbolId];
+                tests.Add(new ImpactSymbolHit(symbol, candidate.Evidence));
+            }
+
+            foreach (ImpactRankSignal candidate in selectedSymbols)
+            {
+                IndexedSymbol symbol = symbolsById[candidate.SymbolId];
+                impacted.Add(new ImpactSymbolHit(symbol, candidate.Evidence));
+            }
+        }
+        else
+        {
+            ImpactRankSignal[] selected = ImpactRanker.Rank(allSignals.Select(x => x.Signal))
+                .Take(limit)
+                .ToArray();
+
+            var selectedTestList = new List<ImpactRankSignal>();
+            var selectedSymbolList = new List<ImpactRankSignal>();
+            foreach (ImpactRankSignal candidate in selected)
+            {
+                IndexedSymbol symbol = symbolsById[candidate.SymbolId];
+                if (symbol.IsTest)
+                {
+                    selectedTestList.Add(candidate);
+                    tests.Add(new ImpactSymbolHit(symbol, candidate.Evidence));
+                }
+                else
+                {
+                    selectedSymbolList.Add(candidate);
+                    impacted.Add(new ImpactSymbolHit(symbol, candidate.Evidence));
+                }
+            }
+            selectedTests = selectedTestList.ToArray();
+            selectedSymbols = selectedSymbolList.ToArray();
         }
 
-        int returnedTestCandidateCount = selected.Count(static candidate =>
+        int returnedTestCandidateCount = selectedTests.Count(static candidate =>
             string.Equals(candidate.Evidence.EdgeSource, "filename_role", StringComparison.Ordinal));
-        int returnedGraphCount = selected.Length - returnedTestCandidateCount;
+        int returnedGraphTestCount = selectedTests.Length - returnedTestCandidateCount - changedTestNodes.Count;
+        int returnedGraphCount = selectedSymbols.Length + Math.Max(0, returnedGraphTestCount);
         int resolvableGraphRows = graphResult.Nodes.Count(node => symbolsById.ContainsKey(node.Id));
         bool testCandidatesTruncated =
             expansion.Truncated || expansion.CandidateCount > returnedTestCandidateCount;
@@ -116,21 +206,26 @@ public static class ImpactAnalysis
         ISymbolLookupIndex index,
         IReadOnlyList<string> seedIds,
         IReadOnlyList<ReachedNode> graphNodes,
-        int limit)
+        int limit,
+        IReadOnlyDictionary<string, IndexedSymbol> seeds)
     {
-        var combined = graphNodes.ToList();
+        var combined = new List<ReachedNode>(graphNodes);
+        if (limit <= graphNodes.Count)
+            return new(combined, 0, false);
+
         int candidateCount = 0;
         var seen = new HashSet<string>(
             seedIds.Concat(graphNodes.Select(static node => node.Id)),
             StringComparer.Ordinal);
         var seenStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyDictionary<string, IndexedSymbol> seeds =
-            SymbolLookupBatch.FindBySymbolIds(index, seedIds);
         foreach (IndexedSymbol seed in seeds.Values
                      .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
                      .ThenBy(static symbol => symbol.StartLine)
                      .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
         {
+            if (seed.IsTest)
+                continue;
+
             string stem = Path.GetFileNameWithoutExtension(seed.FilePath);
             if (string.IsNullOrWhiteSpace(stem) || !seenStems.Add(stem))
                 continue;
@@ -158,7 +253,8 @@ public static class ImpactAnalysis
                     "test_candidate",
                     0.35,
                     "filename_role",
-                    Visibility: candidate.Visibility));
+                    Visibility: candidate.Visibility,
+                    PathCertainty: ReferenceResolutionStatus.Heuristic));
                 candidateCount++;
             }
         }

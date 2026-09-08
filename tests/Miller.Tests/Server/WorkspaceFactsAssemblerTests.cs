@@ -434,7 +434,7 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     }
 
     [Fact]
-    public void ToListFacts_LimitKeepsErrorRowsInsideTheCap()
+    public void ToListFacts_LimitBelowFour_FillsPurelyByRecency()
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var entries = new[]
@@ -448,10 +448,92 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
 
         Assert.Equal(2, facts.Returned);
         Assert.Equal(1, facts.Omitted);
+        Assert.Equal(1, facts.OmittedErrors);
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "recent-ready");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "older-ready");
+        Assert.DoesNotContain(facts.Entries, entry => entry.DisplayId == "oldest-error");
+    }
+
+    [Fact]
+    public void ToListFacts_LimitAtOrAboveFour_PinsUpToFloorLimitOverFourErrors()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var entries = new[]
+        {
+            ListEntry("ready-1", "ready", now, lastError: null),
+            ListEntry("ready-2", "ready", now.AddMinutes(-1), lastError: null),
+            ListEntry("ready-3", "ready", now.AddMinutes(-2), lastError: null),
+            ListEntry("ready-4", "ready", now.AddMinutes(-3), lastError: null),
+            ListEntry("ready-5", "ready", now.AddMinutes(-4), lastError: null),
+            ListEntry("oldest-error", "error", now.AddMinutes(-10), lastError: "store failed"),
+        };
+
+        // limit 5 => floor(5 / 4) = 1 pinned error
+        WorkspaceListFacts facts = WorkspaceFactsAssembler.ToListFacts(entries, filter: null, limit: 5);
+
+        Assert.Equal(5, facts.Returned);
+        Assert.Equal(1, facts.Omitted);
         Assert.Equal(0, facts.OmittedErrors);
         Assert.Contains(facts.Entries, entry => entry.DisplayId == "oldest-error");
-        Assert.Contains(facts.Entries, entry => entry.DisplayId == "recent-ready");
-        Assert.DoesNotContain(facts.Entries, entry => entry.DisplayId == "older-ready");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "ready-1");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "ready-2");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "ready-3");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "ready-4");
+        Assert.DoesNotContain(facts.Entries, entry => entry.DisplayId == "ready-5");
+    }
+
+    [Fact]
+    public void ToListFacts_LimitQuotas_WorkAcrossLimitsAndCurrentPresence()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        // Limit 1 with Current preserved
+        var withCurrent = new[]
+        {
+            ListEntry("not-current", "ready", now, lastError: null),
+            ListEntry("is-current", "ready", now.AddMinutes(-5), lastError: null) with { Current = true },
+            ListEntry("err", "error", now.AddMinutes(-10), lastError: "err"),
+        };
+        WorkspaceListFacts f1 = WorkspaceFactsAssembler.ToListFacts(withCurrent, filter: null, limit: 1);
+        Assert.Equal(1, f1.Returned);
+        Assert.Equal("is-current", f1.Entries[0].DisplayId);
+
+        // Limit 1 without Current
+        var noCurrent = new[]
+        {
+            ListEntry("most-recent", "ready", now, lastError: null),
+            ListEntry("older", "ready", now.AddMinutes(-5), lastError: null),
+        };
+        WorkspaceListFacts f1NoCur = WorkspaceFactsAssembler.ToListFacts(noCurrent, filter: null, limit: 1);
+        Assert.Equal(1, f1NoCur.Returned);
+        Assert.Equal("most-recent", f1NoCur.Entries[0].DisplayId);
+
+        // Limit 3 with zero errors
+        var readyOnly = Enumerable.Range(0, 5)
+            .Select(i => ListEntry($"ready-{i}", "ready", now.AddMinutes(-i), lastError: null))
+            .ToArray();
+        WorkspaceListFacts f3Zero = WorkspaceFactsAssembler.ToListFacts(readyOnly, filter: null, limit: 3);
+        Assert.Equal(3, f3Zero.Returned);
+        Assert.Equal(0, f3Zero.OmittedErrors);
+
+        // Limit 3 with all errors
+        var errorsOnly = Enumerable.Range(0, 5)
+            .Select(i => ListEntry($"err-{i}", "error", now.AddMinutes(-i), lastError: "boom"))
+            .ToArray();
+        WorkspaceListFacts f3All = WorkspaceFactsAssembler.ToListFacts(errorsOnly, filter: null, limit: 3);
+        Assert.Equal(3, f3All.Returned);
+        Assert.Equal(2, f3All.OmittedErrors);
+
+        // Limit 20 with 10 ready and 10 errors: floor(20 / 4) = 5 pinned errors
+        var mixed = Enumerable.Range(0, 10)
+            .Select(i => ListEntry($"ready-{i}", "ready", now.AddMinutes(-i), lastError: null))
+            .Concat(Enumerable.Range(0, 10)
+                .Select(i => ListEntry($"err-{i}", "error", now.AddMinutes(-20 - i), lastError: "err")))
+            .ToArray();
+        WorkspaceListFacts f20 = WorkspaceFactsAssembler.ToListFacts(mixed, filter: null, limit: 20);
+        Assert.Equal(20, f20.Returned);
+        Assert.Equal(10, f20.Entries.Count(e => e.State == "ready"));
+        Assert.Equal(10, f20.Entries.Count(e => e.State == "error"));
     }
 
     [Fact]

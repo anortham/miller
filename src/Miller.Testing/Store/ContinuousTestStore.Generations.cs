@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Miller.Testing.Daemon;
 
 namespace Miller.Testing;
 
@@ -416,6 +417,54 @@ public sealed partial class ContinuousTestStore
                     RootsTotal: reader.GetInt32(1),
                     RootsMeasured: reader.GetInt32(2),
                     EvaluatedAt: DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture));
+            });
+    }
+
+    /// <summary>
+    /// Reads the persisted continuous testing generation disk accounting snapshot from
+    /// <c>ct_generation_pressure</c>, <c>ct_generation_disk</c>, and <c>ct_generation_reap_debt</c>
+    /// in a single bounded query without walking directory trees.
+    /// </summary>
+    public CtDiskAccountingSnapshot? ReadDiskAccountingSnapshot()
+    {
+        return WithRead<CtDiskAccountingSnapshot?>(
+            static () => null,
+            connection =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT p.budget_bytes, p.roots_total, p.roots_measured, p.evaluated_at,
+                           COALESCE((SELECT SUM(bytes) FROM ct_generation_disk WHERE stale = 0), 0) AS active_bytes,
+                           COALESCE((SELECT COUNT(*) FROM ct_generation_disk WHERE stale != 0), 0) AS stale_roots,
+                           COALESCE((SELECT SUM(bytes) FROM ct_generation_reap_debt), 0) AS debt_bytes
+                    FROM ct_generation_pressure p
+                    WHERE p.id = 1;
+                    """;
+
+                using SqliteDataReader reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                long budget = reader.GetInt64(0);
+                int rootsTotal = reader.GetInt32(1);
+                int rootsMeasured = reader.GetInt32(2);
+                DateTimeOffset evaluatedAt = DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture);
+                long activeBytes = reader.GetInt64(4);
+                long staleRoots = reader.GetInt64(5);
+                long debtBytes = reader.GetInt64(6);
+
+                bool fullyMeasured = rootsMeasured == rootsTotal && staleRoots == 0;
+                bool overBudget = fullyMeasured && activeBytes > budget;
+
+                return new CtDiskAccountingSnapshot(
+                    TotalAllocatedBytes: activeBytes,
+                    BudgetBytes: budget,
+                    RootsTotal: rootsTotal,
+                    RootsMeasured: rootsMeasured,
+                    OverBudget: overBudget,
+                    FullyMeasured: fullyMeasured,
+                    EvaluatedAt: evaluatedAt,
+                    ReapDebtBytes: debtBytes);
             });
     }
 }

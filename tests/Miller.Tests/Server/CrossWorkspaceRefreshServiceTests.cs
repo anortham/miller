@@ -751,6 +751,47 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_ForceLockBusy_WithLiveLeader_ReturnsQueued()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-force-queued");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int currentPid = Environment.ProcessId;
+        Miller.Server.Hosting.LeaderIdentityFile.Write(
+            Path.GetDirectoryName(dbPath)!,
+            new Miller.Server.Hosting.LeaderIdentity(
+                currentPid, "9.9.9-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
+        int requestCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 7,
+            clock: clock,
+            requestFullScan: (millerDir, workspaceId, baselineRevision) =>
+            {
+                requestCount++;
+                Assert.Equal(Path.Combine(root, ".miller"), millerDir);
+                Assert.Equal("target-ws", workspaceId);
+                Assert.Equal(7, baselineRevision);
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Queued, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(7, result.Revision);
+        Assert.Equal(1, requestCount);
+        Assert.Contains(currentPid.ToString(), result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("alive", result.WarningText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Refresh_ForceLockBusy_RevisionAdvanceWithoutArtifactReplacement_IsNotReportedAsRefreshed()
     {
         // The leader may legally service our full-scan request as a DOWNGRADED delta (it evaluates the

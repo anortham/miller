@@ -11,6 +11,7 @@ using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
+using Miller.Testing.Daemon;
 
 namespace Miller.Server.Tools;
 
@@ -70,6 +71,7 @@ public sealed record StoreWorkspaceFacts(
     StoreCoordinatorQueueFacts? Queue = null)
 {
     public StoreWalObservation? Wal { get; init; }
+    public StoreMaintenanceReport? Maintenance { get; init; }
 
     public static StoreWorkspaceFacts Unavailable(string state, string failure, string error) =>
         new(
@@ -140,7 +142,8 @@ public readonly record struct WorkspaceFacts(
     ScanFailureRecord? ScanFailure = null,
     IndexLevelFacts? IndexLevel = null,
     RebindProvenanceFacts? RebindProvenance = null,
-    StoreWorkspaceFacts? Store = null);
+    StoreWorkspaceFacts? Store = null,
+    CtDiskAccountingSnapshot? CtDisk = null);
 
 /// <summary>
 /// Where a rebound artifact came from (P3 provenance surfacing): the source root recorded in the artifact's
@@ -429,10 +432,26 @@ public readonly record struct WorkspacePruneResult(
     int Kept,
     StoreSidecarReclaimResult SidecarReclaim = default,
     StoreMaintenanceOutcome StoreMaintenance = default,
-    IReadOnlyList<WorkspacePruneRetirementFailure>? RetirementFailures = null);
+    IReadOnlyList<WorkspacePruneRetirementFailure>? RetirementFailures = null,
+    int RetirementOwed = 0,
+    IReadOnlyList<WorkspacePruneBlockedEntry>? BlockedEntries = null)
+{
+    public int RemovedCount => DryRun ? 0 : Pruned.Count;
+    public int WouldRemoveCount => DryRun ? Pruned.Count : 0;
+    public int BlockedCount => BlockedEntries?.Count ?? RetirementFailures?.Count ?? 0;
+}
 
 /// <summary>One registry row removed (or that would be removed in dry-run) by <c>prune</c>.</summary>
 public readonly record struct WorkspacePruneEntry(string WorkspaceId, string DisplayId, string Root);
+
+/// <summary>One stale registry row that prune could not remove because safety checks blocked deletion.</summary>
+public readonly record struct WorkspacePruneBlockedEntry(
+    string WorkspaceId,
+    string DisplayId,
+    string Root,
+    string ReasonCode,
+    string Message,
+    string? SuggestedAction = null);
 
 /// <summary>One store-member row that prune kept because producer retirement failed.</summary>
 public readonly record struct WorkspacePruneRetirementFailure(
@@ -535,7 +554,11 @@ public static class WorkspaceRender
             sb.Append("store: ").Append(StoreProvenanceLabel(store)).Append('\n');
             if (StoreQueueLabel(store.Queue) is { } storeQueueLabel)
                 sb.Append("store_queue: ").Append(storeQueueLabel).Append('\n');
+            if (StoreStorageLabel(store) is { } storeStorageLabel)
+                sb.Append("store_storage: ").Append(storeStorageLabel).Append('\n');
         }
+        if (CtDiskLabel(facts.CtDisk) is { } ctDiskLabel)
+            sb.Append("ct_generation_disk: ").Append(ctDiskLabel).Append('\n');
 
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
@@ -707,25 +730,52 @@ public static class WorkspaceRender
         if (!string.Equals(facts.State, "ready", StringComparison.Ordinal))
             return $"state={facts.State}  failure={facts.Failure}";
 
-        var label = new StringBuilder()
-            .Append("family=").Append(facts.FamilyId)
-            .Append("  view=").Append(facts.ViewId)
-            .Append("  generation=").Append(facts.ManifestGeneration)
-            .Append("  manifest=").Append(facts.ManifestHash)
-            .Append("  sequence=").Append(facts.StoreLogSequence)
-            .Append("  level=").Append(facts.IndexLevel)
-            .Append("  migration=").Append(facts.MigrationState)
-            .Append("  rollback=").Append(facts.RollbackState);
-        if (!string.IsNullOrWhiteSpace(facts.StoreRoot))
-            label.Append("  root=").Append(facts.StoreRoot);
-        if (facts.MemberDisplayLabels is { Count: > 0 } members)
+        return $"state=ready  level={facts.IndexLevel}  generation={facts.ManifestGeneration}  members={facts.MemberCount}";
+    }
+
+    private static string? StoreStorageLabel(StoreWorkspaceFacts facts)
+    {
+        if (facts.Maintenance is null)
+            return null;
+
+        StoreMaintenanceReport m = facts.Maintenance;
+        if (!m.IsAvailable)
         {
-            label.Append("  members=").AppendJoin(',', members);
-            int omitted = Math.Max(0, facts.MemberCount - members.Count);
-            if (omitted > 0)
-                label.Append(" (+").Append(omitted).Append(" more)");
+            string detail = !string.IsNullOrWhiteSpace(m.ErrorMessage) ? m.ErrorMessage : m.FailureClass;
+            return $"unavailable ({detail})";
         }
-        return label.ToString();
+
+        if (m.Retention is null)
+        {
+            string measured = m.MeasuredAt is { } dt ? $" (measured {dt:u})" : "";
+            return $"unmeasured{measured}";
+        }
+
+        StoreRetentionReport r = m.Retention;
+        var parts = new List<string>
+        {
+            $"physical={r.PhysicalCurrentBytes} (target={r.PhysicalTargetBytes} ceiling={r.PhysicalCeilingBytes})",
+            $"logical={r.RetainedLogicalBytes} (target={r.TargetBytes} ceiling={r.CeilingBytes})",
+        };
+        if (r.CompactionRequired)
+            parts.Add($"compaction_required (streak {r.PhysicalBreachStreak}/{r.PhysicalBreachLimit})");
+        else if (r.Pressure)
+            parts.Add("retention_pressure");
+        if (m.MeasuredAt is { } measuredAt)
+            parts.Add($"measured={measuredAt:u}");
+        if (m.BlockedReasons is { Count: > 0 })
+            parts.Add($"blocked={string.Join(", ", m.BlockedReasons)}");
+
+        return string.Join("  ", parts);
+    }
+
+    private static string? CtDiskLabel(CtDiskAccountingSnapshot? ctDisk)
+    {
+        if (ctDisk is null)
+            return null;
+
+        string status = ctDisk.OverBudget ? "OVER_BUDGET" : "budget_ok";
+        return $"status={status}  allocated={ctDisk.TotalAllocatedBytes}  budget={ctDisk.BudgetBytes}  roots={ctDisk.RootsMeasured}/{ctDisk.RootsTotal}  evaluated={ctDisk.EvaluatedAt:u}";
     }
 
     private static void WriteStoreProvenanceJson(Utf8JsonWriter w, StoreWorkspaceFacts facts)
@@ -762,6 +812,122 @@ public static class WorkspaceRender
             w.WriteStringValue(label);
         w.WriteEndArray();
         WriteStoreQueueJson(w, facts.Queue);
+        WriteStoreMaintenanceJson(w, facts.Maintenance);
+        w.WriteEndObject();
+    }
+
+    private static void WriteStoreMaintenanceJson(Utf8JsonWriter w, StoreMaintenanceReport? m)
+    {
+        if (m is null)
+            return;
+
+        w.WritePropertyName("maintenance");
+        w.WriteStartObject();
+        w.WriteBoolean("is_available", m.IsAvailable);
+        w.WriteString("action", m.Action);
+        w.WriteString("mode", m.Mode);
+        w.WriteString("disposition", m.Disposition);
+        w.WriteString("failure_class", m.FailureClass);
+        if (m.ErrorCode is null) w.WriteNull("error_code");
+        else w.WriteString("error_code", m.ErrorCode);
+        if (m.ErrorMessage is null) w.WriteNull("error_message");
+        else w.WriteString("error_message", m.ErrorMessage);
+        if (m.MeasuredAt is null) w.WriteNull("measured_at");
+        else w.WriteString("measured_at", m.MeasuredAt.Value.ToString("O", CultureInfo.InvariantCulture));
+        w.WriteNumber("pruned_request_rows", m.PrunedRequestRows);
+
+        if (m.Retention is { } ret)
+        {
+            w.WritePropertyName("retention");
+            w.WriteStartObject();
+            w.WriteNumber("physical_current_bytes", ret.PhysicalCurrentBytes);
+            w.WriteNumber("physical_baseline_bytes", ret.PhysicalBaselineBytes);
+            w.WriteNumber("physical_target_bytes", ret.PhysicalTargetBytes);
+            w.WriteNumber("physical_ceiling_bytes", ret.PhysicalCeilingBytes);
+            w.WriteBoolean("physical_target_breached", ret.PhysicalTargetBreached);
+            w.WriteBoolean("physical_ceiling_breached", ret.PhysicalCeilingBreached);
+            w.WriteNumber("physical_breach_limit", ret.PhysicalBreachLimit);
+            w.WriteNumber("physical_breach_streak", ret.PhysicalBreachStreak);
+            w.WriteBoolean("compaction_required", ret.CompactionRequired);
+            w.WriteNumber("retained_logical_bytes", ret.RetainedLogicalBytes);
+            w.WriteNumber("target_bytes", ret.TargetBytes);
+            w.WriteNumber("ceiling_bytes", ret.CeilingBytes);
+            w.WriteBoolean("pressure", ret.Pressure);
+            w.WriteEndObject();
+        }
+        else
+        {
+            w.WriteNull("retention");
+        }
+
+        if (m.Capacity is { } cap)
+        {
+            w.WritePropertyName("capacity");
+            w.WriteStartObject();
+            w.WriteNumber("measured_bytes", cap.MeasuredBytes);
+            w.WriteNumber("free_bytes", cap.FreeBytes);
+            w.WriteNumber("store_page_bytes", cap.StorePageBytes);
+            w.WriteNumber("store_freelist_bytes", cap.StoreFreelistBytes);
+            w.WriteNumber("store_wal_bytes", cap.StoreWalBytes);
+            w.WriteNumber("staged_generation_bytes", cap.StagedGenerationBytes);
+            w.WriteBoolean("gc_fits", cap.GcFits);
+            w.WriteBoolean("promotion_fits", cap.PromotionFits);
+            w.WriteEndObject();
+        }
+        else
+        {
+            w.WriteNull("capacity");
+        }
+
+        if (m.Readers is { } rdr)
+        {
+            w.WritePropertyName("readers");
+            w.WriteStartObject();
+            w.WriteNumber("protected_reader_count", rdr.ProtectedReaderCount);
+            w.WriteNumber("definitively_dead_reader_count", rdr.DefinitivelyDeadReaderCount);
+            w.WriteNumber("retained_unknown_reader_count", rdr.RetainedUnknownReaderCount);
+            w.WriteNumber("removed_reader_count", rdr.RemovedReaderCount);
+            w.WriteStartArray("reader_warnings");
+            foreach (StoreReaderWarning rw in rdr.ReaderWarnings)
+            {
+                w.WriteStartObject();
+                w.WriteString("pin_id", rw.PinId);
+                w.WriteString("warning_code", rw.WarningCode);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        else
+        {
+            w.WriteNull("readers");
+        }
+
+        w.WriteStartArray("blocked_reasons");
+        foreach (string br in m.BlockedReasons)
+            w.WriteStringValue(br);
+        w.WriteEndArray();
+
+        w.WriteStartArray("recovery_actions");
+        foreach (string ra in m.RecoveryActions)
+            w.WriteStringValue(ra);
+        w.WriteEndArray();
+
+        w.WriteEndObject();
+    }
+
+    private static void WriteCtDiskJson(Utf8JsonWriter w, CtDiskAccountingSnapshot ctDisk)
+    {
+        w.WriteStartObject();
+        w.WriteNumber("total_allocated_bytes", ctDisk.TotalAllocatedBytes);
+        w.WriteNumber("budget_bytes", ctDisk.BudgetBytes);
+        w.WriteBoolean("over_budget", ctDisk.OverBudget);
+        w.WriteBoolean("fully_measured", ctDisk.FullyMeasured);
+        w.WriteString("evaluated_at", ctDisk.EvaluatedAt.ToString("O", CultureInfo.InvariantCulture));
+        w.WriteNumber("roots_total", ctDisk.RootsTotal);
+        w.WriteNumber("roots_measured", ctDisk.RootsMeasured);
+        w.WriteNumber("reap_debt_bytes", ctDisk.ReapDebtBytes);
+        w.WriteString("state", ctDisk.State);
         w.WriteEndObject();
     }
 
@@ -1065,6 +1231,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("store");
                 WriteStoreProvenanceJson(w, store);
+            }
+
+            if (facts.CtDisk is { } ctDisk)
+            {
+                w.WritePropertyName("ct_generation_disk");
+                WriteCtDiskJson(w, ctDisk);
             }
 
             w.WritePropertyName("index");
@@ -1411,7 +1583,11 @@ public static class WorkspaceRender
             sb.Append("store: ").Append(HealthCompactValue(StoreProvenanceLabel(store))).Append('\n');
             if (StoreQueueLabel(store.Queue) is { } storeQueueLabel)
                 sb.Append("store_queue: ").Append(HealthCompactValue(storeQueueLabel)).Append('\n');
+            if (StoreStorageLabel(store) is { } storeStorageLabel)
+                sb.Append("store_storage: ").Append(HealthCompactValue(storeStorageLabel)).Append('\n');
         }
+        if (CtDiskLabel(status.CtDisk) is { } ctDiskLabel)
+            sb.Append("ct_generation_disk: ").Append(HealthCompactValue(ctDiskLabel)).Append('\n');
 
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
@@ -1435,10 +1611,14 @@ public static class WorkspaceRender
           .Append("  empty=")
           .Append(facts.TelemetryHealth.EmptyCount.ToString(CultureInfo.InvariantCulture))
           .Append('\n');
-        if (facts.Warnings.Count > 0)
-            sb.Append("warning: ").Append(HealthCompactValue(facts.Warnings[0].Message)).Append('\n');
-        if (facts.RecommendedActions.Count > 0)
-            sb.Append("recommended: ").Append(HealthCompactValue(facts.RecommendedActions[0])).Append('\n');
+        int warningsToRender = Math.Min(3, facts.Warnings.Count);
+        for (int i = 0; i < warningsToRender; i++)
+            sb.Append("warning: ").Append(HealthCompactValue(facts.Warnings[i].Message)).Append('\n');
+
+        int actionsToRender = Math.Min(3, facts.RecommendedActions.Count);
+        for (int i = 0; i < actionsToRender; i++)
+            sb.Append("recommended: ").Append(HealthCompactValue(facts.RecommendedActions[i])).Append('\n');
+
         int omittedRows =
             facts.Extraction.ParseDiagnostics.Rows.Count +
             facts.Extraction.CapabilityGaps.Rows.Count +
@@ -1450,8 +1630,8 @@ public static class WorkspaceRender
         sb.Append("omitted: groups=").Append(6 - unavailableGroups)
           .Append(" unavailable=").Append(unavailableGroups)
           .Append(" rows=").Append(omittedRows.ToString(CultureInfo.InvariantCulture))
-          .Append(" warnings=").Append(Math.Max(0, facts.Warnings.Count - 1).ToString(CultureInfo.InvariantCulture))
-          .Append(" actions=").Append(Math.Max(0, facts.RecommendedActions.Count - 1).ToString(CultureInfo.InvariantCulture))
+          .Append(" warnings=").Append(Math.Max(0, facts.Warnings.Count - warningsToRender).ToString(CultureInfo.InvariantCulture))
+          .Append(" actions=").Append(Math.Max(0, facts.RecommendedActions.Count - actionsToRender).ToString(CultureInfo.InvariantCulture))
           .Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
@@ -1612,6 +1792,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("store");
                 WriteStoreProvenanceJson(w, store);
+            }
+
+            if (status.CtDisk is { } ctDisk)
+            {
+                w.WritePropertyName("ct_generation_disk");
+                WriteCtDiskJson(w, ctDisk);
             }
 
             w.WritePropertyName("index");
@@ -3016,10 +3202,30 @@ public static class WorkspaceRender
         foreach (WorkspacePruneEntry entry in result.Pruned.Take(PruneCompactExampleCap))
             lines.Add($"  {entry.DisplayId} {entry.Root}");
         lines.Add($"kept: {result.Kept}");
+        if (result.RetirementOwed > 0)
+            lines.Add($"retirement owed: {result.RetirementOwed}");
+        if (result.BlockedCount > 0)
+            lines.Add($"blocked: {result.BlockedCount}");
         if (result.SidecarReclaim.HasReport)
             lines.Add(SidecarReclaimText(result.SidecarReclaim));
         if (StoreMaintenanceText(result.StoreMaintenance) is { } maintenance)
             lines.Add(maintenance);
+        if (result.BlockedEntries is { Count: > 0 })
+        {
+            lines.Add($"blocked entries: {result.BlockedEntries.Count}");
+            foreach (WorkspacePruneBlockedEntry blocked in result.BlockedEntries.Take(PruneCompactExampleCap))
+            {
+                string suggestion = string.IsNullOrWhiteSpace(blocked.SuggestedAction)
+                    ? string.Empty
+                    : $" (suggest: {blocked.SuggestedAction})";
+                lines.Add($"  {blocked.DisplayId} {blocked.Root}: [{blocked.ReasonCode}] {BoundedError(blocked.Message)}{suggestion}");
+            }
+
+            if (result.BlockedEntries.Count > PruneCompactExampleCap)
+            {
+                lines.Add($"  ... {result.BlockedEntries.Count - PruneCompactExampleCap} more blocked entries");
+            }
+        }
         if (result.RetirementFailures is { Count: > 0 })
         {
             lines.Add($"retirement failures: {result.RetirementFailures.Count}");
@@ -3077,6 +3283,8 @@ public static class WorkspaceRender
         {
             w.WriteStartObject();
             w.WriteBoolean("dry_run", result.DryRun);
+            w.WriteNumber("removed", result.RemovedCount);
+            w.WriteNumber("would_remove", result.WouldRemoveCount);
             w.WriteNumber("pruned_total", result.Pruned.Count);
             w.WriteNumber("returned", retained.Count);
             w.WriteNumber("omitted", omitted);
@@ -3091,12 +3299,43 @@ public static class WorkspaceRender
             }
             w.WriteEndArray();
             w.WriteNumber("kept", result.Kept);
+            w.WriteNumber("retirement_owed", result.RetirementOwed);
+            w.WriteNumber("blocked", result.BlockedCount);
             WriteSidecarReclaim(w, result.SidecarReclaim);
             WriteStoreMaintenance(w, result.StoreMaintenance);
+            WriteBlockedEntries(w, result.BlockedEntries);
             WriteRetirementFailures(w, result.RetirementFailures);
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static void WriteBlockedEntries(
+        Utf8JsonWriter w,
+        IReadOnlyList<WorkspacePruneBlockedEntry>? blocked)
+    {
+        if (blocked is not { Count: > 0 })
+            return;
+
+        int returned = Math.Min(blocked.Count, PruneCompactExampleCap);
+        w.WriteStartArray("blocked_entries");
+        foreach (WorkspacePruneBlockedEntry entry in blocked.Take(returned))
+        {
+            w.WriteStartObject();
+            w.WriteString("workspace_id", entry.WorkspaceId);
+            w.WriteString("display_id", entry.DisplayId);
+            w.WriteString("root", entry.Root);
+            w.WriteString("reason_code", entry.ReasonCode);
+            w.WriteString("message", BoundedError(entry.Message));
+            if (entry.SuggestedAction is null)
+                w.WriteNull("suggested_action");
+            else
+                w.WriteString("suggested_action", entry.SuggestedAction);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteNumber("blocked_entries_total", blocked.Count);
+        w.WriteNumber("blocked_entries_omitted", blocked.Count - returned);
     }
 
     private static void WriteRetirementFailures(

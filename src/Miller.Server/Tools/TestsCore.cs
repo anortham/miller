@@ -50,7 +50,8 @@ internal sealed record TestsWaitProbe(
     Func<string, ContinuousTestDaemonSnapshot>? ReadStatus = null,
     Func<string, bool>? IsLeaseLive = null,
     TimeProvider? Clock = null,
-    Action<TimeSpan>? Delay = null);
+    Action<TimeSpan>? Delay = null,
+    Func<string, string, CtDaemonCommandAck?>? TryReadAck = null);
 
 public sealed record TestsForegroundRunRequest(
     string WorkspaceRoot,
@@ -164,10 +165,18 @@ public sealed record TestsStatusResult(
     /// Why auto-runs are paused, for example <c>impact unavailable (moving_cursor)</c>. Null whenever
     /// <see cref="DaemonAutoRunsPaused"/> is false, and for a daemon build that predates the field.
     /// </summary>
-    string? DaemonPauseReason = null)
+    string? DaemonPauseReason = null,
+
+    /// <summary>
+    /// Progress of an in-flight background test selection computation. Null when not selecting.
+    /// </summary>
+    CtDaemonSelectionProgress? DaemonSelection = null,
+    ContinuousTestRunRecipe? DirectRunRecipe = null,
+    string? DiscoveryFailureArtifactPath = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
+
 
 public sealed record TestsMutationResult(
     int ExitCode,
@@ -228,6 +237,8 @@ public enum TestsWaitState
     WaitTimeout,
     DaemonStopped,
     LeaseLost,
+    Cancelled,
+    Rejected,
 }
 
 /// <summary>
@@ -253,7 +264,8 @@ public sealed record TestsFailuresResult(
     IReadOnlyList<ContinuousTestStatus> Failures,
     int Truncated,
     int Total = 0,
-    int Offset = 0)
+    int Offset = 0,
+    IReadOnlyDictionary<string, ContinuousTestCase>? TestCases = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderFailuresJson(this) : TestsCore.RenderFailuresCompact(this);
 }
@@ -341,13 +353,6 @@ public static class TestsCore
     private static readonly TimeSpan WaitPollInterval = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
-    /// How long <c>--wait</c> lets an accepted run stay unstarted before it believes an idle reading. The
-    /// daemon publishes its status once per poll (250 ms by default) and a run command is acknowledged before
-    /// the work becomes ready, so a wait that trusted the first reading would return before anything ran.
-    /// </summary>
-    private static readonly TimeSpan RunPickupGrace = TimeSpan.FromSeconds(3);
-
-    /// <summary>
     /// How long <c>--wait</c> stays blocked on another workspace holding the single execution slot. The
     /// holder may keep it for as long as its own suite takes, so the caller gets an honest "still queued"
     /// instead of the full wait timeout.
@@ -430,8 +435,45 @@ public static class TestsCore
             request.MillerVersion ?? MillerVersion.Current,
             endpoint?.Lease);
         CtLoopHealthVerdict loop = ResolveLoopHealth(root, endpoint, snapshot);
+        bool enabled = optedIn || (!discovered && stored.Count > 0);
+        ContinuousTestRunRecipe? directRecipe = null;
+        if (!enabled && stored.Count > 0)
+        {
+            directRecipe = GetRunRecipe(request);
+        }
+
+        string? discoveryArtifactPath = null;
+        if (projected.Verdict == ContinuousTestVerdict.Red)
+        {
+            CtDiscoveryWorkspaceLedger? ledger = CtDiscoveryLedger.LoadLedger(root);
+            if (ledger is not null)
+            {
+                CtDiscoveryAttemptSummary? failed = ledger.Projects.Values.FirstOrDefault(p =>
+                    p.Outcome != CtDiscoveryOutcome.Succeeded && !string.IsNullOrWhiteSpace(p.ArtifactPath));
+                discoveryArtifactPath = failed?.ArtifactPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(discoveryArtifactPath))
+            {
+                IReadOnlyList<ContinuousTestCase> allCases = store.ListTestCases(workspaceId);
+                foreach (ContinuousTestCase tc in allCases)
+                {
+                    if (string.Equals(tc.Source, "ct-project-status", StringComparison.Ordinal)
+                        || (tc.Metadata.TryGetValue("kind", out object? kindObj)
+                            && string.Equals(kindObj?.ToString(), "ct-project-discovery-failure", StringComparison.Ordinal)))
+                    {
+                        if (tc.Metadata.TryGetValue("artifact_path", out object? a) && a?.ToString() is { Length: > 0 } path)
+                        {
+                            discoveryArtifactPath = path;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         return new TestsStatusResult(
-            Enabled: optedIn || (!discovered && stored.Count > 0),
+            Enabled: enabled,
             KillSwitchOff: false,
             Projects: stored
                 .Select(project => ToStatusProjectWithRows(project, store, workspaceId, liveKey, watermarks))
@@ -450,8 +492,12 @@ public static class TestsCore
             DaemonVersion: version,
             DaemonLoop: loop,
             DaemonAutoRunsPaused: snapshot.AutoRunsPaused,
-            DaemonPauseReason: snapshot.PauseReason);
+            DaemonPauseReason: snapshot.PauseReason,
+            DaemonSelection: snapshot.Selection,
+            DirectRunRecipe: directRecipe,
+            DiscoveryFailureArtifactPath: discoveryArtifactPath);
     }
+
 
     /// <summary>
     /// Whether this workspace has ever decided about continuous testing — an explicit opt-out tombstone,
@@ -519,11 +565,68 @@ public static class TestsCore
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         ContinuousTestStatus[] red = RedRows(store, root, workspaceId, request.ProjectPath);
         ContinuousTestStatus[] page = red.Skip(skip).Take(limit).ToArray();
+        IReadOnlyDictionary<string, ContinuousTestCase> testCases = store.ListTestCases(workspaceId)
+            .ToDictionary(tc => tc.Id, StringComparer.Ordinal);
         return new TestsFailuresResult(
             page,
             Math.Max(0, red.Length - skip - page.Length),
             red.Length,
-            skip);
+            skip,
+            testCases);
+    }
+
+    /// <summary>
+    /// Computes a provider-owned runner recipe without requiring continuous testing to be enabled,
+    /// without allocating CT generations, and spawning zero background processes.
+    /// </summary>
+    public static ContinuousTestRunRecipe? GetRunRecipe(
+        TestsCoreRequest request,
+        string? projectPath = null,
+        string? testSelector = null,
+        string? testFilePath = null,
+        TestSelectorScope scope = TestSelectorScope.ProjectSuite)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        string root = RequireRoot(request);
+        string workspaceId = ResolveWorkspaceId(request, root);
+
+        ContinuousTestProject? project = null;
+        if (!string.IsNullOrWhiteSpace(projectPath))
+        {
+            if (TryResolveProject(root, projectPath, out string fullPath, out _))
+            {
+                project = ContinuousTestProjectInventory.Identify(root, workspaceId, fullPath);
+            }
+        }
+        else
+        {
+            IReadOnlyList<ContinuousTestProject> discovered = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            if (!string.IsNullOrWhiteSpace(testFilePath))
+            {
+                string targetDir = Path.GetDirectoryName(Path.GetFullPath(Path.Combine(root, testFilePath))) ?? root;
+                project = discovered.FirstOrDefault(p =>
+                {
+                    string pDir = Path.GetDirectoryName(p.ProjectPath) ?? root;
+                    return targetDir.StartsWith(pDir, StringComparison.OrdinalIgnoreCase);
+                });
+            }
+            project ??= discovered.FirstOrDefault();
+        }
+
+        if (project is null)
+            return null;
+
+        var recipeRequest = new ContinuousTestRunRecipeRequest(
+            WorkspaceId: workspaceId,
+            WorkspaceRoot: root,
+            ProjectPath: project.ProjectPath,
+            Framework: project.Framework,
+            TestSelector: testSelector,
+            TestFilePath: testFilePath,
+            Scope: scope,
+            ExcludeTraits: project.ExcludeTraits);
+
+        return ContinuousTestRecipeBuilder.Build(recipeRequest);
     }
 
     /// <summary>
@@ -949,6 +1052,9 @@ public static class TestsCore
             // submits there, with its own root in the payload, and its command reaches its own
             // context's queue and ct.db.
             string endpointRoot = disposition.EndpointRoot ?? root;
+            TimeProvider clock = request.Hooks?.WaitProbe?.Clock ?? TimeProvider.System;
+            long submissionStarted = clock.GetTimestamp();
+            TimeSpan totalTimeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
             CtRunResult submitted = request.Hooks?.SubmitRun is { } submit
                 ? submit(endpointRoot, root)
                 : CtDaemonRouting.SubmitRun(endpointRoot, root, "run");
@@ -959,6 +1065,30 @@ public static class TestsCore
             // reads its own verdict rather than matching its reason text.
             if (submitted.Execution == CtRunExecution.Daemon)
             {
+                string? commandId = submitted.CommandId ?? submitted.Ack?.CommandId;
+                if (submitted.Ack is { State: CtDaemonCommandState.Completed })
+                {
+                    TestsStatusResult completedStatus = Status(request);
+                    TestsWaitResult? completedWait = request.Wait
+                        ? new TestsWaitResult(
+                            WaitComplete: true,
+                            State: TestsWaitState.Completed,
+                            ElapsedSeconds: clock.GetElapsedTime(submissionStarted).TotalSeconds,
+                            TimeoutSeconds: totalTimeout.TotalSeconds,
+                            CommandId: commandId,
+                            RunId: null,
+                            Run: null)
+                        : null;
+                    return new TestsRunResult(
+                        0,
+                        CtRunExecution.Daemon,
+                        completedStatus.Verdict,
+                        submitted.Reason ?? submitted.Ack?.Reason,
+                        request.Wait,
+                        completedStatus.Selected,
+                        Wait: completedWait);
+                }
+
                 // An ACKNOWLEDGED ack is the only proof a daemon took the request. A null ack - the
                 // five-second ack timeout, which a daemon whose loop is inside a whole-suite drain
                 // reaches easily - and a rejection both leave this process knowing nothing about a
@@ -1003,10 +1133,9 @@ public static class TestsCore
                     }
 
                     // Join the in-flight work: the daemon picks the queued command file up on its
-                    // next loop pass, and the settle wait already learns runs from snapshots. There
-                    // is no command id to correlate because no ack ever named one.
+                    // next loop pass, and the settle wait already learns runs from snapshots.
                     (TestsStatusResult joined, TestsWaitResult joinedWait) =
-                        WaitForDaemonToSettle(request, endpointRoot, commandId: null);
+                        WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout);
                     return new TestsRunResult(
                         0,
                         CtRunExecution.Daemon,
@@ -1018,7 +1147,7 @@ public static class TestsCore
                 }
 
                 (TestsStatusResult status, TestsWaitResult? wait) = request.Wait
-                    ? WaitForDaemonToSettle(request, endpointRoot, submitted.Ack.CommandId)
+                    ? WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout)
                     : (Status(request), null);
                 return new TestsRunResult(
                     0,
@@ -1251,7 +1380,13 @@ public static class TestsCore
             writer.WriteString("activity", Snake(result.DaemonActivity.ToString()));
             writer.WritePropertyName("run");
             WriteDaemonRun(writer, result.DaemonRun);
+            if (result.DaemonSelection is not null)
+            {
+                writer.WritePropertyName("selection");
+                WriteDaemonSelection(writer, result.DaemonSelection);
+            }
             WriteDaemonVersion(writer, result.DaemonVersion);
+
             WriteDaemonLoop(writer, result.DaemonLoop);
             writer.WriteEndObject();
             writer.WriteString("verdict", Snake(result.Verdict.ToString()));
@@ -1265,6 +1400,11 @@ public static class TestsCore
                 writer.WriteString("last_run", result.LastRun);
             writer.WritePropertyName("budget_holder");
             WriteBudget(writer, result.BudgetHolder);
+            if (result.DirectRunRecipe is { } recipe)
+            {
+                writer.WritePropertyName("recipe");
+                WriteRecipe(writer, recipe);
+            }
             writer.WriteEndObject();
         }
 
@@ -1311,7 +1451,16 @@ public static class TestsCore
         // drain, and no run exists yet. JSON keeps "run": null.
         else if (result.DaemonActivity == CtDaemonActivity.Executing)
             sb.AppendLine("  run: none selected yet (project discovery or between projects)");
+        if (result.DaemonSelection is { } selecting)
+        {
+            sb.AppendLine($"  selection: {selecting.ProjectPath} phase={Snake(selecting.Phase)} started={selecting.StartedAtUtc:O} items={selecting.ItemsProcessed.ToString(CultureInfo.InvariantCulture)}");
+        }
+        else if (result.DaemonActivity == CtDaemonActivity.Selecting)
+        {
+            sb.AppendLine("  selection: computing impact in background");
+        }
         // Only when a live daemon disagrees with this build. The reason names both builds, so the
+
         // line needs no second copy of the version.
         if (result.DaemonVersion is { Mismatch: true } version)
             sb.AppendLine("daemon_build: " + version.Reason);
@@ -1382,9 +1531,17 @@ public static class TestsCore
         }
 
         sb.AppendLine();
-        sb.AppendLine(result.Projects.Count > 0
-            ? "next: for a one-off answer, run these tests directly."
-            : "next: no test projects found, so CT has nothing to watch here.");
+        if (result.DirectRunRecipe is { } recipe && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
+        {
+            sb.AppendLine("next: for a one-off answer, run these tests directly:");
+            sb.AppendLine("      " + recipe.PrimaryCommand);
+        }
+        else
+        {
+            sb.AppendLine(result.Projects.Count > 0
+                ? "next: for a one-off answer, run these tests directly."
+                : "next: no test projects found, so CT has nothing to watch here.");
+        }
 
         // The enable ladder is offered only when something here can actually take it. A workspace whose every
         // project carries an unsupported reason would be sent to an enable that refuses, which is the dead end
@@ -1672,6 +1829,13 @@ public static class TestsCore
             {
                 writer.WriteStartObject();
                 writer.WriteString("test_case_id", row.TestCaseId);
+                if (TryGetDiscoveryFailure(result, row, out string outcome, out string projectPath, out string artifactPath, out _))
+                {
+                    writer.WriteString("classification", "project_discovery_failure");
+                    writer.WriteString("project_path", projectPath);
+                    writer.WriteString("artifact_path", artifactPath);
+                    writer.WriteString("outcome", outcome);
+                }
                 writer.WriteString("state", Snake(row.State.ToString()));
                 writer.WriteString("index_identity", row.IndexIdentity);
                 writer.WriteNumber("revision", row.Revision);
@@ -1702,10 +1866,25 @@ public static class TestsCore
             : $"# tests failures ({shown})");
         foreach (ContinuousTestStatus row in result.Failures)
         {
-            sb.Append("  - ").Append(row.TestCaseId).Append(": ")
-                .Append(BoundedFailureSummary(row.FailureSummary) ?? row.State.ToString());
-            AppendFailureCorrelation(sb, row);
-            sb.AppendLine();
+            if (TryGetDiscoveryFailure(result, row, out string outcome, out string projectPath, out string artifactPath, out string? remedy))
+            {
+                string summary = BoundedFailureSummary(row.FailureSummary) ?? row.State.ToString();
+                sb.Append("  - [project discovery ").Append(outcome).Append("] ")
+                    .Append(projectPath).Append(": ")
+                    .AppendLine(summary);
+                sb.Append("    log: ").AppendLine(artifactPath);
+                if (!string.IsNullOrWhiteSpace(remedy))
+                {
+                    sb.Append("    remedy: ").AppendLine(remedy);
+                }
+            }
+            else
+            {
+                sb.Append("  - ").Append(row.TestCaseId).Append(": ")
+                    .Append(BoundedFailureSummary(row.FailureSummary) ?? row.State.ToString());
+                AppendFailureCorrelation(sb, row);
+                sb.AppendLine();
+            }
         }
         if (result.Truncated > 0)
         {
@@ -1716,6 +1895,43 @@ public static class TestsCore
         }
 
         return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
+    }
+
+    internal static bool TryGetDiscoveryFailure(
+        TestsFailuresResult result,
+        ContinuousTestStatus row,
+        out string outcome,
+        out string projectPath,
+        out string artifactPath,
+        out string? remedy)
+    {
+        outcome = "failed";
+        projectPath = "";
+        artifactPath = "";
+        remedy = null;
+
+        ContinuousTestCase? tc = null;
+        if (result.TestCases?.TryGetValue(row.TestCaseId, out tc) == true)
+        {
+            if (string.Equals(tc.Source, "ct-project-status", StringComparison.Ordinal)
+                || (tc.Metadata.TryGetValue("kind", out object? kindObj)
+                    && string.Equals(kindObj?.ToString(), "ct-project-discovery-failure", StringComparison.Ordinal)))
+            {
+                outcome = tc.Metadata.TryGetValue("outcome", out object? o) ? o?.ToString() ?? "failed" : "failed";
+                projectPath = tc.Metadata.TryGetValue("project_path", out object? p) ? p?.ToString() ?? ""
+                    : tc.Metadata.TryGetValue("ct_project_path", out object? cp) ? cp?.ToString() ?? "" : row.TestCaseId;
+                artifactPath = tc.Metadata.TryGetValue("artifact_path", out object? a) ? a?.ToString() ?? "" : "";
+                remedy = tc.Metadata.TryGetValue("remedy", out object? r) ? r?.ToString() : null;
+                return true;
+            }
+        }
+
+        if (row.TestCaseId.StartsWith("ct-discovery-failure", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     internal static string RenderFailureGroupsJson(TestsFailureGroupsResult result)
@@ -1788,7 +2004,8 @@ public static class TestsCore
                 rows,
                 result.Truncated + dropped,
                 result.Total,
-                result.Offset).Render(json));
+                result.Offset,
+                result.TestCases).Render(json));
 
     internal static string RenderFailureGroupsWithinByteBudget(
         TestsFailureGroupsResult result,
@@ -1960,17 +2177,21 @@ public static class TestsCore
     private static (TestsStatusResult Status, TestsWaitResult Wait) WaitForDaemonToSettle(
         TestsCoreRequest request,
         string endpointRoot,
-        string? commandId)
+        string? commandId,
+        long? submissionStarted = null,
+        TimeSpan? totalTimeout = null)
     {
-        TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
+        TimeSpan timeout = totalTimeout ?? (request.WaitTimeout ?? TimeSpan.FromMinutes(10));
         TestsWaitProbe probe = request.Hooks?.WaitProbe ?? new TestsWaitProbe();
         Func<string, ContinuousTestDaemonSnapshot> readStatus =
             probe.ReadStatus ?? ContinuousTestDaemonHost.ReadStatus;
         Func<string, bool> isLeaseLive =
             probe.IsLeaseLive ?? (root => CtDaemonLease.TryReadLive(root) is not null);
+        Func<string, string, CtDaemonCommandAck?> tryReadAck =
+            probe.TryReadAck ?? ((root, id) => CtCommandChannel.TryReadAck(root, id));
         TimeProvider clock = probe.Clock ?? TimeProvider.System;
         Action<TimeSpan> delay = probe.Delay ?? (duration => Thread.Sleep(duration));
-        long started = clock.GetTimestamp();
+        long started = submissionStarted ?? clock.GetTimestamp();
         long? queuedAt = null;
         long lastLivenessProbe = started;
         bool leaseLive = true;
@@ -2001,6 +2222,26 @@ public static class TestsCore
             if (!leaseLive)
                 return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
 
+            if (!string.IsNullOrWhiteSpace(commandId))
+            {
+                CtDaemonCommandAck? ack = tryReadAck(endpointRoot, commandId);
+                if (ack is not null)
+                {
+                    if (ack.State == CtDaemonCommandState.Completed)
+                    {
+                        if (isLeaseLive(endpointRoot))
+                            return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
+                        return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
+                    }
+
+                    if (ack.State == CtDaemonCommandState.Cancelled)
+                        return WaitResult(request, TestsWaitState.Cancelled, false, elapsed, timeout, commandId, runId, run);
+
+                    if (ack.State == CtDaemonCommandState.Rejected)
+                        return WaitResult(request, TestsWaitState.Rejected, false, elapsed, timeout, commandId, runId, run);
+                }
+            }
+
             if (IsExecuting(snapshot))
             {
                 sawExecuting = true;
@@ -2013,20 +2254,25 @@ public static class TestsCore
                 if (clock.GetElapsedTime(queuedAt.Value) >= QueuedWaitLimit)
                     return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId, run);
             }
-            else if (sawExecuting || elapsed >= RunPickupGrace)
+            else if (sawExecuting)
             {
-                if (sawExecuting)
-                {
-                    if (isLeaseLive(endpointRoot))
-                        return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
-                    return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
-                }
-
-                return WaitResult(request, TestsWaitState.NotPickedUp, false, elapsed, timeout, commandId, runId, run);
+                if (isLeaseLive(endpointRoot))
+                    return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
+                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
             }
 
             if (elapsed >= timeout)
-                return WaitResult(request, TestsWaitState.WaitTimeout, false, elapsed, timeout, commandId, runId, run);
+            {
+                return WaitResult(
+                    request,
+                    sawExecuting ? TestsWaitState.WaitTimeout : TestsWaitState.NotPickedUp,
+                    false,
+                    elapsed,
+                    timeout,
+                    commandId,
+                    runId,
+                    run);
+            }
 
             TimeSpan remaining = timeout - elapsed;
             delay(remaining < WaitPollInterval ? remaining : WaitPollInterval);
@@ -2403,7 +2649,68 @@ public static class TestsCore
         writer.WriteEndArray();
     }
 
+    private static void WriteDaemonSelection(Utf8JsonWriter writer, CtDaemonSelectionProgress? selection)
+    {
+        if (selection is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartObject();
+        writer.WriteString("workspace_id", selection.WorkspaceId);
+        writer.WriteString("project_path", selection.ProjectPath);
+        writer.WriteString("phase", Snake(selection.Phase));
+        writer.WriteString("started_at_utc", selection.StartedAtUtc.ToString("O"));
+        writer.WriteString("progress_timestamp_utc", selection.ProgressTimestampUtc.ToString("O"));
+        writer.WriteNumber("items_processed", selection.ItemsProcessed);
+        writer.WritePropertyName("freshness");
+        WriteSelected(writer, selection.Freshness);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteRecipe(Utf8JsonWriter writer, ContinuousTestRunRecipe recipe)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("primary_command", recipe.PrimaryCommand);
+        writer.WriteString("workspace_id", recipe.WorkspaceId);
+        writer.WriteString("project_path", recipe.ProjectPath);
+        writer.WriteString("framework", recipe.Framework);
+        writer.WriteString("working_directory", recipe.WorkingDirectory);
+        writer.WriteString("scope", Snake(recipe.Scope.ToString()));
+        if (recipe.TargetSelector is null)
+            writer.WriteNull("target_selector");
+        else
+            writer.WriteString("target_selector", recipe.TargetSelector);
+        writer.WriteBoolean("is_exact", recipe.IsExact);
+        if (recipe.UnavailableReason is null)
+            writer.WriteNull("unavailable_reason");
+        else
+            writer.WriteString("unavailable_reason", recipe.UnavailableReason);
+        writer.WritePropertyName("steps");
+        writer.WriteStartArray();
+        foreach (TestRunStep step in recipe.Steps)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("executable", step.Executable);
+            writer.WriteString("display_command", step.DisplayCommand);
+            writer.WriteString("working_directory", step.WorkingDirectory);
+            writer.WriteString("step_kind", step.StepKind);
+            writer.WritePropertyName("arguments");
+            writer.WriteStartArray();
+            foreach (string arg in step.Arguments)
+            {
+                writer.WriteStringValue(arg);
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
     private static void WriteSelected(Utf8JsonWriter writer, CtFreshnessKey? selected)
+
     {
         if (selected is not { } key)
         {

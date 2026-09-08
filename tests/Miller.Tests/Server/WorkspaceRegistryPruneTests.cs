@@ -527,7 +527,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             _registry, protectedWorkspaceId: null, dryRun: false, retireView: RetireView);
 
         Assert.Equal(5, result.Pruned.Count);
-        Assert.Equal(1, result.Kept);
+        Assert.Equal(0, result.Kept);
+        Assert.Equal(1, result.BlockedCount);
         Assert.Single(result.RetirementFailures);
         Assert.Contains(
             "rerun prune",
@@ -560,7 +561,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             });
 
         Assert.Empty(result.Pruned);
-        Assert.Equal(1, result.Kept);
+        Assert.Equal(0, result.Kept);
+        Assert.Equal(1, result.BlockedCount);
         Assert.Single(result.RetirementFailures);
         string error = result.RetirementFailures[0].Outcome.Error!;
         Assert.Contains("linked-worktree removal is not confirmed", error, StringComparison.OrdinalIgnoreCase);
@@ -594,7 +596,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             maxProducerRetirements: 1);
 
         Assert.Single(result.Pruned);
-        Assert.Equal(1, result.Kept);
+        Assert.Equal(0, result.Kept);
+        Assert.Equal(1, result.BlockedCount);
         Assert.Equal(new[] { false }, calls);
         Assert.Single(result.RetirementFailures);
         Assert.Contains("rerun prune", result.RetirementFailures[0].Outcome.Error!, StringComparison.OrdinalIgnoreCase);
@@ -624,7 +627,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             maxProducerRetirements: 1);
 
         Assert.Single(result.Pruned);
-        Assert.Equal(1, result.Kept);
+        Assert.Equal(0, result.Kept);
+        Assert.Equal(1, result.BlockedCount);
         Assert.Equal(new[] { false, true }, calls);
         Assert.Single(result.RetirementFailures);
         Assert.Contains("rerun prune", result.RetirementFailures[0].Outcome.Error!, StringComparison.OrdinalIgnoreCase);
@@ -1052,4 +1056,79 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         Assert.NotNull(_registry.Get("ws-prune-defdry-01"));
     }
 
+    [Fact]
+    public void Run_MixedFixture_DistinguishesRemovedKeptOwedAndBlocked()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("mixed-prune-fixture");
+
+        // 1. Removable missing root (clean gone) -> pruned, and with awaitProducerRetirement: false, retirement owed!
+        string cleanGoneRoot = Register("ws-prune-clean-gone", "clean-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-clean-gone", cleanGoneRoot, "view-clean-gone", markConfirmedRemovedLinked: true);
+        MarkLinkedLineage("ws-prune-clean-gone", adminDirExists: false);
+
+        // 2. Unconfirmed removed worktree (missing root, but admin dir still present) -> blocked with UnconfirmedWorktreeRemoval
+        string unconfirmedGoneRoot = Register("ws-prune-unconfirmed-gone", "unconfirmed-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-unconfirmed-gone", unconfirmedGoneRoot, "view-unconfirmed-gone", markConfirmedRemovedLinked: false);
+        MarkLinkedLineage("ws-prune-unconfirmed-gone", adminDirExists: true);
+
+        // 3. Surviving root -> kept
+        string liveRoot = Register("ws-prune-survivor", "survivor-repo", rootExists: true);
+        JoinFamily(family, "ws-prune-survivor", liveRoot, "view-survivor");
+
+        // 4. Intent record failure -> blocked with IntentRecordFailed
+        string intentFailGoneRoot = Register("ws-prune-intent-fail", "intent-fail-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-intent-fail", intentFailGoneRoot, "view-intent-fail", markConfirmedRemovedLinked: true);
+        MarkLinkedLineage("ws-prune-intent-fail", adminDirExists: false);
+        // Block RecordIntent by creating a subdirectory at the .reclaim-owed file path
+        string sidecarDir = StoreSidecarCatalog.DirectoryFor(family.StoreRoot);
+        Directory.CreateDirectory(sidecarDir);
+        string blockedOwedFile = Path.Combine(sidecarDir, StoreSidecarCatalog.ViewKey("view-intent-fail") + ".reclaim-owed");
+        Directory.CreateDirectory(blockedOwedFile);
+
+        var owedTargets = new List<StoreSidecarReclaimTarget>();
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            awaitProducerRetirement: false,
+            onRetirementOwed: t => owedTargets.Add(t));
+
+        // 4 independent counts:
+        // - removed: 1 (clean-gone)
+        // - kept: 1 (survivor)
+        // - retirement_owed: 1 (clean-gone was unregistered with retirement owed)
+        // - blocked: 2 (unconfirmed-gone + intent-fail)
+        Assert.Equal(1, result.RemovedCount);
+        Assert.Equal(0, result.WouldRemoveCount);
+        Assert.Single(result.Pruned);
+        Assert.Equal("ws-prune-clean-gone", result.Pruned[0].WorkspaceId);
+
+        Assert.Equal(1, result.Kept);
+        Assert.Equal(1, result.RetirementOwed);
+        Assert.Single(owedTargets);
+        Assert.Equal("view-clean-gone", owedTargets[0].ViewId);
+
+        Assert.Equal(2, result.BlockedCount);
+        Assert.NotNull(result.Blocked);
+        Assert.Equal(2, result.Blocked!.Count);
+
+        // Verify unconfirmed worktree entry
+        WorkspaceRegistryPrune.BlockedEntry unconfirmedEntry =
+            Assert.Single(result.Blocked, b => b.WorkspaceId == "ws-prune-unconfirmed-gone");
+        Assert.Equal(WorkspaceRegistryPrune.PruneBlockReason.UnconfirmedWorktreeRemoval, unconfirmedEntry.Reason);
+        Assert.Equal("unconfirmed_worktree_removal", unconfirmedEntry.ReasonCode);
+        Assert.Contains("workspace remove path=", unconfirmedEntry.SuggestedAction);
+
+        // Verify intent failure entry
+        WorkspaceRegistryPrune.BlockedEntry intentEntry =
+            Assert.Single(result.Blocked, b => b.WorkspaceId == "ws-prune-intent-fail");
+        Assert.Equal(WorkspaceRegistryPrune.PruneBlockReason.IntentRecordFailed, intentEntry.Reason);
+        Assert.Equal("intent_record_failed", intentEntry.ReasonCode);
+
+        // Verify registry rows:
+        Assert.Null(_registry.Get("ws-prune-clean-gone")); // Removed!
+        Assert.NotNull(_registry.Get("ws-prune-survivor")); // Kept!
+        Assert.NotNull(_registry.Get("ws-prune-unconfirmed-gone")); // Blocked!
+        Assert.NotNull(_registry.Get("ws-prune-intent-fail")); // Blocked!
+    }
 }

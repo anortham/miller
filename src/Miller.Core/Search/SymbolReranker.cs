@@ -11,7 +11,8 @@ public sealed record SymbolRerankFeatures(
     double PathRole,
     double LanguageAffinity,
     double ContainerEvidence,
-    double FinalScore);
+    double FinalScore,
+    int DistinctCoverage = 0);
 
 /// <summary>Candidates plus score evidence inherited from multiple matching children.</summary>
 public sealed record SymbolRerankInput(
@@ -39,6 +40,10 @@ public static class SymbolReranker
         ArgumentNullException.ThrowIfNull(candidates);
 
         dominantLanguage ??= DominantLanguage(candidates);
+        TextSearchQueryPlan? plan = TextSearchQueryPlan.Create(query);
+        IReadOnlyList<string> coverageTerms = plan?.CoverageTerms ?? Array.Empty<string>();
+        HashSet<string> coverageTermSet = coverageTerms.ToHashSet(StringComparer.Ordinal);
+
         var results = new List<SymbolRerankResult>(candidates.Count);
         foreach (SymbolCandidate candidate in candidates)
         {
@@ -57,6 +62,24 @@ public static class SymbolReranker
                 pathRole +
                 languageAffinity +
                 inheritedEvidence;
+
+            int distinctCoverage = 0;
+            if (coverageTermSet.Count > 0)
+            {
+                var candidateTokens = new List<string>(24);
+                CodeTokenizer.Tokenize(
+                    string.IsNullOrEmpty(candidate.Signature)
+                        ? candidate.Name
+                        : candidate.Name + " " + candidate.Signature,
+                    candidateTokens);
+                var candidateTokenSet = new HashSet<string>(candidateTokens, StringComparer.Ordinal);
+                foreach (string term in coverageTermSet)
+                {
+                    if (candidateTokenSet.Contains(term))
+                        distinctCoverage++;
+                }
+            }
+
             results.Add(new SymbolRerankResult(
                 candidate,
                 new SymbolRerankFeatures(
@@ -67,36 +90,60 @@ public static class SymbolReranker
                     pathRole,
                     languageAffinity,
                     inheritedEvidence,
-                    finalScore)));
+                    finalScore,
+                    distinctCoverage)));
         }
 
         for (int index = 0; index < results.Count; index++)
         {
             SymbolRerankResult result = results[index];
             double finalScore = result.Features.FinalScore;
+            int distinctCoverage = result.Features.DistinctCoverage;
             if (result.Candidate.Origin == SymbolCandidateOrigin.Container)
             {
-                double? strongestChild = results
+                var children = results
                     .Where(child =>
                         string.Equals(
                             child.Candidate.ParentId,
                             result.Candidate.SymbolId,
                             StringComparison.Ordinal))
+                    .ToArray();
+                double? strongestChild = children
                     .Select(static child => (double?)child.Features.FinalScore)
+                    .DefaultIfEmpty(null)
                     .Max();
                 if (strongestChild is { } childScore && finalScore >= childScore)
                     finalScore = Math.BitDecrement(childScore);
+
+                int childCoverage = children
+                    .Select(static child => child.Features.DistinctCoverage)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                distinctCoverage = Math.Max(distinctCoverage, childCoverage);
             }
 
             results[index] = result with
             {
                 Candidate = result.Candidate with { RankScore = finalScore },
-                Features = result.Features with { FinalScore = finalScore },
+                Features = result.Features with
+                {
+                    FinalScore = finalScore,
+                    DistinctCoverage = distinctCoverage,
+                },
             };
         }
 
         results.Sort(static (left, right) =>
         {
+            bool leftExact = left.Features.Exactness >= 4.0;
+            bool rightExact = right.Features.Exactness >= 4.0;
+            if (leftExact != rightExact)
+                return rightExact ? 1 : -1;
+
+            int byCoverage = right.Features.DistinctCoverage.CompareTo(left.Features.DistinctCoverage);
+            if (byCoverage != 0)
+                return byCoverage;
+
             int byScore = right.Features.FinalScore.CompareTo(left.Features.FinalScore);
             return byScore != 0
                 ? byScore

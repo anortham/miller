@@ -22,7 +22,8 @@ internal static class CandidateOutput
         string target,
         IReadOnlyList<IndexedSymbol> matches,
         bool supportsScope,
-        string command = "inspect")
+        string command = "inspect",
+        ISymbolLookupIndex? index = null)
     {
         string escapedCommand = EscapeShellishArgument(command);
         if (supportsScope && SpansMultipleFiles(matches))
@@ -36,9 +37,29 @@ internal static class CandidateOutput
                 .ToArray();
         }
 
+        var overloadGroups = matches
+            .GroupBy(static m => (m.FilePath, m.ParentId, m.Name))
+            .ToDictionary(static g => g.Key, static g => g.Count());
+
         return matches
             .Take(3)
-            .Select(match => $"{escapedCommand} target=\"{EscapeShellishArgument(match.SymbolId)}\"")
+            .Select(match =>
+            {
+                string? parentName = null;
+                if (index is not null && match.ParentId is not null)
+                {
+                    parentName = index.FindBySymbolId(match.ParentId)?.Name;
+                }
+
+                bool isOverload = overloadGroups.TryGetValue((match.FilePath, match.ParentId, match.Name), out int count) && count > 1;
+
+                if (!isOverload && !string.IsNullOrWhiteSpace(parentName))
+                {
+                    return $"{escapedCommand} target=\"{EscapeShellishArgument($"{parentName}.{match.Name}")}\"";
+                }
+
+                return $"{escapedCommand} target=\"{EscapeShellishArgument(match.SymbolId)}\"";
+            })
             .ToArray();
     }
 
@@ -47,9 +68,10 @@ internal static class CandidateOutput
         string target,
         IReadOnlyList<IndexedSymbol> matches,
         bool supportsScope,
-        string command = "inspect")
+        string command = "inspect",
+        ISymbolLookupIndex? index = null)
     {
-        IReadOnlyList<string> examples = RerunExamples(target, matches, supportsScope, command);
+        IReadOnlyList<string> examples = RerunExamples(target, matches, supportsScope, command, index);
         if (examples.Count == 0)
             return;
 

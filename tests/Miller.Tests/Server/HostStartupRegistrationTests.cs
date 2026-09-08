@@ -448,6 +448,21 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.True(runner.HasContainmentSink);
     }
 
+    [Fact]
+    public void WorkspaceReadProjectionCache_RegisteredAsSingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+
+        using var provider = services.BuildServiceProvider();
+        var cache1 = provider.GetRequiredService<WorkspaceReadProjectionCache>();
+        var cache2 = provider.GetRequiredService<WorkspaceReadProjectionCache>();
+
+        Assert.NotNull(cache1);
+        Assert.Same(cache1, cache2);
+    }
+
     private string CreateTempRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-host-registration-" + Guid.NewGuid().ToString("N"));

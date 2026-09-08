@@ -1,3 +1,5 @@
+using Miller.Core.References;
+
 namespace Miller.Core.Graph;
 
 /// <summary>One vertex in the dependency graph: a symbol id plus julie's cross-language test flag.</summary>
@@ -39,7 +41,8 @@ public sealed record ReachedNode(
     double? EdgeConfidence = null,
     string? EdgeSource = null,
     int Centrality = 0,
-    string? Visibility = null);
+    string? Visibility = null,
+    ReferenceResolutionStatus PathCertainty = ReferenceResolutionStatus.Exact);
 
 public sealed record GraphReachResult(
     IReadOnlyList<ReachedNode> Nodes,
@@ -93,6 +96,27 @@ public interface ISymbolGraphReachability
         string to,
         int maxDepth,
         Func<GraphNeighbour, bool> edgeFilter);
+
+    GraphPath? ShortestPathWithEvidence(
+        IEnumerable<string> fromNodes,
+        string to,
+        int maxDepth,
+        Func<GraphNeighbour, bool> edgeFilter)
+    {
+        ArgumentNullException.ThrowIfNull(fromNodes);
+        GraphPath? shortest = null;
+        foreach (string from in fromNodes)
+        {
+            GraphPath? path = ShortestPathWithEvidence(from, to, maxDepth, edgeFilter);
+            if (path is not null && (shortest is null || path.Edges.Count < shortest.Edges.Count))
+            {
+                shortest = path;
+                if (shortest.Edges.Count <= 1)
+                    break;
+            }
+        }
+        return shortest;
+    }
 }
 
 /// <summary>
@@ -322,6 +346,19 @@ public sealed class SymbolGraph : ISymbolGraphReachability
         Func<GraphNeighbour, bool> edgeFilter) =>
         GraphTraversal.ShortestPathWithEvidence(
             from,
+            to,
+            maxDepth,
+            Contains,
+            id => NeighbourEvidence(id, Direction.Forward),
+            edgeFilter);
+
+    public GraphPath? ShortestPathWithEvidence(
+        IEnumerable<string> fromNodes,
+        string to,
+        int maxDepth,
+        Func<GraphNeighbour, bool> edgeFilter) =>
+        GraphTraversal.ShortestPathWithEvidence(
+            fromNodes,
             to,
             maxDepth,
             Contains,

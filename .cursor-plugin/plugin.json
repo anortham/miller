@@ -22,6 +22,7 @@
     "cursor"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/cursor-hooks.json",
   "mcpServers": {
     "miller": {
       "command": "node",

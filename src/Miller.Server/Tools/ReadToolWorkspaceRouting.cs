@@ -35,7 +35,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceArtifactContext context, string? requestedWorkspaceId, bool json)
@@ -48,7 +49,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceSymbolSearchContext context, string? requestedWorkspaceId, bool json)
@@ -61,7 +63,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceSymbolReadContext context, string? requestedWorkspaceId, bool json)
@@ -74,7 +77,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceContentSearchContext context, string? requestedWorkspaceId, bool json)
@@ -87,7 +91,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceRegionSearchContext context, string? requestedWorkspaceId, bool json)
@@ -100,7 +105,8 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
     public static string? CompactBanner(WorkspaceTextContentSearchContext context, string? requestedWorkspaceId, bool json)
@@ -113,10 +119,11 @@ internal static class ReadToolWorkspaceRouting
             context.FreshnessStatus,
             context.Revision,
             requestedWorkspaceId,
-            json);
+            json,
+            context.WarningText);
     }
 
-    private static string? CompactBanner(
+    internal static string? CompactBanner(
         string? displayId,
         string? workspaceId,
         string workspaceRoot,
@@ -124,13 +131,15 @@ internal static class ReadToolWorkspaceRouting
         string freshnessStatus,
         long revision,
         string? requestedWorkspaceId,
-        bool json)
+        bool json,
+        string? warningText = null)
     {
         if (json)
             return null;
 
         bool showFreshness = ShouldShowFreshness(indexFresh, freshnessStatus);
-        if (string.IsNullOrWhiteSpace(requestedWorkspaceId) && !showFreshness)
+        bool hasWarning = !string.IsNullOrWhiteSpace(warningText);
+        if (string.IsNullOrWhiteSpace(requestedWorkspaceId) && !showFreshness && !hasWarning)
             return null;
 
         var sb = new StringBuilder();
@@ -147,6 +156,11 @@ internal static class ReadToolWorkspaceRouting
                 freshnessStatus, WorkspaceFreshnessView.RefreshPendingStatus, StringComparison.Ordinal))
         {
             sb.Append('\n').Append("revision: ").Append(revision);
+        }
+
+        if (hasWarning)
+        {
+            sb.Append('\n').Append("warning: ").Append(warningText);
         }
 
         return sb.ToString();
@@ -229,7 +243,8 @@ internal static class ReadToolWorkspaceRouting
 
         return indexFresh != true ||
                freshnessStatus.StartsWith("unconfirmed", StringComparison.OrdinalIgnoreCase) ||
-               freshnessStatus.Contains("stale", StringComparison.OrdinalIgnoreCase);
+               freshnessStatus.Contains("stale", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(freshnessStatus, WorkspaceFreshnessView.RefreshPendingStatus, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Display(string? displayId, string? workspaceId, string? requestedWorkspaceId)

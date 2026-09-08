@@ -13,4 +13,6 @@ public sealed record ContentSearchHit(
     string Snippet,
     string Language = "",
     long SourceBytes = 0,
-    string? ChunkId = null);
+    string? ChunkId = null,
+    double? RrfScore = null,
+    string? RankingMethod = null);

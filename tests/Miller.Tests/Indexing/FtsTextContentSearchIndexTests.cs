@@ -667,7 +667,7 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     {
         WriteMinimalContentDb(revision: 6, schemaVersion: ContentCorpusSchema.SchemaVersion);
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<SidecarUnavailableException>(() =>
             FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7));
 
         Assert.Contains("revision", ex.Message);
@@ -734,6 +734,30 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             FROM content_sources WHERE path = 'src/Target.cs';
             """;
         command.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Search_WithSourceId_FiltersCandidatesToTargetSource()
+    {
+        using var fx = BuildFixture(
+            ("src/Api1.cs", "csharp", false, "public class Service1 { void Run() { var key = \"TargetToken\"; } }"),
+            ("src/Api2.cs", "csharp", false, "public class Service2 { void Run() { var key = \"TargetToken\"; } }"));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 1);
+
+        var allHits = index.Search("TargetToken", TextContentKind.WorkspaceSource, limit: 10);
+        Assert.Equal(2, allHits.Count);
+
+        string sourceId1 = allHits.First(h => h.Path == "src/Api1.cs").SourceId;
+        string sourceId2 = allHits.First(h => h.Path == "src/Api2.cs").SourceId;
+
+        var scopedHits1 = index.Search("TargetToken", TextContentKind.WorkspaceSource, limit: 10, excludeTests: false, sourceId: sourceId1);
+        Assert.Single(scopedHits1);
+        Assert.Equal("src/Api1.cs", scopedHits1[0].Path);
+
+        var scopedHits2 = index.Search("TargetToken", TextContentKind.WorkspaceSource, limit: 10, excludeTests: false, sourceId: sourceId2);
+        Assert.Single(scopedHits2);
+        Assert.Equal("src/Api2.cs", scopedHits2[0].Path);
     }
 
     private void DeleteAllSpansAndChunkSymbols()

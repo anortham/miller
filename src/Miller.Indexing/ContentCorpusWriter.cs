@@ -630,7 +630,7 @@ public static partial class ContentCorpusWriter
         }
         using (var ddl = connection.CreateCommand())
         {
-            ddl.CommandText = ContentCorpusSchema.SchemaDdl;
+            ddl.CommandText = ContentCorpusSchema.SchemaDdl + "\nPRAGMA user_version = 1;";
             ddl.ExecuteNonQuery();
         }
 
@@ -1090,17 +1090,108 @@ public static partial class ContentCorpusWriter
             StringComparer.Ordinal);
     }
 
-    private static bool IsTestPath(string path, IReadOnlyList<ContentCorpusSymbolSpan> symbols)
+    private static bool IsTestPath(string path, IReadOnlyList<ContentCorpusSymbolSpan> symbols) =>
+        TestPathClassifier.Check(path);
+
+    public static int MigrateTestClassifications(string contentDbPath, TimeSpan? writeLockTimeout = null)
     {
-        if (path.Contains("/test", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("\\test", StringComparison.OrdinalIgnoreCase)
-            || Path.GetFileName(path).Contains("test", StringComparison.OrdinalIgnoreCase)
-            || Path.GetFileName(path).Contains("spec", StringComparison.OrdinalIgnoreCase))
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        string fullPath = Path.GetFullPath(contentDbPath);
+        if (!File.Exists(fullPath))
+            return 0;
+
+        try
         {
-            return true;
+            using var readConn = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = fullPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            readConn.Open();
+            using var vCmd = readConn.CreateCommand();
+            vCmd.CommandText = "PRAGMA user_version;";
+            object? versionScalar = vCmd.ExecuteScalar();
+            long currentVersion = versionScalar is null or DBNull ? 0 : Convert.ToInt64(versionScalar);
+            if (currentVersion >= 1)
+                return 0;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
+            return 0;
         }
 
-        return false;
+        using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = fullPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+
+            using (var vCmd = connection.CreateCommand())
+            {
+                vCmd.CommandText = "PRAGMA user_version;";
+                object? versionScalar = vCmd.ExecuteScalar();
+                long currentVersion = versionScalar is null or DBNull ? 0 : Convert.ToInt64(versionScalar);
+                if (currentVersion >= 1)
+                    return 0;
+            }
+
+            var updates = new List<(string SourceId, int NewIsTest)>();
+            using (var selectCmd = connection.CreateCommand())
+            {
+                selectCmd.CommandText = "SELECT source_id, COALESCE(path, display_path), is_test FROM content_sources;";
+                using var reader = selectCmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    string sourceId = reader.GetString(0);
+                    string path = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                    int isTest = reader.GetInt32(2);
+                    int expectedIsTest = TestPathClassifier.Check(path) ? 1 : 0;
+                    if (isTest != expectedIsTest)
+                    {
+                        updates.Add((sourceId, expectedIsTest));
+                    }
+                }
+            }
+
+            using var tx = connection.BeginTransaction();
+            using var updateSourceCmd = connection.CreateCommand();
+            updateSourceCmd.Transaction = tx;
+            updateSourceCmd.CommandText = "UPDATE content_sources SET is_test = $test WHERE source_id = $id;";
+            var pSourceTest = updateSourceCmd.Parameters.Add("$test", SqliteType.Integer);
+            var pSourceId = updateSourceCmd.Parameters.Add("$id", SqliteType.Text);
+
+            using var updateChunkCmd = connection.CreateCommand();
+            updateChunkCmd.Transaction = tx;
+            updateChunkCmd.CommandText = "UPDATE content_chunks SET is_test = $test WHERE source_id = $id;";
+            var pChunkTest = updateChunkCmd.Parameters.Add("$test", SqliteType.Integer);
+            var pChunkId = updateChunkCmd.Parameters.Add("$id", SqliteType.Text);
+
+            foreach (var (sourceId, newIsTest) in updates)
+            {
+                pSourceTest.Value = newIsTest;
+                pSourceId.Value = sourceId;
+                updateSourceCmd.ExecuteNonQuery();
+
+                pChunkTest.Value = newIsTest;
+                pChunkId.Value = sourceId;
+                updateChunkCmd.ExecuteNonQuery();
+            }
+
+            using (var setVersionCmd = connection.CreateCommand())
+            {
+                setVersionCmd.Transaction = tx;
+                setVersionCmd.CommandText = "PRAGMA user_version = 1;";
+                setVersionCmd.ExecuteNonQuery();
+            }
+
+            tx.Commit();
+            return updates.Count;
+        }
     }
 
     private static string SourceId(string? workspaceId, string path, string kind) =>

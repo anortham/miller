@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
+using Miller.Testing;
 using Miller.Tests.Support;
 using Xunit;
 
@@ -348,6 +349,134 @@ public sealed class CrossToolHandoffTests : IDisposable
             .GetProperty("diagnostic")
             .GetProperty("next_actions")
             .EnumerateArray());
+    }
+
+    [Fact]
+    public void AdviceForAppliedEdit_WhenKillSwitchOff_ReturnsNull()
+    {
+        string ws = Path.Combine(_dir, "ws-edit-killswitch");
+        Directory.CreateDirectory(ws);
+        string? original = Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch);
+        try
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.KillSwitch, "off");
+            string? advice = CrossToolHandoff.AdviceForAppliedEdit(ws, null, ["src/Widget.cs"]);
+            Assert.Null(advice);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.KillSwitch, original);
+        }
+    }
+
+    [Fact]
+    public void AdviceForAppliedEdit_WhenDisabledAndNoTests_ReturnsNull()
+    {
+        string ws = Path.Combine(_dir, "ws-edit-notests");
+        Directory.CreateDirectory(ws);
+        string? advice = CrossToolHandoff.AdviceForAppliedEdit(ws, null, ["src/Widget.cs"]);
+        Assert.Null(advice);
+    }
+
+    [Fact]
+    public void AdviceForAppliedEdit_WhenDisabledWithTestProject_ReturnsDirectRunRecipe()
+    {
+        string ws = Path.Combine(_dir, "ws-edit-recipe");
+        Directory.CreateDirectory(ws);
+        string projDir = Path.Combine(ws, "tests");
+        Directory.CreateDirectory(projDir);
+        File.WriteAllText(Path.Combine(projDir, "Sample.Tests.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        string? advice = CrossToolHandoff.AdviceForAppliedEdit(ws, null, ["src/Widget.cs"]);
+        Assert.NotNull(advice);
+        Assert.Contains("dotnet test", advice, StringComparison.Ordinal);
+        Assert.Contains("run tests directly to verify changes", advice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdviceForAppliedEdit_WhenEnabledAndStopped_ReturnsStartDaemon()
+    {
+        string ws = Path.Combine(_dir, "ws-edit-enabled-stopped");
+        Directory.CreateDirectory(ws);
+        Directory.CreateDirectory(Path.Combine(ws, ".miller"));
+        File.WriteAllText(Path.Combine(ws, ".miller", "ct.enabled"), "");
+
+        string? advice = CrossToolHandoff.AdviceForAppliedEdit(ws, null, ["src/Widget.cs"]);
+        Assert.NotNull(advice);
+        Assert.Contains("tests operation=start", advice, StringComparison.Ordinal);
+        Assert.Contains("start daemon to monitor changes", advice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdviceForImpact_WhenKillSwitchOff_ReturnsNull()
+    {
+        string ws = Path.Combine(_dir, "ws-impact-killswitch");
+        Directory.CreateDirectory(ws);
+        string? original = Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch);
+        try
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.KillSwitch, "off");
+            var recipe = new ContinuousTestRunRecipe(
+                WorkspaceId: "ws",
+                ProjectPath: "tests/Sample.Tests.csproj",
+                Framework: "xunit",
+                WorkingDirectory: ws,
+                Steps: [new TestRunStep("dotnet", ["test"], ws)],
+                Scope: TestSelectorScope.ProjectSuite);
+            string? advice = CrossToolHandoff.AdviceForImpact(ws, null, recipe, 5);
+            Assert.Null(advice);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.KillSwitch, original);
+        }
+    }
+
+    [Fact]
+    public void AdviceForImpact_WhenDisabledWithRecipe_ReturnsDirectRun()
+    {
+        string ws = Path.Combine(_dir, "ws-impact-disabled-recipe");
+        Directory.CreateDirectory(ws);
+        var recipe = new ContinuousTestRunRecipe(
+            WorkspaceId: "ws",
+            ProjectPath: "tests/Sample.Tests.csproj",
+            Framework: "xunit",
+            WorkingDirectory: ws,
+            Steps: [new TestRunStep("dotnet", ["test", "--filter", "Category=Unit"], ws)],
+            Scope: TestSelectorScope.ProjectSuite);
+        string? advice = CrossToolHandoff.AdviceForImpact(ws, null, recipe, 3);
+        Assert.NotNull(advice);
+        Assert.Contains("dotnet test --filter Category=Unit", advice, StringComparison.Ordinal);
+        Assert.Contains("run likely impacted tests directly", advice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdviceForImpact_WhenDisabledWithoutRecipe_ReturnsNull()
+    {
+        string ws = Path.Combine(_dir, "ws-impact-disabled-no-recipe");
+        Directory.CreateDirectory(ws);
+        string? advice = CrossToolHandoff.AdviceForImpact(ws, null, runnerRecipe: null, 0);
+        Assert.Null(advice);
+    }
+
+    [Fact]
+    public void AdviceForImpact_WhenEnabledAndStopped_ReturnsStartDaemon()
+    {
+        string ws = Path.Combine(_dir, "ws-impact-enabled-stopped");
+        Directory.CreateDirectory(ws);
+        Directory.CreateDirectory(Path.Combine(ws, ".miller"));
+        File.WriteAllText(Path.Combine(ws, ".miller", "ct.enabled"), "");
+
+        string? advice = CrossToolHandoff.AdviceForImpact(ws, null, null, 2);
+        Assert.NotNull(advice);
+        Assert.Contains("tests operation=start", advice, StringComparison.Ordinal);
+        Assert.Contains("start daemon to run continuous tests", advice, StringComparison.Ordinal);
     }
 
     private static string Line(ToolDiagnosticAction action) => $"{action.Call} — {action.Reason}";

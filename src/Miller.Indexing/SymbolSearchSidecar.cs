@@ -249,28 +249,43 @@ public sealed class SymbolSearchSidecar
         }
 
         if (!File.Exists(searchDbPath))
-            throw new InvalidOperationException(
-                $"Search sidecar is enabled but missing at '{searchDbPath}'. Run `miller workspace refresh` to rebuild it.");
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.Missing,
+                $"Search sidecar is enabled but missing at '{searchDbPath}'. Run `miller workspace refresh` to rebuild it.",
+                artifactPath: searchDbPath);
 
         try
         {
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
             if (index.Revision != expectedRevision)
             {
-                throw new InvalidOperationException(
+                throw new SidecarUnavailableException(
+                    SidecarArtifactKind.Search,
+                    SidecarRecoveryReason.Stale,
                     $"Search sidecar at '{searchDbPath}' is stale: revision {index.Revision}, expected {expectedRevision}. " +
-                    "Run `miller workspace refresh` to converge it.");
+                    "Run `miller workspace refresh` to converge it.",
+                    artifactPath: searchDbPath,
+                    expectedRevision: expectedRevision,
+                    actualRevision: index.Revision);
             }
 
             // Revision alone cannot prove the generation: a full-rebuild promote restarts julie's counter, so a
             // sidecar built at revision N from the PREVIOUS artifact matches a post-promote revision N exactly.
             if (!SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(index.ArtifactId))
             {
-                throw new InvalidOperationException(
+                throw new SidecarUnavailableException(
+                    SidecarArtifactKind.Search,
+                    SidecarRecoveryReason.GenerationMismatch,
                     $"Search sidecar at '{searchDbPath}' was built from a different index generation " +
-                    "(the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
+                    "(the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.",
+                    artifactPath: searchDbPath);
             }
             return index;
+        }
+        catch (SidecarUnavailableException)
+        {
+            throw;
         }
         catch (InvalidOperationException)
         {
@@ -279,34 +294,52 @@ public sealed class SymbolSearchSidecar
         catch (Exception ex) when (
             ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            throw new InvalidOperationException(
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.Missing,
                 $"Search sidecar at '{searchDbPath}' could not be opened. Run `miller workspace refresh` to rebuild it.",
-                ex);
+                artifactPath: searchDbPath,
+                innerException: ex);
         }
     }
 
     public FtsSymbolSearchIndex OpenStoreRequired(string storeRoot, WorkspaceReadSnapshot snapshot)
     {
         if (!Enabled)
-            throw new InvalidOperationException("Search sidecar is disabled.");
+            throw new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.Disabled,
+                "Search sidecar is disabled.");
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
-        InvalidOperationException? lastMismatch = null;
+        SidecarUnavailableException? lastMismatch = null;
         for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
         {
             StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
-                ?? throw new InvalidOperationException(
+                ?? throw new SidecarUnavailableException(
+                    SidecarArtifactKind.Search,
+                    SidecarRecoveryReason.Missing,
                     $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
-                    "Run `miller workspace refresh` to converge it.");
+                    "Run `miller workspace refresh` to converge it.",
+                    workspaceId: snapshot.WorkspaceId,
+                    workspaceRoot: snapshot.WorkspaceRoot,
+                    artifactPath: searchDbPath);
             AfterStoreStampReadForTests?.Invoke(searchDbPath, attempt);
 
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
             if (index.Revision == serve.StoreLogSequence)
                 return index;
 
-            lastMismatch = new InvalidOperationException(
+            lastMismatch = new SidecarUnavailableException(
+                SidecarArtifactKind.Search,
+                SidecarRecoveryReason.LogSequenceMismatch,
                 $"Search sidecar for view '{snapshot.ViewId}' has store sequence {index.Revision}, " +
-                $"expected {serve.StoreLogSequence}.");
+                $"expected {serve.StoreLogSequence}.",
+                workspaceId: snapshot.WorkspaceId,
+                workspaceRoot: snapshot.WorkspaceRoot,
+                artifactPath: searchDbPath,
+                expectedRevision: serve.StoreLogSequence,
+                actualRevision: index.Revision);
         }
 
         throw lastMismatch!;
