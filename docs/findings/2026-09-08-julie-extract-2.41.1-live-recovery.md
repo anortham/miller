@@ -20,7 +20,7 @@ multi-process WAL-reset corruption range; julie-extract 2.41.1 used fixed SQLite
 matching exposure, not proof that the WAL-reset defect created these pages.
 
 Producer maintenance `inspect` and repair planning reported `failure_class=none` on the damaged
-database. Julie `0725ae23` adds bounded structural integrity checks for inspect/repair, preserves
+database. Julie `0725ae23` adds structural integrity checks with bounded diagnostics for inspect/repair, preserves
 Busy and operational error classes, and directs corruption recovery to generation promotion.
 Promote remains able to reconstruct readable logical rows into a validated generation. Its
 destination already ran quick, full integrity and foreign-key checks before publication.
@@ -56,5 +56,6 @@ empty queue. Vector convergence requires the normal resident-backend restart.
   3,969 passes and seven expected ignores.
 - Miller SQLite guard: 3.50.4 failed and 3.53.4 passed; Release build completed with zero warnings
   and errors. Miller main commit `464286e8` carries the dependency floor and guard.
+- Miller fast suite: 10,424 passed, nine expected skips and zero failures.
 - No release, push or Miller repin was performed. The bundled 2.41.1 producer remains the published
   artifact; the two producer corrections are local source until separately released.
