@@ -229,10 +229,9 @@ public sealed class EditBatchTests : IDisposable
         Assert.Contains("ComputeTotal", invoiceContent);
         Assert.DoesNotContain("o.Total()", invoiceContent);
 
-        // Write-through converged both files
         Assert.Equal(2, wt.Converged.Count);
-        Assert.Contains(Path.Combine(_root, "orders/OrderService.cs"), wt.Converged);
-        Assert.Contains(Path.Combine(_root, "billing/Invoice.cs"), wt.Converged);
+        Assert.Contains(Path.GetFullPath("orders/OrderService.cs", _root), wt.Converged);
+        Assert.Contains(Path.GetFullPath("billing/Invoice.cs", _root), wt.Converged);
     }
 
     [Fact]

@@ -97,7 +97,7 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         File.WriteAllText(project, """{"scripts":{"test":"vitest run --config custom.config.ts"}}""");
         var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
             project, "vitest"));
-        Assert.Equal("npm", recipe.Steps[0].Executable);
+        Assert.Equal("npm", Path.GetFileNameWithoutExtension(recipe.Steps[0].Executable));
         Assert.Equal(["run", "test", "--"], recipe.Steps[0].Arguments);
     }
 

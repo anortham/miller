@@ -5,7 +5,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [v1.28.1 release notes](release-notes/v1.28.1.md) - julie-extract 2.40.6 avoids redundant SQLite configuration writes during shared-store reads.
+- [v1.29.0 release notes](release-notes/v1.29.0.md) - agent workflow improvements, truthful search and freshness reporting, continuous-testing usability, and julie-extract 2.42.0.
+- [v1.29.0 release verification](findings/2026-09-08-v1.29.0-release-verification.md) - candidate scope, local gates, Windows rerun status, and publication prerequisites.
+- [v1.28.1 release notes](release-notes/v1.28.1.md) - historical release notes for julie-extract 2.40.6 and its redundant SQLite configuration-write fix.
 - [v1.28.0 release notes](release-notes/v1.28.0.md) - historical release notes for shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
 - [julie-extract 2.42.0 adoption](findings/2026-09-08-julie-extract-2.42.0-adoption.md) - public four-platform hashes, unchanged epoch-10 compatibility, reader-floor qualification, and Miller verification.
 - [julie-extract 2.41.1 adoption](findings/2026-09-08-julie-extract-2.41.1-adoption.md) - public four-platform hashes, epoch-10 compatibility, native facts and Miller pin verification.
