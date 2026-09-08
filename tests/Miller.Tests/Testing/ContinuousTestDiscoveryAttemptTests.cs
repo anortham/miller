@@ -76,6 +76,62 @@ public sealed class ContinuousTestDiscoveryAttemptTests : IDisposable
     }
 
     [Fact]
+    public void Discovery_json_contract_preserves_names_enum_shapes_and_null_omission()
+    {
+        var ledger = new CtDiscoveryLedger();
+        string projectPath = Path.Combine(_workspaceRoot, "Contract.Tests.csproj");
+        var attempt = new CtDiscoveryAttempt(
+            "contract", _workspaceId, projectPath, "xunit", "test", "gen", 7,
+            CtDiscoveryStage.Execution, CtDiscoveryOutcome.Failed,
+            DateTimeOffset.Parse("2026-09-08T12:34:56Z"), "failed", null, null);
+
+        ledger.RecordAttempt(_workspaceRoot, attempt);
+
+        string artifactJson = File.ReadAllText(ledger.GetLatestAttempt(projectPath)!.ArtifactPath);
+        string ledgerJson = File.ReadAllText(Path.Combine(_workspaceRoot, ".miller", "ct-discovery.json"));
+        using JsonDocument artifact = JsonDocument.Parse(artifactJson);
+        using JsonDocument persistedLedger = JsonDocument.Parse(ledgerJson);
+        JsonElement artifactRoot = artifact.RootElement;
+        JsonElement summary = persistedLedger.RootElement.GetProperty("projects").GetProperty(projectPath);
+
+        Assert.StartsWith("{\n  \"attempt_id\"", artifactJson.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Equal((int)CtDiscoveryStage.Execution, artifactRoot.GetProperty("stage").GetInt32());
+        Assert.Equal("Failed", artifactRoot.GetProperty("outcome").GetString());
+        Assert.False(artifactRoot.TryGetProperty("failure_detail", out _));
+        Assert.False(artifactRoot.TryGetProperty("remedy", out _));
+        Assert.Equal((int)CtDiscoveryStage.Execution, summary.GetProperty("stage").GetInt32());
+        Assert.Equal("Failed", summary.GetProperty("outcome").GetString());
+        Assert.False(summary.TryGetProperty("remedy", out _));
+    }
+
+    [Fact]
+    public void Discovery_attempt_loads_existing_numeric_stage_and_string_outcome_contract()
+    {
+        string artifactPath = Path.Combine(_workspaceRoot, "existing-attempt.json");
+        File.WriteAllText(artifactPath,
+            """
+            {
+              "attempt_id": "existing",
+              "workspace_id": "workspace",
+              "project_path": "Existing.Tests.csproj",
+              "framework": "xunit",
+              "provider_source": "test",
+              "index_identity": "generation",
+              "revision": 42,
+              "stage": 3,
+              "outcome": "Failed",
+              "attempted_at_utc": "2026-09-08T12:34:56+00:00"
+            }
+            """);
+
+        CtDiscoveryAttempt loaded = Assert.IsType<CtDiscoveryAttempt>(CtDiscoveryLedger.LoadAttempt(artifactPath));
+
+        Assert.Equal(CtDiscoveryStage.Execution, loaded.Stage);
+        Assert.Equal(CtDiscoveryOutcome.Failed, loaded.Outcome);
+        Assert.Null(loaded.FailureReason);
+    }
+
+    [Fact]
     public void Shared_discovery_ledger_keeps_workspace_projects_separate_and_preserves_id_on_clear()
     {
         var ledger = new CtDiscoveryLedger();
@@ -671,5 +727,3 @@ public sealed class ContinuousTestDiscoveryAttemptTests : IDisposable
             ObservedAt: DateTimeOffset.UtcNow);
     }
 }
-
-

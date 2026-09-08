@@ -38,12 +38,19 @@ public sealed class CtDaemonLauncherTests : IDisposable
     [Theory]
     [InlineData("dotnet")]
     [InlineData("dotnet.exe")]
-    public void ResolveExecutablePath_DotnetHostUsesEntryAssembly(string hostName)
+    public void ResolveExecutablePath_DotnetHostUsesManagedCommandPath(string hostName)
     {
         string host = Path.Combine(_root, hostName);
         string assembly = Path.Combine(_root, "miller.dll");
         File.WriteAllText(assembly, "assembly");
         Assert.Equal(assembly, CtDaemonLauncher.ResolveExecutablePath(host, assembly));
+    }
+
+    [Fact]
+    public void ResolveExecutablePath_DotnetHostFallsBackToTheHostWhenTheManagedCommandIsMissing()
+    {
+        string host = Path.Combine(_root, "dotnet");
+        Assert.Equal(host, CtDaemonLauncher.ResolveExecutablePath(host, Path.Combine(_root, "missing.dll")));
     }
 
     [Fact]

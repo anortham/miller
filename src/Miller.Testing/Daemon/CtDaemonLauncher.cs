@@ -108,15 +108,20 @@ public static class CtDaemonLauncher
 
     public static string ResolveCurrentExecutable()
     {
+        string[] args = Environment.GetCommandLineArgs();
+        string? managedCommandPath = args.Length > 0
+            && string.Equals(Path.GetExtension(args[0]), ".dll", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(args[0])
+                ? Path.GetFullPath(args[0])
+                : null;
         if (Environment.ProcessPath is { Length: > 0 } processPath && File.Exists(processPath))
-            return ResolveExecutablePath(processPath, System.Reflection.Assembly.GetEntryAssembly()?.Location);
+            return ResolveExecutablePath(processPath, managedCommandPath);
 
         using var process = Process.GetCurrentProcess();
         string? module = process.MainModule?.FileName;
         if (!string.IsNullOrWhiteSpace(module) && File.Exists(module))
             return Path.GetFullPath(module);
 
-        string[] args = Environment.GetCommandLineArgs();
         if (args.Length > 0 && File.Exists(args[0]))
             return Path.GetFullPath(args[0]);
 

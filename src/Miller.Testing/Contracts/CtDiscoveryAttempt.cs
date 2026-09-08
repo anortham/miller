@@ -15,7 +15,7 @@ public enum CtDiscoveryStage
     Parsing,
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(JsonStringEnumConverter<CtDiscoveryOutcome>))]
 public enum CtDiscoveryOutcome
 {
     Succeeded,
@@ -63,6 +63,14 @@ public sealed record CtDiscoveryWorkspaceLedger(
     DateTimeOffset UpdatedAtUtc,
     IReadOnlyDictionary<string, CtDiscoveryAttemptSummary> Projects);
 
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(CtDiscoveryAttempt))]
+[JsonSerializable(typeof(CtDiscoveryWorkspaceLedger))]
+internal sealed partial class CtDiscoveryJsonContext : JsonSerializerContext;
+
 public interface ICtDiscoveryLedger
 {
     CtDiscoveryAttemptSummary? GetLatestAttempt(string projectPath);
@@ -74,13 +82,6 @@ public interface ICtDiscoveryLedger
 public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
 {
     private const int MaxOutputBytes = 32 * 1024;
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private readonly object _gate = new();
     private readonly Dictionary<string, CtDiscoveryAttemptSummary> _cachedSummaries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loadedRoots = new(StringComparer.Ordinal);
@@ -132,8 +133,7 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
             StandardError = boundedStderr,
         };
 
-        // Write attempt artifact JSON
-        string artifactJson = JsonSerializer.Serialize(boundedAttempt, JsonOptions);
+        string artifactJson = JsonSerializer.Serialize(boundedAttempt, CtDiscoveryJsonContext.Default.CtDiscoveryAttempt);
         WriteAtomic(artifactPath, artifactJson);
 
         var summary = new CtDiscoveryAttemptSummary(
@@ -183,7 +183,7 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         try
         {
             string json = File.ReadAllText(artifactPath);
-            return JsonSerializer.Deserialize<CtDiscoveryAttempt>(json, JsonOptions);
+            return JsonSerializer.Deserialize(json, CtDiscoveryJsonContext.Default.CtDiscoveryAttempt);
         }
         catch
         {
@@ -200,7 +200,7 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         try
         {
             string json = File.ReadAllText(ledgerPath);
-            return JsonSerializer.Deserialize<CtDiscoveryWorkspaceLedger>(json, JsonOptions);
+            return JsonSerializer.Deserialize(json, CtDiscoveryJsonContext.Default.CtDiscoveryWorkspaceLedger);
         }
         catch
         {
@@ -248,7 +248,7 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
             Projects: _cachedSummaries.Where(row => _projectRoots.GetValueOrDefault(row.Key) == Path.GetFullPath(workspaceRoot))
                 .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal));
 
-        string json = JsonSerializer.Serialize(ledger, JsonOptions);
+        string json = JsonSerializer.Serialize(ledger, CtDiscoveryJsonContext.Default.CtDiscoveryWorkspaceLedger);
         WriteAtomic(ledgerPath, json);
     }
 
