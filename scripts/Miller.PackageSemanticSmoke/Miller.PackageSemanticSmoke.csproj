@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="SourceGear.sqlite3" Version="3.53.4" />
     <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
   </ItemGroup>
 </Project>

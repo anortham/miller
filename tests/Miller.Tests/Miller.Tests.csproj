@@ -23,6 +23,7 @@
     <!-- Tests synthesize the julie-schema DB directly (explicit, not transitive). -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="SourceGear.sqlite3" Version="3.53.4" />
     <!-- The CallToolFilter pin stands up an in-process MCP client+server (explicit, not transitive). -->
     <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
