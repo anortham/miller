@@ -170,7 +170,7 @@ internal sealed class GradleTestBackend : IJvmTestBackend
         return new TestProcessCommand(fileName, arguments, workingDirectory, environment);
     }
 
-    private static string? WrapperPath(ContinuousTestWorkspace workspace, string projectRoot)
+    internal static string? WrapperPath(ContinuousTestWorkspace workspace, string projectRoot)
     {
         string wrapperName = OperatingSystem.IsWindows() ? "gradlew.bat" : "gradlew";
         string[] candidates =

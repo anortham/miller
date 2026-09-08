@@ -157,7 +157,7 @@ public sealed class TestsTool
                     hint = result.Groups.Count == 0
                         ? null
                         : result.Groups.Any(g => g.SampleTestCaseId.StartsWith("ct-discovery-failure", StringComparison.Ordinal))
-                            ? NextStepHint.Render("view_file", "view discovery diagnostic log")
+                            ? NextStepHint.Render($"tests operation=failures workspace_id={request.WorkspaceId}", "read project discovery failure details")
                             : NextStepHint.Render("inspect", "open a failing test");
                     break;
                 }
@@ -178,7 +178,7 @@ public sealed class TestsTool
                     else if (FindDiscoveryArtifactPath(result) is { } discoveryPath)
                     {
                         hint = string.IsNullOrWhiteSpace(discoveryPath)
-                            ? NextStepHint.Render("view_file", "view discovery diagnostic log")
+                            ? null
                             : NextStepHint.Render($"view_file {discoveryPath}", "view discovery diagnostic log");
                     }
                     else
@@ -227,11 +227,14 @@ public sealed class TestsTool
                 {
                     TestsRunResult result = TestsCore.Run(request);
                     output = result.Render(json);
-                    // A paused run executed nothing, so there is no verdict to read - pointing the agent at
-                    // `status` would hand it the PREVIOUS revision's verdict as if it answered this request.
-                    // The useful next step is to retry once the workspace holding the user-global execution
-                    // budget finishes.
-                    hint = result.ExitCode != 0
+                    hint = result.Wait?.State == TestsWaitState.DaemonStopped
+                        ? NextStepHint.Render($"tests operation=start workspace_id={request.WorkspaceId}", "start the daemon before waiting")
+                        : result.Wait?.State == TestsWaitState.ProtocolUnknown
+                        ? NextStepHint.Render("tests operation=status", "older daemon cannot prove request completion; let its work settle, then explicitly stop/start to use this build")
+                        : result.Command is { State: CtDaemonCommandState.Requested or CtDaemonCommandState.Acknowledged
+                            or CtDaemonCommandState.Selecting or CtDaemonCommandState.Queued or CtDaemonCommandState.Running } command
+                        ? NextStepHint.Render("tests operation=status", $"request {command.CommandId} is {command.State.ToString().ToLowerInvariant()}")
+                        : result.ExitCode != 0
                         ? null
                         : result.Paused
                             ? NextStepHint.Render("tests operation=run", "retry once the other workspace finishes")
@@ -279,7 +282,8 @@ public sealed class TestsTool
             ProjectPath: project,
             WaitTimeout: wait
                 ? TimeSpan.FromSeconds(waitSeconds ?? McpWaitSecondsDefault)
-                : null);
+                : null,
+            RequireDaemonWhenWaiting: true);
     }
 
     private (string Root, string? WorkspaceId) ResolveWorkspace(
@@ -324,7 +328,6 @@ public sealed class TestsTool
         if (result.KillSwitchOff)
             return null;
 
-        // 1. Disabled workspace: direct-run recipe is primary
         if (!result.Enabled)
         {
             if (result.DirectRunRecipe is { } recipe && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
@@ -332,12 +335,11 @@ public sealed class TestsTool
                 string reason = result.Projects.Any(p => p.UnsupportedReason is null)
                     ? "run tests directly (or enable CT: tests operation=enable)"
                     : "run tests directly (framework unsupported under CT)";
-                return NextStepHint.Render(recipe.PrimaryCommand, reason);
+                return NextStepHint.Render("run the direct recipe above", reason);
             }
             return null;
         }
 
-        // 2. Stopped daemon on enabled workspace
         if (result.DaemonState == CtDaemonLifecycleState.Stopped)
         {
             return result.Projects.Any(p => p.UnsupportedReason is null)
@@ -345,9 +347,10 @@ public sealed class TestsTool
                 : null;
         }
 
-        // 3. Active selection (CtDaemonActivity.Selecting or DaemonSelection is not null): overrides loop lag!
         if (result.DaemonActivity == CtDaemonActivity.Selecting || result.DaemonSelection is not null)
         {
+            if (result.DaemonLoop is { Stalled: true } selectionHealth)
+                return NextStepHint.Render("tests operation=status", $"selection has not reported progress ({selectionHealth.Reason})");
             if (result.DaemonSelection is { } sel)
             {
                 int elapsed = (int)Math.Max(0, (DateTimeOffset.UtcNow - sel.StartedAtUtc).TotalSeconds);
@@ -356,7 +359,6 @@ public sealed class TestsTool
             return NextStepHint.Render("tests operation=status", "selection in progress");
         }
 
-        // 4. Executing (CtDaemonActivity.Executing or DaemonRun is not null): overrides loop lag!
         if (result.DaemonActivity == CtDaemonActivity.Executing || result.DaemonRun is not null)
         {
             if (result.DaemonRun is { } run)
@@ -370,25 +372,21 @@ public sealed class TestsTool
             return NextStepHint.Render("tests operation=status", "tests executing");
         }
 
-        // 5. Queued: advise tests operation=status
         if (result.DaemonActivity == CtDaemonActivity.Queued)
         {
             return NextStepHint.Render("tests operation=status", "command queued, awaiting execution");
         }
 
-        // 6. Wedged loop: advise tests operation=stop only when genuinely stalled and not actively selecting/executing
         if (result.DaemonLoop is { Stalled: true } loop)
         {
-            return NextStepHint.Render("tests operation=stop", $"daemon loop wedged ({loop.Reason}); stop, then start");
+            return NextStepHint.Render("tests operation=status", $"daemon loop unresponsive ({loop.Reason}); inspect daemon diagnostics");
         }
 
-        // 7. Daemon version mismatch (DaemonOlder)
         if (result.DaemonVersion is { Match: CtDaemonVersionMatch.DaemonOlder })
         {
             return NextStepHint.Render("tests operation=start", "replace the older daemon");
         }
 
-        // 8. Red verdict: if discovery failure, advise view_file <artifactPath>; else tests operation=failures
         if (result.Verdict == ContinuousTestVerdict.Red)
         {
             if (!string.IsNullOrWhiteSpace(result.DiscoveryFailureArtifactPath))
@@ -396,7 +394,6 @@ public sealed class TestsTool
             return NextStepHint.Render("tests operation=failures", "inspect red cases");
         }
 
-        // 9. Stale/owed cases: advise copyable tests operation=run wait=true with candidate count
         if (result.StaleCount > 0)
         {
             bool broadScope = result.Selected is null
@@ -408,13 +405,11 @@ public sealed class TestsTool
             return NextStepHint.Render("tests operation=run wait=true", reason);
         }
 
-        // 10. Auto-runs paused
         if (result.DaemonAutoRunsPaused)
         {
             return NextStepHint.Render("tests operation=status", $"auto-runs paused ({result.DaemonPauseReason ?? "unknown"}); check status");
         }
 
-        // 11. Green idle: return null (clean termination)
         if (result.Verdict == ContinuousTestVerdict.Green)
         {
             return null;

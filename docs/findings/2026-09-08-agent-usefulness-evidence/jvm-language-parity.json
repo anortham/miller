@@ -1,0 +1,62 @@
+{
+  "scope": "Real extracted JVM identities passed through Miller CT selection and native provider commands",
+  "miller_source_commit": "4a21c9baa52919b950426e2f6a5967257e6d5c2c",
+  "producer_source_commit": "25435850fb0ffed277ead9727ebc9e9ebd66ee41",
+  "focused": {
+    "adapter_and_identity": {
+      "passed": 32,
+      "log": "/tmp/miller-jvm-focused.log"
+    },
+    "selector": {
+      "passed": 138,
+      "log": "/tmp/miller-jvm-selector-focused.log"
+    }
+  },
+  "native": {
+    "scala": {
+      "passed": 1,
+      "log": "/tmp/miller-jvm-scala-native.log",
+      "extractor": "pinned 2.40.6"
+    },
+    "kotlin": {
+      "passed": 1,
+      "log": "/tmp/miller-jvm-kotlin-current-native.log",
+      "extractor": "pinned 2.40.6"
+    },
+    "java_dotted_package_control": {
+      "passed": 1,
+      "log": "/tmp/miller-jvm-java-pinned2406-native.log",
+      "extractor": "pinned 2.40.6"
+    },
+    "java_single_segment_package": {
+      "passed": 1,
+      "log": "/home/murphy/.cache/miller-dogfood/adoption-2.41.1/workflow-linux-java-single-package.log",
+      "extractor": "public 2.41.1 Linux binary",
+      "result": "namespace sample and class/method ancestry produced an exact selected test ID; unrelated failing class excluded"
+    }
+  },
+  "repaired_gap": {
+    "language": "java",
+    "initial_result": "single-segment package declaration had no namespace fact, so Miller returned Unknown",
+    "initial_log": "/tmp/miller-jvm-java-native-diagnostic.log",
+    "producer_red_log": "/tmp/julie-java-single-package-red.log",
+    "root_cause": "tree-sitter represents one package segment as identifier; the extractor accepted only scoped_identifier",
+    "producer_files": [
+      "crates/julie-extractors/src/java/imports_packages.rs",
+      "crates/julie-extractors/src/tests/java/package_import_tests.rs",
+      "fixtures/extraction/java/basic/expected.json",
+      "fixtures/extraction/java/cross_file/expected.json"
+    ],
+    "producer_java_tests_passed": 108,
+    "canonical_golden_passed": 1,
+    "kotlin_and_scala_affected": false
+  },
+  "override_contract": "MILLER_TEST_JULIE_EXTRACT accepts an absolute test-only extractor path; unset uses the pin and missing or relative paths refuse.",
+  "release_or_pin_changed": true,
+  "release": {
+    "tag": "v2.41.1",
+    "tag_commit": "25435850fb0ffed277ead9727ebc9e9ebd66ee41",
+    "linux_archive_sha256": "0dc93f6871dbf77163eb09f69e11dbcf0bfeed8a5222e2768bd3a3e5a09dbf3e",
+    "linux_binary_sha256": "d157d9465902eb1321c410af4149c004239e0cdecfd06d036e74966342de9465"
+  }
+}

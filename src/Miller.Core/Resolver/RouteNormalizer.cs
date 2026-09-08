@@ -34,13 +34,8 @@ public static class RouteNormalizer
         "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
     ];
 
-    // [[...param]] | [...param] | [param] | ${param} | {param} | @Esc(...) | @(...) | @param | :param  ->  {}.
-    // Compiled once; each alternative consumes one path segment placeholder.
-    // The :param and @param alternatives are bounded so trailing literal suffixes and multi-segment templates
-    // are preserved (e.g. "/files/:id.json" -> "files/{}.json", "/api/projects/{0}/builds/{1}/cancel" ->
-    // "api/projects/{}/builds/{}/cancel", "/tests/@Esc(id)/start" -> "tests/{}/start").
     private static readonly Regex ParamPattern = new(
-        @"\[\[\.\.\.[^\]/]+\]\]|\[\.\.\.[^\]/]+\]|\[[^\]/]+\]|\$\{[^}]*\}|\{[^}]*\}|@[A-Za-z_][A-Za-z0-9_]*\([^\)]*\)|@\([^\)]*\)|@[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|:[A-Za-z_][A-Za-z0-9_]*",
+        @"\[\[\.\.\.[^\]/]+\]\]|\[\.\.\.[^\]/]+\]|\[[^\]/]+\]|\$\{[^}]*\}|\{[^}]*\}|:[A-Za-z_][A-Za-z0-9_]*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>

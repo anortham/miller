@@ -247,7 +247,7 @@ internal sealed class MavenTestBackend : IJvmTestBackend
         return new TestProcessCommand(fileName, arguments, workingDirectory, environment);
     }
 
-    private static string? WrapperPath(ContinuousTestWorkspace workspace, string projectRoot)
+    internal static string? WrapperPath(ContinuousTestWorkspace workspace, string projectRoot)
     {
         string wrapperName = OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw";
         string[] candidates =

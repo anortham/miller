@@ -93,6 +93,124 @@ public sealed class TestsWaitOutcomeTests
         ],
     ];
 
+    [Fact]
+    public void Wait_returns_all_own_project_runs_and_ignores_another_workspace_run()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-projects-").FullName;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            var ack = new CtDaemonCommandAck("own", CtDaemonCommandState.Completed, DateTimeOffset.UtcNow,
+                "completed", root, lease.Record.Identity, [new("one.csproj", "run-one"), new("two.csproj", "run-two")]);
+            var clock = new ManualTimeProvider();
+            TestsRunResult result = TestsCore.Run(Request(root, wait: true, hooks: new TestsCoreHooks(
+                SubmitRun: (_, _) => new CtRunResult(CtRunExecution.Daemon, null, "unacked", "own", lease.Record.Identity))
+            {
+                WaitProbe = new TestsWaitProbe(ReadStatus: _ => Executing("unrelated"), IsLeaseLive: _ => true,
+                    Clock: clock, Delay: clock.Advance, TryReadAck: (_, _) => ack),
+            }));
+            Assert.Equal(TestsWaitState.Completed, result.Wait?.State);
+            Assert.Equal("run-two", result.Wait?.RunId);
+            Assert.Null(result.Wait?.Run);
+            Assert.Equal(2, result.Command?.ProjectRuns?.Count);
+            Assert.Contains("run-one", result.Render(json: true), StringComparison.Ordinal);
+            Assert.DoesNotContain("unrelated", result.Render(json: true), StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Wait_names_old_protocol_when_ack_cannot_prove_lease_identity()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-old-protocol-").FullName;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            var clock = new ManualTimeProvider();
+            TestsRunResult result = TestsCore.Run(Request(root, wait: true, waitTimeout: TimeSpan.FromSeconds(1),
+                hooks: new TestsCoreHooks(SubmitRun: (_, _) => new CtRunResult(CtRunExecution.Daemon, null,
+                    "unacked", "old", lease.Record.Identity))
+                {
+                    WaitProbe = new TestsWaitProbe(ReadStatus: _ => Idle(), IsLeaseLive: _ => true,
+                        Clock: clock, Delay: clock.Advance, TryReadAck: (_, _) => new CtDaemonCommandAck("old",
+                            CtDaemonCommandState.Completed, DateTimeOffset.UtcNow, "completed")),
+                }));
+            Assert.Equal(TestsWaitState.ProtocolUnknown, result.Wait?.State);
+            Assert.False(result.Wait?.WaitComplete);
+            Assert.Equal("old", result.Wait?.CommandId);
+            Assert.Equal(1, result.Wait?.ElapsedSeconds);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Wait_rechecks_lease_identity_after_reading_a_completed_ack()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-lease-race-").FullName;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            bool ackRead = false;
+            var replacement = new CtDaemonLeaseIdentity(lease.Record.Identity.Pid + 1, DateTimeOffset.UtcNow);
+            var clock = new ManualTimeProvider();
+            TestsRunResult result = TestsCore.Run(Request(root, wait: true, hooks: new TestsCoreHooks(
+                SubmitRun: (_, _) => new CtRunResult(CtRunExecution.Daemon, null, "unacked", "race", lease.Record.Identity))
+            {
+                WaitProbe = new TestsWaitProbe(ReadStatus: _ => Idle(), IsLeaseLive: _ => true,
+                    Clock: clock, Delay: clock.Advance,
+                    TryReadAck: (_, _) =>
+                    {
+                        ackRead = true;
+                        return new CtDaemonCommandAck("race", CtDaemonCommandState.Completed, DateTimeOffset.UtcNow,
+                            "completed", root, lease.Record.Identity, []);
+                    },
+                    ReadLeaseIdentity: _ => ackRead ? replacement : lease.Record.Identity),
+            }));
+            Assert.Equal(TestsWaitState.LeaseReplaced, result.Wait?.State);
+            Assert.False(result.Wait?.WaitComplete);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Wait_rejects_completion_from_a_replaced_lease()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-replaced-").FullName;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            var wrong = new CtDaemonLeaseIdentity(lease.Record.Identity.Pid + 1, DateTimeOffset.UtcNow);
+            CtCommandChannel.WriteAck(root, new CtDaemonCommandAck("replaced", CtDaemonCommandState.Completed,
+                DateTimeOffset.UtcNow, "old holder"));
+            var clock = new ManualTimeProvider();
+            TestsRunResult result = TestsCore.Run(Request(root, wait: true, waitTimeout: TimeSpan.FromSeconds(1),
+                hooks: new TestsCoreHooks(SubmitRun: (_, _) => new CtRunResult(CtRunExecution.Daemon, null,
+                    "unacked", "replaced", wrong))
+                {
+                    WaitProbe = new TestsWaitProbe(ReadStatus: _ => Idle(), IsLeaseLive: _ => true,
+                        Clock: clock, Delay: clock.Advance),
+                }));
+            Assert.Equal(TestsWaitState.LeaseReplaced, result.Wait?.State);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
     [Theory]
     [MemberData(nameof(WaitCases))]
     public void Wait_classifier_reports_each_bounded_state_and_correlation(WaitCase test)
@@ -123,7 +241,14 @@ public sealed class TestsWaitOutcomeTests
                         ReadStatus: _ => test.Snapshots[Math.Min(readIndex++, test.Snapshots.Count - 1)],
                         IsLeaseLive: _ => test.LeaseLive,
                         Clock: clock,
-                        Delay: clock.Advance),
+                        Delay: clock.Advance,
+                        TryReadAck: (_, id) => new CtDaemonCommandAck(
+                            id,
+                            test.WaitComplete && readIndex >= test.Snapshots.Count
+                                ? CtDaemonCommandState.Completed
+                                : CtDaemonCommandState.Acknowledged,
+                            DateTimeOffset.UtcNow,
+                            "request lifecycle")),
                 });
 
             TestsRunResult result = TestsCore.Run(request);
@@ -283,6 +408,76 @@ public sealed class TestsWaitOutcomeTests
             Assert.Equal(TestsWaitState.Completed, result.Wait.State);
             Assert.True(result.Wait.WaitComplete);
             Assert.Equal(commandId, result.Wait.CommandId);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Short_wait_budget_also_bounds_real_acknowledgement_wait()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-short-ack-").FullName;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            var elapsed = Stopwatch.StartNew();
+            TestsRunResult result = TestsCore.Run(Request(root, wait: true,
+                waitTimeout: TimeSpan.FromMilliseconds(50),
+                hooks: new TestsCoreHooks
+                {
+                    WaitProbe = new TestsWaitProbe(ReadStatus: _ => Idle(), IsLeaseLive: _ => true),
+                }));
+
+            Assert.NotNull(result.Wait);
+            Assert.False(result.Wait.WaitComplete);
+            Assert.NotNull(result.Wait.CommandId);
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2), elapsed.Elapsed.ToString());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Submitted_command_does_not_complete_when_unrelated_execution_becomes_idle(bool acknowledged)
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-unrelated-").FullName;
+        var clock = new ManualTimeProvider();
+        const string commandId = "cmd-pending";
+        int reads = 0;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            CtDaemonCommandAck? ack = acknowledged
+                ? new(commandId, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "accepted")
+                : null;
+            TestsRunResult result = TestsCore.Run(Request(
+                root,
+                wait: true,
+                waitTimeout: TimeSpan.FromSeconds(2),
+                hooks: new TestsCoreHooks(
+                    SubmitRun: (_, _) => new CtRunResult(CtRunExecution.Daemon, ack, null, commandId))
+                {
+                    WaitProbe = new TestsWaitProbe(
+                        ReadStatus: _ => reads++ == 0 ? Executing("unrelated-run") : Idle(),
+                        IsLeaseLive: _ => true,
+                        Clock: clock,
+                        Delay: clock.Advance,
+                        TryReadAck: (_, _) => ack),
+                }));
+
+            Assert.NotNull(result.Wait);
+            Assert.False(result.Wait.WaitComplete);
+            Assert.NotEqual(TestsWaitState.Completed, result.Wait.State);
+            Assert.Equal(commandId, result.Wait.CommandId);
+            Assert.Equal(2, result.Wait.ElapsedSeconds);
         }
         finally
         {

@@ -38,6 +38,110 @@ public sealed class DotnetProviderScaleTests : IDisposable
     /// it.</para>
     /// </summary>
     [Fact]
+    public async Task Direct_mstest_data_row_recipe_reports_method_scope_and_preserves_normal_case_exactness()
+    {
+        string dotnet = CtProviderTestSupport.RequireDotnet();
+        string root = Path.Combine(_dir, "mstest recipe");
+        CopyFixture(Path.Combine(ScaleTestSupport.RepoRoot(), "tests", "Miller.Tests", "Fixtures", "VbDotnetScale"), root);
+        string project = Path.Combine(root, "VbDotnetScale.vbproj");
+        var workspace = new ContinuousTestWorkspace("ws:recipe", root, project,
+            Path.Combine(_dir, "recipe-state", "ct-build"), Framework: "mstest");
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var runner = new TestProcessRunner();
+        IReadOnlyList<ProviderTestCase> discovered = await new DotnetTestProvider(runner, dotnet)
+            .DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        ProviderTestCase row = Assert.Single(discovered, test => test.DisplayName == "Positive (1)");
+        ContinuousTestCase Stored(ProviderTestCase test) => new(test.Id, workspace.WorkspaceId,
+            test.DisplayName, test.FullyQualifiedName, test.Selector, Framework: "mstest", Source: "ct-provider:dotnet");
+        ContinuousTestRunRecipe Recipe(ProviderTestCase test) => ContinuousTestRecipeBuilder.Build(
+            new ContinuousTestRunRecipeRequest(workspace.WorkspaceId, root, project, "mstest",
+                TestSelector: test.Selector, Scope: TestSelectorScope.SingleTest, IsExact: true, Cases: [Stored(test)]));
+        ContinuousTestRunRecipe recipe = Recipe(row);
+        TestRunStep step = Assert.Single(recipe.Steps);
+        TestProcessResult result = await runner.RunAsync(new TestProcessCommand(dotnet, step.Arguments,
+            step.WorkingDirectory, step.Environment), TestContext.Current.CancellationToken);
+        Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        Assert.Matches(@"Passed:\s+2\b", result.StandardOutput);
+        Assert.False(recipe.IsExact);
+        Assert.Equal(TestSelectorScope.MatchingTests, recipe.Scope);
+        Assert.Contains("data rows", recipe.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Recipe(Assert.Single(discovered, test => test.DisplayName == "Adds")).IsExact);
+    }
+
+    [Fact]
+    public async Task Direct_xunit_mtp_recipe_uses_subproject_global_json_and_excludes_traits()
+    {
+        string dotnet = CtProviderTestSupport.RequireDotnet();
+        string root = Path.Combine(_dir, "mtp direct recipe");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "global.json"), """{"test":{"runner":"Microsoft.Testing.Platform"}}""");
+        string project = Path.Combine(root, "Direct.Tests.csproj");
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OutputType>Exe</OutputType>
+                <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+                <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+              </PropertyGroup>
+              <ItemGroup><PackageReference Include="xunit.v3" Version="3.2.2" /></ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(root, "Tests.cs"), """
+            public class RecipeTests
+            {
+                [Xunit.Fact] public void Included() { }
+                [Xunit.Fact, Xunit.Trait("Category", "Scale")]
+                public void Excluded() => throw new System.Exception("excluded trait ran");
+            }
+            """);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", _dir, project, "xunit", ExcludeTraits: ["Category=Scale"]));
+        var runner = new TestProcessRunner();
+        TestRunStep step = Assert.Single(recipe.Steps);
+        TestProcessResult result = await runner.RunAsync(new TestProcessCommand(dotnet, step.Arguments,
+            step.WorkingDirectory), TestContext.Current.CancellationToken);
+        Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(result.StandardOutput, @"succeeded:\s+1\b"), result.StandardOutput);
+    }
+
+    [Fact]
+    public async Task Direct_xunit_v2_recipe_builds_and_excludes_the_configured_trait()
+    {
+        string dotnet = CtProviderTestSupport.RequireDotnet();
+        string root = Path.Combine(_dir, "direct recipe");
+        Directory.CreateDirectory(root);
+        string project = Path.Combine(root, "Direct.Tests.csproj");
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>true</IsTestProject></PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.2" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(root, "Tests.cs"), """
+            public class RecipeTests
+            {
+                [Xunit.Fact] public void Included() { }
+                [Xunit.Fact, Xunit.Trait("Category", "Scale")]
+                public void Excluded() => throw new System.Exception("excluded trait ran");
+            }
+            """);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", root, project, "xunit-v2", ExcludeTraits: ["Category=Scale"]));
+        Assert.False(Directory.Exists(Path.Combine(root, ".miller")));
+        var runner = new TestProcessRunner();
+        TestRunStep step = Assert.Single(recipe.Steps);
+        TestProcessResult result = await runner.RunAsync(new TestProcessCommand(dotnet, step.Arguments,
+            step.WorkingDirectory), TestContext.Current.CancellationToken);
+        Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        Assert.Contains("Passed:     1", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_real_xunit_v2_project_is_refused_by_name_rather_than_by_a_raw_process_error()
     {
         CtProviderTestSupport.RequireDotnet();
@@ -426,32 +530,58 @@ public sealed class DotnetProviderScaleTests : IDisposable
         Assert.All(run.CaseResults, result => Assert.Equal("passed", result.Status));
 
         using var store = new ContinuousTestStore(ctDbPath);
-        store.PutTestCase(new ContinuousTestCase(
-            Id: adds.Id,
-            WorkspaceId: "ws:vb",
-            Name: adds.SymbolName!,
-            QualifiedName: adds.FullyQualifiedName,
-            Selector: adds.Selector,
-            FilePath: adds.SymbolPath,
-            SymbolName: adds.SymbolName,
-            SymbolPath: adds.SymbolPath,
-            Framework: adds.Framework,
-            Role: ContinuousTestRole.TestCase,
-            Source: "ct-provider:dotnet",
-            Metadata: new Dictionary<string, object?>
-            {
-                ["source_path"] = adds.SourcePath,
-                ["file_language"] = "vbnet",
-                ["ct_project_path"] = projectPath,
-            }));
+        void Seed(ProviderTestCase testCase)
+        {
+            store.PutTestCase(new ContinuousTestCase(
+                Id: testCase.Id,
+                WorkspaceId: "ws:vb",
+                Name: testCase.SymbolName!,
+                QualifiedName: testCase.FullyQualifiedName,
+                Selector: testCase.Selector,
+                FilePath: testCase.SymbolPath,
+                SymbolName: testCase.SymbolName,
+                SymbolPath: testCase.SymbolPath,
+                Framework: testCase.Framework,
+                Role: ContinuousTestRole.TestCase,
+                Source: "ct-provider:dotnet",
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["source_path"] = testCase.SourcePath,
+                    ["file_language"] = "vbnet",
+                    ["ct_project_path"] = projectPath,
+                }));
+        }
+        Seed(adds);
         using var facts = CtFactAdapter.OpenArtifact(symbolsPath);
         var selector = new ContinuousTestImpactSelector(store, new MillerFactSource(facts));
         ContinuousTestSelectionResult selection = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: "ws:vb",
             ProjectPath: projectPath,
             ChangedPaths: ["UnitTests.vb"]));
-        Assert.Equal([adds.Id], selection.SelectedTestCaseIds);
-        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, selection.Outcome);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, selection.Outcome);
+        Assert.Empty(selection.SelectedTestCaseIds);
+        Assert.Contains(selection.Evidence, evidence => evidence.TestCaseId == adds.Id);
+        foreach (ProviderTestCase testCase in positiveCases)
+            Seed(testCase);
+        selector.InvalidateSelectionSnapshot("ws:vb");
+        ContinuousTestSelectionResult completeSelection = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: "ws:vb", ProjectPath: projectPath, ChangedPaths: ["UnitTests.vb"]));
+        Assert.Equal(discovered.Select(testCase => testCase.Id).Order(StringComparer.Ordinal),
+            completeSelection.SelectedTestCaseIds.Order(StringComparer.Ordinal));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, completeSelection.Outcome);
+        ContinuousTestSelectionResult preciseSelection = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: "ws:vb", ProjectPath: projectPath,
+            ImpactedSymbols: [new ContinuousTestImpactedSymbol(SymbolId: julieCase.SymbolId, Path: "UnitTests.vb", Name: "Adds")]));
+        Assert.Equal([adds.Id], preciseSelection.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, preciseSelection.Outcome);
+        IndexedSymbol parameterizedSymbol = Assert.Single(symbols,
+            symbol => symbol.FilePath == "UnitTests.vb" && symbol.Name == "Positive");
+        ContinuousTestSelectionResult parameterizedSelection = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: "ws:vb", ProjectPath: projectPath,
+            ImpactedSymbols: [new ContinuousTestImpactedSymbol(SymbolId: parameterizedSymbol.SymbolId, Path: "UnitTests.vb", Name: "Positive")]));
+        Assert.Equal(positiveCases.Select(testCase => testCase.Id).Order(StringComparer.Ordinal),
+            parameterizedSelection.SelectedTestCaseIds.Order(StringComparer.Ordinal));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, parameterizedSelection.Outcome);
 
         Assert.Equal(
             Snapshot(repositoryFixture),

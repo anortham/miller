@@ -125,6 +125,7 @@ internal static class GraphTraversal
         int currentHop = 0;
         while (frontier.Count > 0 && currentHop < maxDepth)
         {
+            var frontierEvidence = frontier.ToDictionary(id => id, id => reached[id], StringComparer.Ordinal);
             IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> adjacentById =
                 batchNeighbours is null
                     ? frontier.ToDictionary(
@@ -132,16 +133,13 @@ internal static class GraphTraversal
                         id => (IReadOnlyList<GraphNeighbour>)neighbours!(id, direction).ToArray(),
                         StringComparer.Ordinal)
                     : batchNeighbours(frontier, direction);
-            var nextFrontier = new List<string>();
+            var nextFrontier = new HashSet<string>(StringComparer.Ordinal);
             int nextHop = currentHop + 1;
             foreach (string current in frontier)
             {
                 IReadOnlyList<GraphNeighbour> adjacent =
                     adjacentById.GetValueOrDefault(current, []);
-                ReferenceResolutionStatus currentCertainty =
-                    reached.TryGetValue(current, out ReachedNode? currentNode)
-                        ? currentNode.PathCertainty
-                        : ReferenceResolutionStatus.Exact;
+                ReferenceResolutionStatus currentCertainty = frontierEvidence[current].PathCertainty;
                 foreach (GraphNeighbour neighbour in adjacent)
                 {
                     ReferenceResolutionStatus edgeCertainty = EdgeCertainty(neighbour.EdgeSource);
@@ -162,13 +160,19 @@ internal static class GraphTraversal
                         reached[neighbour.Id] = candidate;
                         nextFrontier.Add(neighbour.Id);
                     }
-                    else if (existing.Hop == nextHop && BetterEvidence(candidate, existing))
+                    else
                     {
-                        reached[neighbour.Id] = candidate;
+                        bool strongerPath = CertaintyPriority(candidate.PathCertainty) < CertaintyPriority(existing.PathCertainty);
+                        if (strongerPath || existing.Hop == nextHop && BetterEvidence(candidate, existing))
+                        {
+                            reached[neighbour.Id] = candidate;
+                            if (strongerPath)
+                                nextFrontier.Add(neighbour.Id);
+                        }
                     }
                 }
             }
-            frontier = nextFrontier;
+            frontier = nextFrontier.ToList();
             currentHop = nextHop;
         }
 

@@ -55,7 +55,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        string framework = EnsurePhp(request.Workspace, request.Framework);
+        string framework = EnsurePhp(request.Workspace with { Command = request.Command }, request.Framework);
         CtGenerationPaths paths = _generations.TakeForRun(request.Workspace);
         try
         {
@@ -167,7 +167,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
     public IReadOnlyList<TestProcessCommand> BuildRunCommands(ContinuousTestProviderRunRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        string framework = EnsurePhp(request.Workspace, request.Framework);
+        string framework = EnsurePhp(request.Workspace with { Command = request.Command }, request.Framework);
         IReadOnlyList<CaseBinding> selections = DecodeSelections(request);
         if (selections.Count == 0)
             throw EmptySelection();
@@ -300,7 +300,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
             string artifactPath = PhpTestTooling.ResultArtifactPath(paths, runId);
             return [new PhpInvocation(
                 PhpTestTooling.BuildRunCommand(
-                    request.Workspace,
+                    request.Workspace with { Command = request.Command },
                     paths,
                     framework,
                     artifactPath,
@@ -321,7 +321,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
             string artifactPath = PhpTestTooling.ResultArtifactPath(paths, runId, chunks.Count == 1 ? null : index);
             invocations.Add(new PhpInvocation(
                 PhpTestTooling.BuildRunCommand(
-                    request.Workspace,
+                    request.Workspace with { Command = request.Command },
                     paths,
                     framework,
                     artifactPath,
@@ -486,7 +486,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
             throw new ContinuousTestProviderException(
                 $"PHP continuous test provider cannot run framework '{framework}' for '{workspace.ProjectPath}'; composer.json selects '{detected}'.");
 
-        PhpTestTooling.RunnerPath(workspace, framework);
+        PhpTestTooling.CommandPrefix(workspace, framework);
         return framework;
     }
 

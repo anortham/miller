@@ -73,8 +73,7 @@ public sealed class LiveFreshnessTests
             var ops = JulieExtractOps.Create(canonicalRoot, db, runner);
             var core = new IndexerCore(new WatchEventQueue(), ops, File.Exists);
 
-            // baseline: the to-be-added symbol is absent.
-            Assert.StartsWith("No results.", searchTool.Search("Zigglethorpe").Trim());
+            AssertNoResultsWithUnconfirmedFreshness(searchTool.Search("Zigglethorpe"));
 
             // --- MODIFY alpha.cs to add a new symbol, route the watcher event through the live update ---
             File.WriteAllText(alphaFile, """
@@ -105,7 +104,7 @@ public sealed class LiveFreshnessTests
             long afterDelete = reader.LatestRevision();
             Assert.True(afterDelete > afterModify, "a delete must bump the revision");
             Assert.True(FreshnessPoller.PollOnce(holder, afterDelete, rebuilder.Rebuild));
-            Assert.StartsWith("No results.", searchTool.Search("Vortle").Trim());
+            AssertNoResultsWithUnconfirmedFreshness(searchTool.Search("Vortle"));
 
             // --- HEAD change: add a file out-of-band (no per-file event), then force a scan reconcile ---
             File.WriteAllText(Path.Combine(repo, "delta.cs"), """
@@ -128,5 +127,13 @@ public sealed class LiveFreshnessTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             try { Directory.Delete(work, recursive: true); } catch (IOException) { }
         }
+    }
+
+    private static void AssertNoResultsWithUnconfirmedFreshness(string output)
+    {
+        string[] lines = output.Split('\n').Select(line => line.Trim()).ToArray();
+        Assert.Contains(lines, line => line.StartsWith("No results.", StringComparison.Ordinal));
+        Assert.Contains("diagnostic_code=no_symbol_hits", lines);
+        Assert.Contains("freshness: unconfirmed", lines);
     }
 }

@@ -1,6 +1,8 @@
 # Workspace, guidance, and storage implementation plan
 
-> For agentic workers: use `razorback:subagent-driven-development` for independent tasks and `razorback:executing-plans` for serial work. This document is a proposed plan, not implementation approval.
+**Status — 2026-09-08:** Source implementation and corrective dogfood work are recorded in the [verification ledger](../findings/2026-09-08-agent-usefulness-dogfood.md#workspace-guidance-and-storage). Actual trusted/untrusted/disabled hook delivery in named harness runtimes remains unverified; hook adapter tests do not establish it. Razorback guidance is changed in source only. The checklist below preserves the original acceptance criteria; use the ledger for current verified and outstanding status.
+
+> For agentic workers: use `razorback:subagent-driven-development` for independent tasks and `razorback:executing-plans` for serial work. These are the original planning instructions; later implementation and verification are recorded above.
 
 **Goal:** Make workspace freshness and recovery honest, reduce repeated guidance, and expose storage pressure without weakening retention safeguards.
 

@@ -51,7 +51,8 @@ internal sealed record TestsWaitProbe(
     Func<string, bool>? IsLeaseLive = null,
     TimeProvider? Clock = null,
     Action<TimeSpan>? Delay = null,
-    Func<string, string, CtDaemonCommandAck?>? TryReadAck = null);
+    Func<string, string, CtDaemonCommandAck?>? TryReadAck = null,
+    Func<string, CtDaemonLeaseIdentity?>? ReadLeaseIdentity = null);
 
 public sealed record TestsForegroundRunRequest(
     string WorkspaceRoot,
@@ -76,7 +77,8 @@ public sealed record TestsCoreRequest(
     bool Json = false,
     bool Wait = false,
     string? ProjectPath = null,
-    TimeSpan? WaitTimeout = null);
+    TimeSpan? WaitTimeout = null,
+    bool RequireDaemonWhenWaiting = false);
 
 public sealed record TestsStatusProject(
     string Id,
@@ -172,7 +174,8 @@ public sealed record TestsStatusResult(
     /// </summary>
     CtDaemonSelectionProgress? DaemonSelection = null,
     ContinuousTestRunRecipe? DirectRunRecipe = null,
-    string? DiscoveryFailureArtifactPath = null)
+    string? DiscoveryFailureArtifactPath = null,
+    CtIdleDrainDecision? DaemonIdleDrain = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
@@ -224,7 +227,8 @@ public sealed record TestsRunResult(
     CtFreshnessKey? Selected,
     bool Paused = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    TestsWaitResult? Wait = null)
+    TestsWaitResult? Wait = null,
+    CtDaemonCommandAck? Command = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderRunJson(this) : TestsCore.RenderRunCompact(this);
 }
@@ -237,14 +241,13 @@ public enum TestsWaitState
     WaitTimeout,
     DaemonStopped,
     LeaseLost,
+    LeaseReplaced,
+    ProtocolUnknown,
     Cancelled,
     Rejected,
 }
 
-/// <summary>
-/// <paramref name="CommandId"/> is null when the wait JOINED a run already in flight: the submit's
-/// ack window expired before the daemon read the command file, so no ack ever named an id.
-/// </summary>
+/// <summary>Request completion and correlated progress, separate from the workspace verdict.</summary>
 public sealed record TestsWaitResult(
     bool WaitComplete,
     TestsWaitState State,
@@ -253,7 +256,8 @@ public sealed record TestsWaitResult(
     string? CommandId,
     string? RunId,
     [property: JsonIgnore]
-    CtDaemonRunProgress? Run = null);
+    CtDaemonRunProgress? Run = null,
+    CtDaemonCommandAck? Command = null);
 
 /// <summary>
 /// <paramref name="Truncated"/> is how many red cases are left AFTER this page. <paramref name="Total"/> and
@@ -394,16 +398,8 @@ public static class TestsCore
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         IReadOnlyList<ContinuousTestProject> stored = store.ListContinuousTestProjects(workspaceId, includeDisabled: false);
 
-        // CT off means nothing ever ran discovery, so the recorded list is empty on a tree that may be full
-        // of test projects. Reporting that emptiness as "projects: 0" answers a question nobody asked. The
-        // scan is the SAME inventory the daemon would run, it writes nothing, and it is confined to this
-        // branch: an opted-in workspace keeps reading its recorded state exactly as before.
-        //
-        // It runs only for a workspace that has never DECIDED. An opt-out tombstone, or a disabled project
-        // row, is someone answering "no" — re-listing what they turned off, under a line inviting them to
-        // enable it, argues with a decision the workspace already made.
         bool discovered = false;
-        if (!optedIn && stored.Count == 0 && !HasContinuousTestHistory(root, store, workspaceId))
+        if (stored.Count == 0 && !HasContinuousTestHistory(root, store, workspaceId))
         {
             stored = ContinuousTestProjectInventory.Discover(root, workspaceId);
             discovered = stored.Count > 0;
@@ -495,7 +491,8 @@ public static class TestsCore
             DaemonPauseReason: snapshot.PauseReason,
             DaemonSelection: snapshot.Selection,
             DirectRunRecipe: directRecipe,
-            DiscoveryFailureArtifactPath: discoveryArtifactPath);
+            DiscoveryFailureArtifactPath: discoveryArtifactPath,
+            DaemonIdleDrain: snapshot.IdleDrain);
     }
 
 
@@ -579,6 +576,57 @@ public static class TestsCore
     /// Computes a provider-owned runner recipe without requiring continuous testing to be enabled,
     /// without allocating CT generations, and spawning zero background processes.
     /// </summary>
+    internal static ContinuousTestRunRecipe? GetImpactRunRecipe(TestsCoreRequest request, IReadOnlyList<string> testPaths)
+    {
+        if (ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch)
+            || ContinuousTestPolicy.IsKillSwitchOff(Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch)))
+            return null;
+        string root = RequireRoot(request);
+        string workspaceId = ResolveWorkspaceId(request, root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
+        if (projects.Count == 0)
+            projects = ContinuousTestProjectInventory.Discover(root, workspaceId);
+        var selected = new Dictionary<string, ContinuousTestProject>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        foreach (string path in testPaths)
+        {
+            string fullPath = Path.GetFullPath(Path.Combine(root, path));
+            ContinuousTestProject? project = projects.OrderByDescending(row => Path.GetDirectoryName(row.ProjectPath)?.Length ?? 0)
+                .FirstOrDefault(row =>
+                {
+                    string relative = Path.GetRelativePath(Path.GetDirectoryName(row.ProjectPath) ?? root, fullPath);
+                    return !Path.IsPathRooted(relative) && relative != ".."
+                        && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+                });
+            if (project is not null)
+                selected[project.ProjectPath] = project;
+        }
+        ContinuousTestRunRecipe[] recipes = selected.Values.Select(project => GetRunRecipe(request, project.ProjectPath))
+            .OfType<ContinuousTestRunRecipe>().ToArray();
+        if (recipes.Length == 0)
+            return null;
+        if (recipes.Any(recipe => recipe.Steps.Count == 0))
+            return new ContinuousTestRunRecipe(workspaceId, root, "multiple", root, [], TestSelectorScope.ProjectSet,
+                UnavailableReason: string.Join("; ", recipes.Where(recipe => recipe.Steps.Count == 0)
+                    .Select(recipe => $"{recipe.ProjectPath}: {recipe.UnavailableReason ?? "runner unavailable"}")),
+                ProjectPaths: recipes.Select(recipe => recipe.ProjectPath).ToArray());
+        if (recipes.Length == 1)
+            return recipes[0] with
+            {
+                IsExact = false,
+                Scope = TestSelectorScope.ProjectSuite,
+                UnavailableReason = "Impact lists likely source tests; recipe runs the containing project suite.",
+                ProjectPaths = [recipes[0].ProjectPath],
+            };
+        return new ContinuousTestRunRecipe(workspaceId, root, "multiple", root,
+            recipes.SelectMany(recipe => recipe.Steps).ToArray(), TestSelectorScope.ProjectSet,
+            Prerequisite: string.Join("; ", recipes.Select(recipe => recipe.Prerequisite).Where(value => value is not null).Distinct()),
+            IsExact: false,
+            UnavailableReason: $"Impact lists likely source tests; recipe runs {recipes.Length} containing project suites.",
+            ProjectPaths: recipes.Select(recipe => recipe.ProjectPath).ToArray());
+    }
+
     public static ContinuousTestRunRecipe? GetRunRecipe(
         TestsCoreRequest request,
         string? projectPath = null,
@@ -587,28 +635,52 @@ public static class TestsCore
         TestSelectorScope scope = TestSelectorScope.ProjectSuite)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch)
+            || ContinuousTestPolicy.IsKillSwitchOff(Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch)))
+            return null;
         string root = RequireRoot(request);
         string workspaceId = ResolveWorkspaceId(request, root);
 
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        IReadOnlyList<ContinuousTestProject> storedProjects = store.ListContinuousTestProjects(workspaceId);
         ContinuousTestProject? project = null;
+        projectPath ??= request.ProjectPath;
         if (!string.IsNullOrWhiteSpace(projectPath))
         {
             if (TryResolveProject(root, projectPath, out string fullPath, out _))
-            {
-                project = ContinuousTestProjectInventory.Identify(root, workspaceId, fullPath);
-            }
+                project = storedProjects.FirstOrDefault(row => string.Equals(row.ProjectPath, fullPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    ?? ContinuousTestProjectInventory.Identify(root, workspaceId, fullPath);
         }
         else
         {
-            IReadOnlyList<ContinuousTestProject> discovered = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            IReadOnlyList<ContinuousTestProject> discovered = storedProjects.Count > 0
+                ? storedProjects
+                : ContinuousTestProjectInventory.Discover(root, workspaceId);
             if (!string.IsNullOrWhiteSpace(testFilePath))
             {
-                string targetDir = Path.GetDirectoryName(Path.GetFullPath(Path.Combine(root, testFilePath))) ?? root;
-                project = discovered.FirstOrDefault(p =>
-                {
-                    string pDir = Path.GetDirectoryName(p.ProjectPath) ?? root;
-                    return targetDir.StartsWith(pDir, StringComparison.OrdinalIgnoreCase);
-                });
+                string target = Path.GetFullPath(Path.Combine(root, testFilePath));
+                project = discovered.OrderByDescending(p => Path.GetDirectoryName(p.ProjectPath)?.Length ?? 0)
+                    .FirstOrDefault(p =>
+                    {
+                        string relative = Path.GetRelativePath(Path.GetDirectoryName(p.ProjectPath) ?? root, target);
+                        return relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                            && !Path.IsPathRooted(relative);
+                    });
+            }
+            if (project is null && string.IsNullOrWhiteSpace(testFilePath) && discovered.Count > 1)
+            {
+                ContinuousTestRunRecipe[] recipes = discovered.Select(row => GetRunRecipe(request, row.ProjectPath))
+                    .OfType<ContinuousTestRunRecipe>().ToArray();
+                return new ContinuousTestRunRecipe(workspaceId, root, "multiple", root,
+                    recipes.All(recipe => recipe.Steps.Count > 0) ? recipes.SelectMany(recipe => recipe.Steps).ToArray() : [],
+                    TestSelectorScope.ProjectSet,
+                    Prerequisite: string.Join("; ", recipes.Select(recipe => recipe.Prerequisite).Where(value => value is not null).Distinct()),
+                    UnavailableReason: recipes.Any(recipe => recipe.Steps.Count == 0)
+                        ? string.Join("; ", recipes.Where(recipe => recipe.Steps.Count == 0)
+                            .Select(recipe => $"{recipe.ProjectPath}: {recipe.UnavailableReason}"))
+                        : $"Runs all {recipes.Length} known project suites.",
+                    IsExact: false, ProjectPaths: recipes.Select(recipe => recipe.ProjectPath).ToArray());
             }
             project ??= discovered.FirstOrDefault();
         }
@@ -624,7 +696,10 @@ public static class TestsCore
             TestSelector: testSelector,
             TestFilePath: testFilePath,
             Scope: scope,
-            ExcludeTraits: project.ExcludeTraits);
+            ExcludeTraits: project.ExcludeTraits,
+            ProjectMetadata: project.Metadata,
+            ConfiguredCommand: project.Command,
+            Cases: store.ListTestCasesForProject(workspaceId, project.ProjectPath));
 
         return ContinuousTestRecipeBuilder.Build(recipeRequest);
     }
@@ -948,7 +1023,7 @@ public static class TestsCore
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         store.EnsureSchemaForWrite();
-        IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
+        IReadOnlyList<ContinuousTestProject> projects = LoadDaemonProjects(root, workspaceId, store);
         var selector = new ContinuousTestImpactSelector(
             store,
             new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
@@ -1046,6 +1121,25 @@ public static class TestsCore
             return new TestsRunResult(3, CtRunExecution.ForegroundOneShot, ContinuousTestVerdict.Unknown, "disabled", false, null);
 
         CtRunDisposition disposition = CtDaemonLauncher.ResolveRun(root);
+        if (request.Wait && request.RequireDaemonWhenWaiting
+            && disposition.Execution != CtRunExecution.Daemon)
+        {
+            TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
+            return new TestsRunResult(
+                ExitCode: 3,
+                Execution: CtRunExecution.ForegroundOneShot,
+                Verdict: ContinuousTestVerdict.Unknown,
+                Reason: "CT daemon is stopped.",
+                Waited: false,
+                Selected: null,
+                Wait: new TestsWaitResult(
+                    WaitComplete: false,
+                    State: TestsWaitState.DaemonStopped,
+                    ElapsedSeconds: 0,
+                    TimeoutSeconds: timeout.TotalSeconds,
+                    CommandId: null,
+                    RunId: null));
+        }
         if (disposition.Execution == CtRunExecution.Daemon)
         {
             // The endpoint may be the repo's main checkout: a worktree served by the FAMILY daemon
@@ -1057,7 +1151,10 @@ public static class TestsCore
             TimeSpan totalTimeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
             CtRunResult submitted = request.Hooks?.SubmitRun is { } submit
                 ? submit(endpointRoot, root)
-                : CtDaemonRouting.SubmitRun(endpointRoot, root, "run");
+                : CtDaemonRouting.SubmitRun(endpointRoot, root, "run", ackTimeout:
+                    request.Wait && totalTimeout < CtCommandChannel.DefaultAckTimeout
+                        ? totalTimeout
+                        : CtCommandChannel.DefaultAckTimeout);
 
             // The lease died between the disposition read and the submit, so NOTHING holds the
             // request. Fall through to the foreground one-shot the caller would have gotten had the
@@ -1066,7 +1163,7 @@ public static class TestsCore
             if (submitted.Execution == CtRunExecution.Daemon)
             {
                 string? commandId = submitted.CommandId ?? submitted.Ack?.CommandId;
-                if (submitted.Ack is { State: CtDaemonCommandState.Completed })
+                if (!request.Wait && submitted.Ack is { State: CtDaemonCommandState.Completed })
                 {
                     TestsStatusResult completedStatus = Status(request);
                     TestsWaitResult? completedWait = request.Wait
@@ -1086,25 +1183,12 @@ public static class TestsCore
                         submitted.Reason ?? submitted.Ack?.Reason,
                         request.Wait,
                         completedStatus.Selected,
-                        Wait: completedWait);
+                        Wait: completedWait,
+                        Command: submitted.Ack);
                 }
 
-                // An ACKNOWLEDGED ack is the only proof a daemon took the request. A null ack - the
-                // five-second ack timeout, which a daemon whose loop is inside a whole-suite drain
-                // reaches easily - and a rejection both leave this process knowing nothing about a
-                // run. Reporting exit 0 plus the standing store verdict then describes a run that
-                // may never have started, and `tests run --json` promises the exit code and
-                // `verdict` as the two fields a script reads. Same rule as the paused path below:
-                // verdict unknown, null selected, the channel reason in the payload. An unacked
-                // submit does NOT fall through to a foreground run - the daemon most likely HAS the
-                // request, and a duplicate would run the suite twice.
-                //
-                // A MISSED ack window is not proof of a dead daemon: the daemon reads command files
-                // only between drains, so a submit that lands mid-drain acks one loop pass later by
-                // design. A BUSY status record (executing or queued) separates that daemon from a
-                // dead or idle one; a dead daemon's record reads Stopped through the liveness probe
-                // and keeps the unacked failure.
-                if (submitted.Ack is not { State: CtDaemonCommandState.Acknowledged })
+                if (submitted.Ack is not { State: CtDaemonCommandState.Acknowledged or CtDaemonCommandState.Selecting or CtDaemonCommandState.Queued or CtDaemonCommandState.Running }
+                    && !(request.Wait && !string.IsNullOrWhiteSpace(commandId)))
                 {
                     ContinuousTestDaemonSnapshot? busy = submitted.Ack is null
                         ? TryReadBusyDaemon(request, endpointRoot)
@@ -1117,7 +1201,9 @@ public static class TestsCore
                             Verdict: ContinuousTestVerdict.Unknown,
                             Reason: submitted.Reason ?? submitted.Ack?.Reason ?? "not acknowledged",
                             Waited: false,
-                            Selected: null);
+                            Selected: null,
+                            Command: submitted.Ack ?? new CtDaemonCommandAck(commandId!, CtDaemonCommandState.Requested,
+                                clock.GetUtcNow(), "pending", root, submitted.LeaseIdentity));
                     }
 
                     string activeReason = ActiveRunReason(busy);
@@ -1129,13 +1215,15 @@ public static class TestsCore
                             Verdict: ContinuousTestVerdict.Unknown,
                             Reason: activeReason,
                             Waited: false,
-                            Selected: null);
+                            Selected: null,
+                            Command: submitted.Ack ?? new CtDaemonCommandAck(commandId!, CtDaemonCommandState.Requested,
+                                clock.GetUtcNow(), "pending", root, submitted.LeaseIdentity));
                     }
 
                     // Join the in-flight work: the daemon picks the queued command file up on its
                     // next loop pass, and the settle wait already learns runs from snapshots.
                     (TestsStatusResult joined, TestsWaitResult joinedWait) =
-                        WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout);
+                        WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout, submitted.LeaseIdentity);
                     return new TestsRunResult(
                         0,
                         CtRunExecution.Daemon,
@@ -1143,11 +1231,12 @@ public static class TestsCore
                         activeReason,
                         Waited: true,
                         joined.Selected,
-                        Wait: joinedWait);
+                        Wait: joinedWait,
+                        Command: joinedWait.Command ?? submitted.Ack);
                 }
 
                 (TestsStatusResult status, TestsWaitResult? wait) = request.Wait
-                    ? WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout)
+                    ? WaitForDaemonToSettle(request, endpointRoot, commandId, submissionStarted, totalTimeout, submitted.LeaseIdentity)
                     : (Status(request), null);
                 return new TestsRunResult(
                     0,
@@ -1156,7 +1245,9 @@ public static class TestsCore
                     submitted.Reason ?? submitted.Ack?.Reason,
                     request.Wait,
                     status.Selected,
-                    Wait: wait);
+                    Wait: wait,
+                    Command: wait?.Command ?? submitted.Ack ?? new CtDaemonCommandAck(commandId!, CtDaemonCommandState.Requested,
+                        clock.GetUtcNow(), "pending", root, submitted.LeaseIdentity));
             }
         }
 
@@ -1385,6 +1476,22 @@ public static class TestsCore
                 writer.WritePropertyName("selection");
                 WriteDaemonSelection(writer, result.DaemonSelection);
             }
+            if (result.DaemonIdleDrain is { } drain)
+            {
+                writer.WritePropertyName("idle_drain");
+                writer.WriteStartObject();
+                writer.WriteBoolean("eligible", drain.ShouldDrain);
+                writer.WriteString("reason", drain.Reason);
+                if (drain.NextEligibleAtUtc is { } eligibleAt)
+                    writer.WriteString("next_eligible_at_utc", eligibleAt);
+                else
+                    writer.WriteNull("next_eligible_at_utc");
+                if (drain.RemainingCooldownSeconds is { } cooldown)
+                    writer.WriteNumber("remaining_cooldown_seconds", cooldown);
+                else
+                    writer.WriteNull("remaining_cooldown_seconds");
+                writer.WriteEndObject();
+            }
             WriteDaemonVersion(writer, result.DaemonVersion);
 
             WriteDaemonLoop(writer, result.DaemonLoop);
@@ -1451,6 +1558,8 @@ public static class TestsCore
         // drain, and no run exists yet. JSON keeps "run": null.
         else if (result.DaemonActivity == CtDaemonActivity.Executing)
             sb.AppendLine("  run: none selected yet (project discovery or between projects)");
+        if (result.DaemonIdleDrain is { } drain)
+            sb.AppendLine($"  idle_drain: {drain.Reason} next_eligible={drain.NextEligibleAtUtc?.ToString("O", CultureInfo.InvariantCulture) ?? "unknown"}");
         if (result.DaemonSelection is { } selecting)
         {
             sb.AppendLine($"  selection: {selecting.ProjectPath} phase={Snake(selecting.Phase)} started={selecting.StartedAtUtc:O} items={selecting.ItemsProcessed.ToString(CultureInfo.InvariantCulture)}");
@@ -1533,7 +1642,7 @@ public static class TestsCore
         sb.AppendLine();
         if (result.DirectRunRecipe is { } recipe && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
         {
-            sb.AppendLine("next: for a one-off answer, run these tests directly:");
+            sb.AppendLine("for a one-off answer, run these tests directly:");
             sb.AppendLine("      " + recipe.PrimaryCommand);
         }
         else
@@ -1788,6 +1897,38 @@ public static class TestsCore
                     writer.WriteString("run_id", wait.RunId);
                 writer.WriteEndObject();
             }
+            if (result.Command is { } command)
+            {
+                writer.WritePropertyName("command");
+                writer.WriteStartObject();
+                writer.WriteString("command_id", command.CommandId);
+                writer.WriteString("state", Snake(command.State.ToString()));
+                writer.WriteString("reason", command.Reason);
+                writer.WriteString("updated_at_utc", command.AcknowledgedAtUtc);
+                writer.WriteString("workspace_root", command.WorkspaceRoot);
+                if (command.LeaseIdentity is { } identity)
+                {
+                    writer.WritePropertyName("lease_identity");
+                    writer.WriteStartObject();
+                    writer.WriteNumber("pid", identity.Pid);
+                    writer.WriteString("process_start_time_utc", identity.ProcessStartTimeUtc);
+                    writer.WriteEndObject();
+                }
+                if (command.ProjectRuns is { } runs)
+                {
+                    writer.WritePropertyName("project_runs");
+                    writer.WriteStartArray();
+                    foreach (CtDaemonCommandRun item in runs)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("project_path", item.ProjectPath);
+                        writer.WriteString("run_id", item.RunId);
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
 
@@ -1805,6 +1946,9 @@ public static class TestsCore
                 + $" elapsed={FormatSeconds(wait.ElapsedSeconds)}s/{FormatSeconds(wait.TimeoutSeconds)}s"
                 + $" command={wait.CommandId ?? "-"} run={wait.RunId ?? "-"}";
         }
+
+        if (result.Command is { } command)
+            output += $" command={command.CommandId} lifecycle={Snake(command.State.ToString())} project_runs={command.ProjectRuns?.Count.ToString(CultureInfo.InvariantCulture) ?? "unknown"}";
 
         if (result.Wait?.Run is { } run && HasDaemonRunFacts(run))
         {
@@ -1872,7 +2016,10 @@ public static class TestsCore
                 sb.Append("  - [project discovery ").Append(outcome).Append("] ")
                     .Append(projectPath).Append(": ")
                     .AppendLine(summary);
-                sb.Append("    log: ").AppendLine(artifactPath);
+                if (!string.IsNullOrWhiteSpace(artifactPath))
+                    sb.Append("    log: ").AppendLine(artifactPath);
+                else
+                    sb.AppendLine("    diagnostic artifact unavailable (older discovery record)");
                 if (!string.IsNullOrWhiteSpace(remedy))
                 {
                     sb.Append("    remedy: ").AppendLine(remedy);
@@ -2179,7 +2326,8 @@ public static class TestsCore
         string endpointRoot,
         string? commandId,
         long? submissionStarted = null,
-        TimeSpan? totalTimeout = null)
+        TimeSpan? totalTimeout = null,
+        CtDaemonLeaseIdentity? expectedLease = null)
     {
         TimeSpan timeout = totalTimeout ?? (request.WaitTimeout ?? TimeSpan.FromMinutes(10));
         TestsWaitProbe probe = request.Hooks?.WaitProbe ?? new TestsWaitProbe();
@@ -2187,6 +2335,8 @@ public static class TestsCore
             probe.ReadStatus ?? ContinuousTestDaemonHost.ReadStatus;
         Func<string, bool> isLeaseLive =
             probe.IsLeaseLive ?? (root => CtDaemonLease.TryReadLive(root) is not null);
+        Func<string, CtDaemonLeaseIdentity?> readLeaseIdentity =
+            probe.ReadLeaseIdentity ?? (root => CtDaemonLease.TryReadLive(root)?.Identity);
         Func<string, string, CtDaemonCommandAck?> tryReadAck =
             probe.TryReadAck ?? ((root, id) => CtCommandChannel.TryReadAck(root, id));
         TimeProvider clock = probe.Clock ?? TimeProvider.System;
@@ -2198,6 +2348,8 @@ public static class TestsCore
         bool leaseProbed = false;
         ContinuousTestDaemonSnapshot snapshot = readStatus(endpointRoot);
         bool sawExecuting = false;
+        bool oldProtocol = false;
+        CtDaemonCommandAck? lifecycle = null;
         string? runId = null;
         CtDaemonRunProgress? run = null;
 
@@ -2211,67 +2363,94 @@ public static class TestsCore
                 lastLivenessProbe = clock.GetTimestamp();
             }
 
-            if (snapshot.Run is { } currentRun)
+            if (expectedLease is null && snapshot.Run is { } currentRun)
             {
                 run = currentRun;
                 runId ??= currentRun.RunId;
             }
 
+            if (expectedLease is not null && readLeaseIdentity(endpointRoot) is { } holder
+                && holder != expectedLease)
+                return WaitResult(request, TestsWaitState.LeaseReplaced, false, elapsed, timeout, commandId, runId, run, lifecycle);
+
             if (snapshot.State == CtDaemonLifecycleState.Stopped)
-                return WaitResult(request, TestsWaitState.DaemonStopped, false, elapsed, timeout, commandId, runId, run);
+                return WaitResult(request, TestsWaitState.DaemonStopped, false, elapsed, timeout, commandId, runId, run, lifecycle);
             if (!leaseLive)
-                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
+                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run, lifecycle);
 
             if (!string.IsNullOrWhiteSpace(commandId))
             {
                 CtDaemonCommandAck? ack = tryReadAck(endpointRoot, commandId);
-                if (ack is not null)
+                lifecycle = ack ?? lifecycle;
+                oldProtocol |= expectedLease is not null && ack is not null && ack.LeaseIdentity is null;
+                if (ack is not null && (expectedLease is null || ack.LeaseIdentity is not null))
                 {
+                    if (expectedLease is not null && ack.LeaseIdentity is { } ackLease && ackLease != expectedLease)
+                        return WaitResult(request, TestsWaitState.LeaseReplaced, false, elapsed, timeout, commandId, runId, run, lifecycle);
+                    if (ack.ProjectRuns is { Count: > 0 } runs)
+                    {
+                        runId = runs[^1].RunId;
+                        if (snapshot.Run is { } ownRun && runs.Any(item => item.RunId == ownRun.RunId))
+                            run = ownRun;
+                    }
+                    if (ack.State == CtDaemonCommandState.Running)
+                        sawExecuting = true;
                     if (ack.State == CtDaemonCommandState.Completed)
                     {
+                        if (expectedLease is not null)
+                        {
+                            CtDaemonLeaseIdentity? completionHolder = readLeaseIdentity(endpointRoot);
+                            if (completionHolder is null)
+                                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run, ack);
+                            if (completionHolder != expectedLease)
+                                return WaitResult(request, TestsWaitState.LeaseReplaced, false, elapsed, timeout, commandId, runId, run, ack);
+                        }
                         if (isLeaseLive(endpointRoot))
-                            return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
-                        return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
+                            return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run, ack);
+                        return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run, lifecycle);
                     }
 
                     if (ack.State == CtDaemonCommandState.Cancelled)
-                        return WaitResult(request, TestsWaitState.Cancelled, false, elapsed, timeout, commandId, runId, run);
+                        return WaitResult(request, TestsWaitState.Cancelled, false, elapsed, timeout, commandId, runId, run, lifecycle);
 
                     if (ack.State == CtDaemonCommandState.Rejected)
-                        return WaitResult(request, TestsWaitState.Rejected, false, elapsed, timeout, commandId, runId, run);
+                        return WaitResult(request, TestsWaitState.Rejected, false, elapsed, timeout, commandId, runId, run, lifecycle);
                 }
             }
 
-            if (IsExecuting(snapshot))
+            if (expectedLease is null && IsExecuting(snapshot))
             {
                 sawExecuting = true;
                 queuedAt = null;
             }
-            else if (IsQueued(snapshot))
+            else if (expectedLease is null && IsQueued(snapshot))
             {
                 runId ??= snapshot.Run?.RunId;
                 queuedAt ??= clock.GetTimestamp();
                 if (clock.GetElapsedTime(queuedAt.Value) >= QueuedWaitLimit)
-                    return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId, run);
+                    return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId, run, lifecycle);
             }
-            else if (sawExecuting)
+            else if (sawExecuting && string.IsNullOrWhiteSpace(commandId))
             {
                 if (isLeaseLive(endpointRoot))
-                    return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
-                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
+                    return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run, lifecycle);
+                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run, lifecycle);
             }
 
             if (elapsed >= timeout)
             {
                 return WaitResult(
                     request,
-                    sawExecuting ? TestsWaitState.WaitTimeout : TestsWaitState.NotPickedUp,
+                    oldProtocol ? TestsWaitState.ProtocolUnknown
+                        : sawExecuting || expectedLease is not null && lifecycle is not null
+                            ? TestsWaitState.WaitTimeout : TestsWaitState.NotPickedUp,
                     false,
                     elapsed,
                     timeout,
                     commandId,
                     runId,
-                    run);
+                    run,
+                    lifecycle);
             }
 
             TimeSpan remaining = timeout - elapsed;
@@ -2288,7 +2467,8 @@ public static class TestsCore
         TimeSpan timeout,
         string? commandId,
         string? runId,
-        CtDaemonRunProgress? run) =>
+        CtDaemonRunProgress? run,
+        CtDaemonCommandAck? command = null) =>
         (
             Status(request),
             new TestsWaitResult(
@@ -2298,7 +2478,8 @@ public static class TestsCore
                 timeout.TotalSeconds,
                 commandId,
                 runId,
-                run));
+                run,
+                command));
 
     /// <summary>
     /// The endpoint daemon's snapshot when it is busy (executing or queued, or a named run), or null
@@ -2363,6 +2544,23 @@ public static class TestsCore
     /// fresh read-only discovery - a new worktree of an enabled repo must run with zero manual
     /// calls, and discovery persists nothing.
     /// </summary>
+    internal static IReadOnlyList<ContinuousTestProject> LoadDaemonProjects(
+        string root, string workspaceId, ContinuousTestStore store)
+    {
+        IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
+        if (projects.Count > 0 || HasContinuousTestHistory(root, store, workspaceId))
+            return projects;
+        projects = ContinuousTestProjectInventory.Discover(root, workspaceId)
+            .Where(project => ContinuousTestFrameworkSupport.IsSupported(project.Framework)).ToArray();
+        if (projects.Count > 0)
+            store.Transaction(() =>
+            {
+                foreach (ContinuousTestProject project in projects)
+                    store.PutContinuousTestProject(project);
+            });
+        return projects;
+    }
+
     private static ContinuousTestWorkspaceContext? CreateWorktreeContext(
         string worktreeRoot,
         IContinuousTestProviderResolver providers,
@@ -2373,16 +2571,7 @@ public static class TestsCore
         var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         try
         {
-            IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
-            if (projects.Count == 0)
-            {
-                // Discovery reports every project it finds so a reader can be told why one is unsupported;
-                // this list is what the daemon RUNS, so the refused frameworks are filtered out here. An
-                // enable would never have recorded them either.
-                projects = ContinuousTestProjectInventory.Discover(root, workspaceId)
-                    .Where(project => ContinuousTestFrameworkSupport.IsSupported(project.Framework))
-                    .ToArray();
-            }
+            IReadOnlyList<ContinuousTestProject> projects = LoadDaemonProjects(root, workspaceId, store);
             var selector = new ContinuousTestImpactSelector(
                 store,
                 new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
@@ -2560,7 +2749,8 @@ public static class TestsCore
     /// <summary>The one copy of the supported-toolchain list, so two refusals cannot drift apart.</summary>
     private static string SupportedFrameworksSentence() =>
         "Continuous testing supports .NET (xunit/nunit/mstest), Rust (cargo), Python (pytest), "
-        + "JavaScript and TypeScript (vitest/jest/node --test), and Qt/QML (CTest).";
+        + "JavaScript and TypeScript (vitest/jest/node --test), Go, Ruby (RSpec/Minitest), "
+        + "PHP (PHPUnit/Pest), JVM (Gradle/Maven/sbt), Godot (GUT), and Qt/QML (CTest/qmake).";
 
     private static TestsMutationResult MutationError(string operation, string error) =>
         new(3, operation, 0, [], error);
@@ -2675,6 +2865,12 @@ public static class TestsCore
         writer.WriteString("primary_command", recipe.PrimaryCommand);
         writer.WriteString("workspace_id", recipe.WorkspaceId);
         writer.WriteString("project_path", recipe.ProjectPath);
+        writer.WritePropertyName("project_paths");
+        writer.WriteStartArray();
+        foreach (string projectPath in recipe.ProjectPaths ?? [recipe.ProjectPath])
+            writer.WriteStringValue(projectPath);
+        writer.WriteEndArray();
+        writer.WriteString("prerequisite", recipe.Prerequisite);
         writer.WriteString("framework", recipe.Framework);
         writer.WriteString("working_directory", recipe.WorkingDirectory);
         writer.WriteString("scope", Snake(recipe.Scope.ToString()));
@@ -2696,6 +2892,11 @@ public static class TestsCore
             writer.WriteString("display_command", step.DisplayCommand);
             writer.WriteString("working_directory", step.WorkingDirectory);
             writer.WriteString("step_kind", step.StepKind);
+            writer.WritePropertyName("environment");
+            writer.WriteStartObject();
+            foreach ((string key, string? value) in step.Environment ?? new Dictionary<string, string?>())
+                writer.WriteString(key, value);
+            writer.WriteEndObject();
             writer.WritePropertyName("arguments");
             writer.WriteStartArray();
             foreach (string arg in step.Arguments)
@@ -2774,6 +2975,9 @@ public static class TestsCore
         }
 
         public CtIndexCursor Current => _adapter.Current;
+
+        public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames) =>
+            _adapter.NativeClassCandidates(classNames);
 
         public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
             _adapter.SymbolsForChangedFiles(changedPaths);

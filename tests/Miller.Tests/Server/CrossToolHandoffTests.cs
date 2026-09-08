@@ -452,7 +452,8 @@ public sealed class CrossToolHandoffTests : IDisposable
             Scope: TestSelectorScope.ProjectSuite);
         string? advice = CrossToolHandoff.AdviceForImpact(ws, null, recipe, 3);
         Assert.NotNull(advice);
-        Assert.Contains("dotnet test --filter Category=Unit", advice, StringComparison.Ordinal);
+        Assert.Contains("run the direct recipe above", advice, StringComparison.Ordinal);
+        Assert.Contains("dotnet test --filter Category=Unit", recipe.PrimaryCommand, StringComparison.Ordinal);
         Assert.Contains("run likely impacted tests directly", advice, StringComparison.Ordinal);
     }
 

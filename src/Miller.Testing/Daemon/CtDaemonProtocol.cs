@@ -17,6 +17,9 @@ public enum CtDaemonCommandState
     Rejected,
     Completed,
     Cancelled,
+    Selecting,
+    Queued,
+    Running,
 }
 
 public enum CtDaemonLifecycleState
@@ -57,13 +60,19 @@ public sealed record CtDaemonCommandRequest(
     DateTimeOffset RequestedAtUtc,
     string? Reason,
     CtFreshnessKey? Freshness,
-    string? WorkspaceRoot = null);
+    string? WorkspaceRoot = null,
+    CtDaemonLeaseIdentity? LeaseIdentity = null);
 
 public sealed record CtDaemonCommandAck(
     string CommandId,
     CtDaemonCommandState State,
     DateTimeOffset AcknowledgedAtUtc,
-    string? Reason);
+    string? Reason,
+    string? WorkspaceRoot = null,
+    CtDaemonLeaseIdentity? LeaseIdentity = null,
+    IReadOnlyList<CtDaemonCommandRun>? ProjectRuns = null);
+
+public sealed record CtDaemonCommandRun(string ProjectPath, string RunId);
 
 /// <summary>
 /// What the daemon is DOING, as opposed to what lifecycle state it is in. A daemon can be
@@ -215,7 +224,8 @@ public sealed record CtDaemonStatusRecord(
     double? LoopAgeSeconds = null,
     bool AutoRunsPaused = false,
     string? PauseReason = null,
-    CtDaemonSelectionProgress? Selection = null);
+    CtDaemonSelectionProgress? Selection = null,
+    CtIdleDrainDecision? IdleDrain = null);
 
 /// <summary>
 /// Progress of an in-flight background test selection computation.
@@ -353,7 +363,8 @@ public static class CtDaemonRouting
         CtFreshnessKey? freshness,
         string targetWorkspaceRoot,
         string? commandId = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        CtDaemonLeaseIdentity? leaseIdentity = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetWorkspaceRoot);
@@ -366,7 +377,7 @@ public static class CtDaemonRouting
             (time ?? TimeProvider.System).GetUtcNow(),
             reason,
             freshness,
-            Path.GetFullPath(targetWorkspaceRoot));
+            Path.GetFullPath(targetWorkspaceRoot), leaseIdentity);
         CtDaemonJson.WriteAtomic(
             CtDaemonProtocol.CommandRequestPath(endpointRoot, id),
             request,
@@ -386,14 +397,15 @@ public static class CtDaemonRouting
         CtFreshnessKey? freshness = null,
         TimeSpan? ackTimeout = null)
     {
-        if (CtDaemonLease.TryReadLive(endpointRoot) is null)
+        CtDaemonLeaseRecord? lease = CtDaemonLease.TryReadLive(endpointRoot);
+        if (lease is null)
             return new CtRunResult(CtRunExecution.ForegroundOneShot, null, "no daemon");
 
         CtDaemonCommandRequest request = WriteRoutedRequest(
-            endpointRoot, CtDaemonCommandKind.Run, reason, freshness, targetWorkspaceRoot);
+            endpointRoot, CtDaemonCommandKind.Run, reason, freshness, targetWorkspaceRoot, leaseIdentity: lease.Identity);
         CtDaemonCommandAck? ack = CtCommandChannel.WaitForAck(
             endpointRoot, request.CommandId, ackTimeout ?? CtCommandChannel.DefaultAckTimeout);
-        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId);
+        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId, lease.Identity);
     }
 
     /// <summary>

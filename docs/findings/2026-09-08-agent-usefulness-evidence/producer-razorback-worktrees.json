@@ -1,0 +1,69 @@
+{
+  "checked_at": "2026-09-08",
+  "actions": "Read-only git inventories; no commit, stash, branch switch or push.",
+  "worktrees": [
+    {
+      "repository": "/home/murphy/source/julie-extractors",
+      "path": "/home/murphy/source/julie-extractors",
+      "branch": "main",
+      "commit": "5912bafe185ce2653ce22f86ec962aef615a27f8",
+      "dirty": true,
+      "status": "## main...origin/main\n M crates/julie-extract-cli/tests/store_cli_contract.rs\n M crates/julie-extract-cli/tests/store_maintenance_cli_contract.rs\n M crates/julie-extractors/src/base/framework_structural_facts/aspnet.rs\n M crates/julie-extractors/src/base/framework_structural_facts/markup.rs\n M crates/julie-extractors/src/base/framework_structural_facts/mod.rs\n M crates/julie-extractors/src/base/structural_fact_registry/framework/aspnet_node.rs\n M crates/julie-extractors/src/base/structural_fact_registry/framework/frontend.rs\n M crates/julie-extractors/src/base/web_structural_facts/mod.rs\n M crates/julie-extractors/src/base/web_structural_facts/vue.rs\n M crates/julie-extractors/src/csharp/identifiers.rs\n M crates/julie-extractors/src/elixir/identifiers.rs\n M crates/julie-extractors/src/erlang/identifiers.rs\n M crates/julie-extractors/src/go/identifiers.rs\n M crates/julie-extractors/src/powershell/identifiers.rs\n M crates/julie-extractors/src/razor/identifiers.rs\n M crates/julie-extractors/src/sql/identifiers.rs\n M crates/julie-extractors/src/tests/csharp/identifier_extraction.rs\n M crates/julie-extractors/src/tests/erlang/identifiers.rs\n M crates/julie-extractors/src/tests/erlang/types.rs\n M crates/julie-extractors/src/tests/mod.rs\n M crates/julie-extractors/src/tests/structural_facts.rs\n M crates/julie-extractors/src/vbnet/identifiers.rs\n M crates/julie-extractors/src/zig/identifiers.rs\n M docs/contracts/structural-fact-patterns.json\n M fixtures/extraction/capabilities.json\n M fixtures/extraction/csharp/aspnet_attribute_routes/expected.json\n M fixtures/extraction/csharp/http_client/expected.json\n M fixtures/extraction/csharp/test_roles/expected.json\n M fixtures/extraction/elixir/basic/expected.json\n M fixtures/extraction/erlang/basic/expected.json\n M fixtures/extraction/erlang/cross_file/expected.json\n M fixtures/extraction/erlang/test_roles/expected.json\n M fixtures/extraction/erlang/test_roles_common_test/expected.json\n M fixtures/extraction/go/basic/expected.json\n M fixtures/extraction/powershell/basic/expected.json\n M fixtures/extraction/razor/attribute-expressions/modifiers/golden.json\n M fixtures/extraction/razor/code-behind/expected.razor.json\n M fixtures/extraction/razor/current-syntax/expected.json\n M fixtures/extraction/zig/basic/expected.json\n?? crates/julie-extractors/src/base/framework_structural_facts/consumed_attributes.rs\n?? crates/julie-extractors/src/base/framework_structural_facts/htmx_templates.rs\n?? crates/julie-extractors/src/tests/return_type_parity.rs\n?? crates/julie-extractors/src/tests/structural_facts/\n?? docs/findings/2026-09-08-producer-branch-gates.json\n?? docs/findings/2026-09-08-return-type-parity.json\n?? docs/findings/2026-09-08-return-type-parity.md\n?? fixtures/extraction/c/return_types/\n?? fixtures/extraction/cpp/return_types/\n?? fixtures/extraction/csharp/agent_usefulness/\n?? fixtures/extraction/csharp/return_types/\n?? fixtures/extraction/dart/return_types/\n?? fixtures/extraction/elixir/return_types/\n?? fixtures/extraction/erlang/return_types/\n?? fixtures/extraction/fsharp/return_types/\n?? fixtures/extraction/gdscript/return_types/\n?? fixtures/extraction/go/return_types/\n?? fixtures/extraction/html/agent_usefulness/\n?? fixtures/extraction/java/return_types/\n?? fixtures/extraction/javascript/agent_usefulness/\n?? fixtures/extraction/jsx/agent_usefulness/\n?? fixtures/extraction/kotlin/return_types/\n?? fixtures/extraction/php/return_types/\n?? fixtures/extraction/powershell/return_types/\n?? fixtures/extraction/python/return_types/\n?? fixtures/extraction/qml/return_types/\n?? fixtures/extraction/razor/agent_usefulness/\n?? fixtures/extraction/razor/return_types/\n?? fixtures/extraction/rust/return_types/\n?? fixtures/extraction/scala/return_types/\n?? fixtures/extraction/sql/return_types/\n?? fixtures/extraction/swift/return_types/\n?? fixtures/extraction/tsx/agent_usefulness/\n?? fixtures/extraction/tsx/return_types/\n?? fixtures/extraction/typescript/return_types/\n?? fixtures/extraction/vbnet/return_types/\n?? fixtures/extraction/vue/agent_usefulness/\n?? fixtures/extraction/vue/return_types/\n?? fixtures/extraction/zig/return_types/",
+      "note": "Current task checkout; uncommitted task changes."
+    },
+    {
+      "repository": "/home/murphy/source/julie-extractors",
+      "path": "/home/murphy/source/julie-extractors/.claude/worktrees/ct-language-audit-plan",
+      "branch": "worktree-ct-language-audit-plan",
+      "commit": "2ea9b0daa2e736f9248d8caf4c475e47dea0d522",
+      "dirty": true,
+      "status": "## worktree-ct-language-audit-plan\n?? docs/findings/2026-08-27-continuous-testing-language-readiness-audit.md\n?? docs/plans/2026-08-27-continuous-testing-extractor-evidence.md",
+      "note": "Existing untracked audit/plan documents; untouched by this task."
+    },
+    {
+      "repository": "/home/murphy/source/julie-extractors",
+      "path": "/home/murphy/source/julie-extractors/.worktrees/cursor-command-cost",
+      "branch": "fix/cursor-command-cost",
+      "commit": "9b8503f7f3d57fc18547391e5a0deded758dfd7a",
+      "dirty": false,
+      "status": "## fix/cursor-command-cost",
+      "note": "Clean other worktree; no task changes moved."
+    },
+    {
+      "repository": "/home/murphy/source/julie-extractors",
+      "path": "/home/murphy/source/julie-extractors/.worktrees/reader-retention-contract",
+      "branch": "fix/reader-floor-orphan-recovery",
+      "commit": "1d424c2fcfde16d7d5df2b8686f35b9a1f9295b9",
+      "dirty": false,
+      "status": "## fix/reader-floor-orphan-recovery",
+      "note": "Clean other worktree; no task changes moved."
+    },
+    {
+      "repository": "/home/murphy/source/julie-extractors",
+      "path": "/home/murphy/source/julie-extractors/.worktrees/wal-recurrence",
+      "branch": "fix/empty-wal-checkpoint",
+      "commit": "df92d5ead811a2046c2ceb7a77737a62f97b6903",
+      "dirty": false,
+      "status": "## fix/empty-wal-checkpoint",
+      "note": "Clean other worktree; no task changes moved."
+    },
+    {
+      "repository": "/home/murphy/source/razorback",
+      "path": "/home/murphy/source/razorback",
+      "branch": "main",
+      "commit": "464d4d317c206335e0b67ffdbc4f45a8e962b5e8",
+      "dirty": true,
+      "status": "## main...origin/main\n M skills/using-razorback/SKILL.md",
+      "note": "Current task checkout; uncommitted task changes."
+    },
+    {
+      "repository": "/home/murphy/source/razorback",
+      "path": "/home/murphy/.config/razorback/worktrees/razorback/linear-hardening",
+      "branch": "codex/linear-hardening",
+      "commit": "23a2fb7db3f79895c882258f41c25f5491c5beba",
+      "dirty": false,
+      "status": "## codex/linear-hardening",
+      "note": "Clean other worktree; no task changes moved."
+    }
+  ]
+}

@@ -263,7 +263,7 @@ internal static class WorkspaceFactsAssembler
 
     internal static CtDiskAccountingSnapshot? ReadCtDisk(string? canonicalRoot)
     {
-        if (string.IsNullOrWhiteSpace(canonicalRoot))
+        if (CtEnvironment.IsOff() || string.IsNullOrWhiteSpace(canonicalRoot))
             return null;
 
         string ctDbPath = CtSchema.DbPathFor(canonicalRoot);
@@ -414,8 +414,11 @@ internal static class WorkspaceFactsAssembler
         ScanGovernor? scanGovernor)
     {
         StoreWorkspaceFacts store = StoreWorkspaceFacts.Unavailable(exception);
+        bool admissionBusy = exception.IsReaderAdmissionBusy;
         string warning = $"could not open family store for workspace '{row.CanonicalRoot}': {exception.Message}";
-        if (profile == WorkspaceRegisteredFactsProfile.McpHealth)
+        if (admissionBusy)
+            warning += " Retry the same call; reader admission is temporarily busy.";
+        if (!admissionBusy && profile == WorkspaceRegisteredFactsProfile.McpHealth)
             registry.MarkError(row.WorkspaceId, warning);
 
         return new WorkspaceFacts(
@@ -427,9 +430,11 @@ internal static class WorkspaceFactsAssembler
             KnownExtensionsCount: 0,
             BuiltRevision: revision,
             LatestObservedRevision: revision,
-            IndexFresh: false,
+            IndexFresh: admissionBusy ? null : false,
             QueueEmpty: true,
-            FreshnessStatus: store.State == "incompatible" ? "store_incompatible" : "store_failed",
+            FreshnessStatus: admissionBusy
+                ? "reader_admission_busy"
+                : store.State == "incompatible" ? "store_incompatible" : "store_failed",
             WarningText: warning,
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,

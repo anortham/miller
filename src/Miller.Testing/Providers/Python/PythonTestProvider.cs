@@ -196,6 +196,78 @@ public sealed class PythonTestProvider : IContinuousTestProvider
         return caseResults;
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        string projectRoot = ProjectRoot(new ContinuousTestWorkspace(request.WorkspaceId, request.WorkspaceRoot,
+            request.ProjectPath, Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests")));
+        (string executable, IReadOnlyList<string> prefix) = CommandPrefix(projectRoot, request.ConfiguredCommand);
+        var arguments = prefix.ToList();
+        bool exact = request.IsExact;
+        TestSelectorScope scope = request.Scope;
+        string? limitation = null;
+        if (request.IsExact && !string.IsNullOrWhiteSpace(request.TestSelector))
+        {
+            string selector = request.TestSelector;
+            if (!selector.Contains("::", StringComparison.Ordinal) && request.TestFilePath is { } file)
+                selector = Path.GetRelativePath(projectRoot, Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file))).Replace('\\', '/') + "::" + selector;
+            arguments.Add(selector);
+        }
+        else if (request.TestFilePath is { } file)
+        {
+            arguments.Add(Path.GetRelativePath(projectRoot, Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file))).Replace('\\', '/'));
+            scope = TestSelectorScope.TestFile;
+            exact = false;
+            limitation = request.TestSelector is null ? null : "No full pytest node identity was supplied; recipe runs the containing test file.";
+        }
+        else if (request.TestSelector is { } name && name.All(ch => char.IsLetterOrDigit(ch) || ch == '_'))
+        {
+            arguments.AddRange(["-k", name]);
+            scope = TestSelectorScope.MatchingTests;
+            exact = false;
+        }
+        else
+        {
+            scope = TestSelectorScope.ProjectSuite;
+            exact = false;
+            limitation = request.TestSelector is null ? null : "No runnable pytest node identity was supplied; recipe runs the project suite.";
+        }
+        if (request.ExcludeTraits is { Count: > 0 })
+        {
+            string[] markers = request.ExcludeTraits.Select(trait => trait[(trait.IndexOf('=') + 1)..]).ToArray();
+            if (markers.Any(marker => marker.Length == 0 || !(char.IsLetter(marker[0]) || marker[0] == '_')
+                || marker.Any(ch => !(char.IsLetterOrDigit(ch) || ch == '_'))))
+                return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "pytest", projectRoot,
+                    [], scope, UnavailableReason: "Configured exclusions are not valid pytest marker names.");
+            string exclusion = string.Join(" and ", markers.Select(marker => $"not {marker}"));
+            int markerOption = -1;
+            for (int i = 0; i + 1 < arguments.Count; i++)
+                if (arguments[i] == "-m" && arguments[i + 1] != "pytest")
+                    markerOption = i;
+            if (markerOption >= 0)
+                arguments[markerOption + 1] = $"({arguments[markerOption + 1]}) and ({exclusion})";
+            else
+                arguments.AddRange(["-m", exclusion]);
+        }
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "pytest", projectRoot,
+            [new TestRunStep(executable, arguments, projectRoot)], scope,
+            request.TestSelector, Prerequisite: "Project Python environment and pytest installed",
+            ExcludeTraits: request.ExcludeTraits, IsExact: exact, UnavailableReason: limitation);
+    }
+
+    private static (string Executable, IReadOnlyList<string> Arguments) CommandPrefix(string projectRoot, string? command)
+    {
+        if (!string.IsNullOrWhiteSpace(command))
+        {
+            IReadOnlyList<string> tokens = SplitCommand(command);
+            if (tokens.Count == 0)
+                throw new ContinuousTestProviderException("Python test command must not be empty.");
+            return (tokens[0], tokens.Skip(1).ToArray());
+        }
+        return File.Exists(Path.Combine(projectRoot, "uv.lock"))
+            ? ("uv", new[] { "run", "python", "-m", "pytest" })
+            : (LocalPython(projectRoot), new[] { "-m", "pytest" });
+    }
+
     /// <summary>
     /// Preview/test seam: builds the run command against the latest existing generation (or the
     /// would-be first). Production runs never use it — <see cref="RunAsync"/> allocates its own
@@ -378,32 +450,8 @@ public sealed class PythonTestProvider : IContinuousTestProvider
         string projectRoot,
         IReadOnlyList<string> pytestArgs)
     {
-        if (!string.IsNullOrWhiteSpace(request.Command))
-        {
-            var tokens = SplitCommand(request.Command);
-            if (tokens.Count == 0)
-                throw new ContinuousTestProviderException("Python test command must not be empty.");
-
-            return new TestProcessCommand(
-                tokens[0],
-                tokens.Skip(1).Concat(pytestArgs).ToArray(),
-                projectRoot,
-                WorkspaceEnvironment(request.Workspace, paths));
-        }
-
-        if (File.Exists(Path.Combine(projectRoot, "uv.lock")))
-        {
-            return new TestProcessCommand(
-                "uv",
-                new[] { "run", "python", "-m", "pytest" }.Concat(pytestArgs).ToArray(),
-                projectRoot,
-                WorkspaceEnvironment(request.Workspace, paths));
-        }
-
-        return new TestProcessCommand(
-            LocalPython(projectRoot),
-            new[] { "-m", "pytest" }.Concat(pytestArgs).ToArray(),
-            projectRoot,
+        (string executable, IReadOnlyList<string> prefix) = CommandPrefix(projectRoot, request.Command);
+        return new TestProcessCommand(executable, prefix.Concat(pytestArgs).ToArray(), projectRoot,
             WorkspaceEnvironment(request.Workspace, paths));
     }
 

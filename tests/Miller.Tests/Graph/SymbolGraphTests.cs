@@ -1,4 +1,5 @@
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Xunit;
 
 namespace Miller.Tests.Graph;
@@ -22,6 +23,44 @@ public sealed class SymbolGraphTests
         Assert.Equal(
             new[] { "Id", "IsTest", "Visibility" },
             typeof(GraphNode).GetProperties().Select(static property => property.Name));
+    }
+
+    [Theory]
+    [InlineData(false, false, 2)]
+    [InlineData(true, false, 2)]
+    [InlineData(false, true, 2)]
+    [InlineData(true, true, 2)]
+    [InlineData(false, false, 3)]
+    [InlineData(true, false, 3)]
+    [InlineData(false, true, 3)]
+    [InlineData(true, true, 3)]
+    public void ReachWithEvidence_PrefersLongerExactPathWithoutExceedingDepth(bool reverse, bool batched, int depth)
+    {
+        var first = new[]
+        {
+            new GraphNeighbour("target", "calls", 0.5, "identifier_name", 0, null),
+            new GraphNeighbour("via", "calls", 1.0, "relationship", 0, null)
+        };
+        var adjacency = new Dictionary<string, IReadOnlyList<GraphNeighbour>>
+        {
+            ["seed"] = reverse ? first.Reverse().ToArray() : first,
+            ["via"] = [new GraphNeighbour("target", "calls", 1.0, "relationship", 0, null)],
+            ["target"] = [new GraphNeighbour("downstream", "calls", 1.0, "relationship", 0, null)],
+            ["downstream"] = [new GraphNeighbour("seed", "calls", 1.0, "relationship", 0, null)]
+        };
+        var result = GraphTraversal.ReachWithEvidence(["seed"], depth, 10, Direction.Forward,
+            adjacency.ContainsKey,
+            batched ? null : (id, _) => adjacency[id],
+            batched ? (ids, _) => ids.ToDictionary(id => id, id => adjacency[id]) : null);
+        var target = Assert.Single(result.Nodes, node => node.Id == "target");
+        Assert.Equal(ReferenceResolutionStatus.Exact, target.PathCertainty);
+        Assert.Equal(2, target.Hop);
+        Assert.Equal("via", target.ReachedVia);
+        var downstream = Assert.Single(result.Nodes, node => node.Id == "downstream");
+        Assert.Equal(depth == 3 ? ReferenceResolutionStatus.Exact : ReferenceResolutionStatus.Heuristic,
+            downstream.PathCertainty);
+        Assert.Equal(depth, downstream.Hop);
+        Assert.DoesNotContain(result.Nodes, node => node.Id == "seed");
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 # Retrieval agent usefulness implementation plan
 
+**Status — 2026-09-08:** Source implementation and corrective dogfood work are recorded in the [retrieval verification ledger](../findings/2026-09-08-agent-usefulness-dogfood.md#retrieval). R7 producer changes are verified in source, with released producer/Miller pin adoption still pending approval. Performance conclusions apply only to the measurements and snapshots named in that ledger. The checklist below preserves the original acceptance criteria; use the ledger for current verified and outstanding status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Make search, context, patterns, and imported-content answers reflect the evidence they actually contain, with bounded useful output.
@@ -143,6 +145,10 @@ Let a bounded set of evidence-backed callers of edited file public symbols compe
 **Interfaces:** existing context phase observer and lookup cache. **Contract inputs:** identical workspace generation/revision, cold and warm calls, auto versus usage mode. **Ownership/serialization:** batch D, shared provider ownership coordinated with the edit-performance plan. The navigation/edit plan owns any shared immutable projection cache; this task reuses that owner rather than adding a competing cache.
 
 Record phase costs for a small symbol query, broad why-query, edited-file query, and usage query, using the same pinned revision and explicit semantic setting. Separate projection loading, lookup, semantic inference, graph expansion, body reads, and formatting. Profile the dominant phase. Only if projection reload dominates, reuse a generation/revision-keyed immutable projection through the existing owner; never cache stale bodies or conflate one-shot bounded fact loading with resident sessions. If another phase dominates, bound or reuse that specific phase and retain cancellation and error semantics. Record the resulting implementation choice in this plan before editing cache code.
+
+**Measured implementation decision, 2026-09-08:** the [pre-plan Release replay](../findings/2026-09-08-agent-usefulness-evidence/context-preplan-replay.json) compares `5308f3a7` with the repaired working tree on one pinned dataset: 48 calls spanning cold/warm symbol, broad, edited-file and usage queries. Warm median milliseconds were 324→309, 1341→1186, 546→626 and 1975→1652 respectively. Warm resolve cost was 14–24 ms in both builds; it did not dominate these calls. Usage reference work was 1691→1340 ms; edited-file graph calls increased 1→2 and lookups 677→727 with stronger anchor correctness. These observations do not establish a deterministic or universal latency improvement.
+
+Retain the shared immutable projection owner and its verified identity, eviction, disposal and bounded-lifetime repairs from N6. Do not introduce a competing context cache: the measured warm bottleneck is not repeated projection construction. Preserve the additional edited-file evidence work as an explicit correctness tradeoff. The earlier [post-implementation comparison](../findings/2026-09-08-agent-usefulness-evidence/context-release-replay.json) has unrelated shared-host load and already contains the cache on both sides; it is descriptive evidence only. The original deterministic measured-work-reduction acceptance item below is not silently declared passed by these timings.
 
 - [ ] A reproducible baseline and phase evidence replace historical averages as the decision input.
 - [ ] Chosen change reduces the measured dominant work while semantic-off remains zero-work.

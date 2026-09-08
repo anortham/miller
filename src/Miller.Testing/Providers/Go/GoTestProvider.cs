@@ -160,6 +160,68 @@ public sealed class GoTestProvider : IContinuousTestProvider
         }
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        string manual = Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests", Guid.NewGuid().ToString("N"));
+        var workspace = new ContinuousTestWorkspace(request.WorkspaceId, request.WorkspaceRoot, request.ProjectPath,
+            manual, Metadata: request.ProjectMetadata);
+        string root = GoTestTooling.ProjectRoot(workspace);
+        if (!string.IsNullOrWhiteSpace(request.ConfiguredCommand) || request.ExcludeTraits is { Count: > 0 })
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "go", root, [], request.Scope,
+                UnavailableReason: "The Go provider has no mapped custom-command or trait-exclusion contract; a broader command would discard configured scope.");
+        var paths = new CtGenerationPaths("manual", manual, Path.Combine(manual, "out"), Path.Combine(manual, "results"),
+            Path.Combine(manual, "build.binlog"), Path.Combine(manual, "tmp"));
+        IReadOnlyDictionary<string, string?> environment = GoTestTooling.Environment(workspace, paths);
+        var steps = new List<TestRunStep>
+        {
+            ContinuousTestRunRecipe.PrepareDirectories(root, paths.TempDirectory, environment["GOCACHE"]!),
+        };
+        var selected = new List<GoTestCaseIdentity>();
+        foreach (ContinuousTestCase row in request.Cases ?? [])
+        {
+            bool matches = request.IsExact || request.TestSelector is { } selector
+                && (row.Id == selector || row.Selector == selector || row.QualifiedName == selector);
+            if (matches && row.Source == "ct-provider:go" && GoTestTooling.TryDecodeCaseId(row.Id, out GoTestCaseIdentity identity)
+                && identity.WorkspaceId == request.WorkspaceId && PathComparer.Equals(identity.ProjectPath, request.ProjectPath))
+                selected.Add(identity);
+        }
+        foreach (IGrouping<string, GoTestCaseIdentity> group in selected.GroupBy(row => row.ImportPath))
+        {
+            TestProcessCommand command = GoTestTooling.BuildRunCommand(workspace, paths, group.Key,
+                group.Select(row => row.TestName).Distinct(StringComparer.Ordinal).ToArray());
+            steps.Add(new TestRunStep(command.FileName, command.Arguments, command.WorkingDirectory, Environment: command.Environment));
+        }
+        bool exact = selected.Count > 0;
+        if (!exact)
+        {
+            string importPath = "./...";
+            string[] names = [];
+            if (request.IsExact && request.TestSelector is not null)
+            {
+                names = [request.TestSelector.Split('/')[0]];
+                if (request.TestFilePath is { } file)
+                {
+                    string fileRoot = Path.GetDirectoryName(Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file)))!;
+                    string relative = Path.GetRelativePath(root, fileRoot).Replace('\\', '/');
+                    importPath = relative == "." ? "." : "./" + relative;
+                }
+            }
+            TestProcessCommand command = GoTestTooling.BuildRunCommand(workspace, paths, importPath, names);
+            if (names.Length > 0 && request.TestSelector!.Contains('/'))
+            {
+                string[] args = command.Arguments.ToArray();
+                args[Array.IndexOf(args, "-run") + 1] = string.Join("/", request.TestSelector.Split('/')
+                    .Select(segment => GoTestTooling.TopLevelRunExpression([segment])));
+                command = command with { Arguments = args };
+            }
+            steps.Add(new TestRunStep(command.FileName, command.Arguments, command.WorkingDirectory, Environment: command.Environment));
+        }
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "go", root, steps,
+            exact ? request.Scope : request.IsExact && request.TestSelector is not null ? TestSelectorScope.MatchingTests : TestSelectorScope.ProjectSuite,
+            request.TestSelector, Prerequisite: "Go toolchain installed; package builds are performed by go test", IsExact: exact,
+            UnavailableReason: exact || request.TestSelector is null ? null : "No stored Go package/test identity matches the source selector; scope is broader than one provider case.");
+    }
+
     public TestProcessCommand BuildRunCommand(ContinuousTestProviderRunRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

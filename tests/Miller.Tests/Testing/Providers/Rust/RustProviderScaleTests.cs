@@ -19,6 +19,42 @@ public sealed class RustProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_runs_each_selected_target_group_without_unrelated_failures()
+    {
+        string cargo = CtProviderTestSupport.RequireCargo();
+        string root = Path.Combine(_dir, "direct recipe");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        Directory.CreateDirectory(Path.Combine(root, "tests"));
+        string manifest = Path.Combine(root, "Cargo.toml");
+        File.WriteAllText(manifest, """
+            [package]
+            name = "recipe"
+            version = "0.1.0"
+            edition = "2021"
+            """);
+        const string tests = "#[test] fn selected() {} #[test] fn unrelated() { panic!(\"wrong selection\"); }";
+        File.WriteAllText(Path.Combine(root, "src", "lib.rs"), tests);
+        File.WriteAllText(Path.Combine(root, "tests", "integration.rs"), tests);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", root, manifest, "cargo", IsExact: true, Cases:
+            [
+                new ContinuousTestCase("rust-test:recipe::lib/recipe::selected", "ws", "selected", "selected", "selected", Source: "ct-provider:rust"),
+                new ContinuousTestCase("rust-test:recipe::test/integration::selected", "ws", "selected", "selected", "selected", Source: "ct-provider:rust"),
+            ]));
+        Assert.Equal(2, recipe.Steps.Count);
+        Assert.False(Directory.Exists(Path.Combine(root, ".miller")));
+        var runner = new TestProcessRunner();
+        foreach (TestRunStep step in recipe.Steps)
+        {
+            TestProcessResult result = await runner.RunAsync(new TestProcessCommand(cargo, step.Arguments,
+                step.WorkingDirectory), TestContext.Current.CancellationToken);
+            Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+            Assert.Contains("1 passed", result.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("1 filtered out", result.StandardOutput, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task Cargo_smoke_executes_a_tiny_fixture_and_parses_results()
     {
         CtProviderTestSupport.RequireCargo();

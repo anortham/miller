@@ -3,7 +3,7 @@ name: miller-impact-analysis
 description: Use when assessing blast radius with Miller, choosing tests for a change, answering who uses a symbol, or planning a refactor.
 user-invocable: true
 argument-hint: "<symbol, file path, diff, or change target>"
-allowed-tools: mcp__miller__impact, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__context, mcp__miller__workspace, mcp__miller__tests
+allowed-tools: mcp__miller__impact, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__context, mcp__miller__workspace, mcp__miller__tests, mcp__plugin_miller_miller__impact, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__trace, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__tests
 ---
 
 # Miller Impact Analysis

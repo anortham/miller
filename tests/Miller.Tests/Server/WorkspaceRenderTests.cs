@@ -1148,6 +1148,28 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Onboarding_names_current_and_historical_windows_separately()
+    {
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-09-08T12:00:00Z");
+        WorkspaceOnboardingFacts facts = OnboardingFacts();
+        facts = facts with { Telemetry = facts.Telemetry with
+        {
+            CurrentWindow = new(7, anchor.AddDays(-7), anchor),
+            HistoricalWindow = new(30, anchor.AddDays(-30), anchor),
+            HistoricalSuccessfulFlows = [new TelemetryFlow("search", "inspect", 4)],
+            HistoricalSuccessfulFlowsTotal = 1,
+            HistoricalTotalCalls = 8,
+        }};
+        string compact = WorkspaceRender.Onboarding(facts, json: false);
+        Assert.Contains("current 7d", compact, StringComparison.Ordinal);
+        Assert.Contains("historical successful flows (30d)", compact, StringComparison.Ordinal);
+        using var json = JsonDocument.Parse(WorkspaceRender.Onboarding(facts, json: true));
+        Assert.Equal(7, json.RootElement.GetProperty("telemetry").GetProperty("current_window").GetProperty("days").GetInt32());
+        Assert.Equal(30, json.RootElement.GetProperty("telemetry").GetProperty("historical_window").GetProperty("days").GetInt32());
+        Assert.Equal(4, json.RootElement.GetProperty("historical_successful_flows")[0].GetProperty("calls").GetInt32());
+    }
+
+    [Fact]
     public void Onboarding_NoTelemetry_JsonIncludesOverviewStarterGuidance()
     {
         WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
@@ -2715,8 +2737,10 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("workspace remove path=/blocked/repo", blockedEntries[0].GetProperty("suggested_action").GetString());
     }
 
-    [Fact]
-    public void Status_And_Health_RendersStoreMaintenanceAndCtDiskFacts()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Status_And_Health_RendersStoreMaintenanceAndCtDiskFacts(bool unavailableIndex)
     {
         var maintenance = new StoreMaintenanceReport(
             Action: "inspect",
@@ -2775,6 +2799,8 @@ public sealed class WorkspaceRenderTests
         {
             Store = StoreFacts() with { Maintenance = maintenance },
             CtDisk = ctDisk,
+            WarningText = unavailableIndex ? "index unavailable: retry the read" : null,
+            IndexFresh = unavailableIndex ? false : null,
         };
 
         // Compact Status
@@ -2806,6 +2832,11 @@ public sealed class WorkspaceRenderTests
         Assert.Contains(health.Warnings, w => w.Code == "store_compaction_required");
         Assert.Contains(health.Warnings, w => w.Code == "store_retention_pressure");
         Assert.Contains(health.Warnings, w => w.Code == "ct_generation_disk_over_budget");
+        if (unavailableIndex)
+        {
+            Assert.Contains(health.Warnings.Take(3), warning => warning.Code == "index_warning");
+            Assert.Contains("index unavailable: retry the read", WorkspaceRender.Health(health, json: false), StringComparison.Ordinal);
+        }
     }
 
     [Fact]

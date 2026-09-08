@@ -27,14 +27,15 @@ Miller serves a fresh index of this workspace's code. One Miller call beats shel
 
 ## Rules
 
-1. Search before reading: run `search` before grep/rg/cat or opening whole files — hits come back ranked with file, line, and enclosing symbol.
+1. Search before reading: use `search` for ranked file, line, and symbol hits.
 2. Structure before content: `inspect` a file's symbols or a symbol's signature first, then read only the region you actually need.
-3. Impact before changing: run `impact` to see blast radius and which tests to run — before a refactor, and again after edits to confirm what moved.
-4. Trace a thread with `trace refs|path|bridge`; use `inspect` for callers/callees.
-5. Edit with a preview: `edit` dry-runs a diff and writes nothing until apply=true, so a rename or body rewrite is proved before it lands.
-6. Trust the index: results are current for the indexed revision; if one looks stale, run `workspace refresh` and retry — beats re-checking by hand.
-7. Name the workspace: every workspace-bound call takes `workspace_id` from `workspace list`, or from `workspace open path=/absolute/project` when the repo is absent. Only `workspace list|open|remove|prune|dashboard` run without one.
-8. A deleted worktree leaves a dead registry row, however it went — `git worktree remove`, `rm -rf`, or a harness/CI teardown. Call Miller `workspace remove path=<exact old path>`; it works after the directory is gone. At session end run `workspace prune dry_run=true`, and apply it once the preview lists only roots you know are gone.
+3. Use `impact` before a refactor and after edits to find affected symbols and tests.
+4. After edits, check `tests status` with the selected `workspace_id`. When CT is enabled and idle with stale work, use `tests run wait=true` after checking its scope; when off, run focused tests directly.
+5. Trace a thread with `trace refs|path|bridge`; use `inspect` for callers/callees.
+6. Preview with `edit`; only apply=true writes.
+7. Freshness describes source-check evidence; background activity alone does not prove freshness. For stale results, repeat the read with `ensure_fresh=true`; if it reports contention, follow that diagnostic.
+8. Name the workspace: every workspace-bound call takes `workspace_id` from `workspace list`, or from `workspace open path=/absolute/project` when the repo is absent. Only `workspace list|open|remove|prune|dashboard` run without one.
+9. A deleted worktree leaves a dead registry row. Call `workspace remove path=<exact old path>`. At session end preview `workspace prune dry_run=true`; apply only for roots you know are gone.
 
 ## When to reach for each tool
 
@@ -47,7 +48,7 @@ Miller serves a fresh index of this workspace's code. One Miller call beats shel
 - patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 40 languages.
 - content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, open, onboarding, dashboard.
-- tests — continuous testing (CT), opt-in per workspace: which cases your change staled and their last verdict. status is cheap and starts nothing; after an edit, run wait=true executes only the stale set. CT off reports `enabled: false` plus the test projects it found: run those with your test runner for a one-off answer; enable only for ongoing verdicts; start is explicit.
+- tests — continuous testing (CT), opt-in per workspace: which cases your change staled and their last verdict. status is cheap and starts nothing; after an edit, run wait=true executes the explicit selection, including owed and red cases. CT off reports `enabled: false` plus the test projects it found: run those with your test runner for a one-off answer; enable only for ongoing verdicts; start is explicit.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 

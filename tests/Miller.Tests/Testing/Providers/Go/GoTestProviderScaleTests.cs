@@ -17,6 +17,24 @@ public sealed class GoTestProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_executes_nested_go_selection_and_excludes_failing_neighbor()
+    {
+        CtProviderTestSupport.RequireGo();
+        string project = Path.Combine(_dir, "go.mod");
+        string file = Path.Combine(_dir, "literal_test.go");
+        File.WriteAllText(project, "module example.com/direct\ngo 1.20\n");
+        File.WriteAllText(file, "package direct\nimport \"testing\"\nfunc TestTarget(t *testing.T) { t.Run(\"child[x]\", func(t *testing.T) {}); t.Run(\"childx\", func(t *testing.T) { t.Fatal(\"wrong selection\") }) }\n");
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _dir, project,
+            "go", "TestTarget/child[x]", file, TestSelectorScope.SingleTest, IsExact: true));
+        foreach (TestRunStep step in recipe.Steps)
+        {
+            TestProcessResult result = await new TestProcessRunner().RunAsync(new TestProcessCommand(step.Executable,
+                step.Arguments, step.WorkingDirectory, step.Environment), TestContext.Current.CancellationToken);
+            Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        }
+    }
+
+    [Fact]
     public async Task Single_module_fixture_discovers_and_runs_selected_test_without_source_writes()
     {
         string go = CtProviderTestSupport.RequireGo();

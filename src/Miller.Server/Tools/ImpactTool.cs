@@ -226,6 +226,65 @@ public sealed class ImpactTool
                 }
             }
 
+            string requestIdentity;
+            using (var identityStream = new MemoryStream())
+            {
+                using (var writer = new Utf8JsonWriter(identityStream))
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("workspace", continuationWorkspaceId);
+                    writer.WriteString("format", format);
+                    writer.WriteString("IndexGenerationIdentity", context.Snapshot.IndexGenerationIdentity);
+                    writer.WriteNumber("Revision", context.Revision);
+                    writer.WriteStartObject("Freshness");
+                    writer.WriteString("ArtifactOrStoreId", context.Snapshot.Freshness.ArtifactOrStoreId);
+                    writer.WriteNumber("Revision", context.Snapshot.Freshness.Revision);
+                    writer.WriteString("ManifestHash", context.Snapshot.Freshness.ManifestHash);
+                    if (context.Snapshot.Freshness.StoreLogSequence is { } storeLogSequenceValue) writer.WriteNumber("StoreLogSequence", storeLogSequenceValue);
+                    else writer.WriteNull("StoreLogSequence");
+                    writer.WriteString("ResolutionStamp", context.Snapshot.Freshness.ResolutionStamp);
+                    writer.WriteString("SearchStamp", context.Snapshot.Freshness.SearchStamp);
+                    writer.WriteString("ContentStamp", context.Snapshot.Freshness.ContentStamp);
+                    writer.WriteString("VectorStamp", context.Snapshot.Freshness.VectorStamp);
+                    writer.WriteString("StoreInstanceId", context.Snapshot.Freshness.StoreInstanceId);
+                    writer.WriteString("ViewId", context.Snapshot.Freshness.ViewId);
+                    writer.WriteString("GenerationName", context.Snapshot.Freshness.GenerationName);
+                    if (context.Snapshot.Freshness.ManifestGeneration is { } manifestGenerationValue) writer.WriteNumber("ManifestGeneration", manifestGenerationValue);
+                    else writer.WriteNull("ManifestGeneration");
+                    writer.WriteString("IndexLevel", context.Snapshot.Freshness.IndexLevel);
+                    writer.WriteString("LevelStampL1", context.Snapshot.Freshness.LevelStampL1);
+                    writer.WriteString("LevelStampL2", context.Snapshot.Freshness.LevelStampL2);
+                    writer.WriteString("LevelStampL3", context.Snapshot.Freshness.LevelStampL3);
+                    writer.WriteEndObject();
+                    writer.WriteString("target", target);
+                    if (changed_paths is null) writer.WriteNull("changed_paths");
+                    else
+                    {
+                        writer.WriteStartArray("changed_paths");
+                        foreach (string path in changed_paths) writer.WriteStringValue(path);
+                        writer.WriteEndArray();
+                    }
+                    writer.WriteString("diff", diff);
+                    writer.WriteBoolean("git", git);
+                    writer.WriteString("base", @base);
+                    writer.WriteBoolean("staged", staged);
+                    if (from_index_revision is { } fromIndexRevisionValue) writer.WriteNumber("from_index_revision", fromIndexRevisionValue);
+                    else writer.WriteNull("from_index_revision");
+                    writer.WriteString("from_artifact_id", from_artifact_id);
+                    writer.WriteNumber("max_depth", max_depth);
+                    writer.WriteNumber("limit", limit);
+                    writer.WriteString("view", view);
+                    if (normalizedTestsLimit is { } testsLimitValue) writer.WriteNumber("tests_limit", testsLimitValue);
+                    else writer.WriteNull("tests_limit");
+                    if (normalizedSymbolsLimit is { } symbolsLimitValue) writer.WriteNumber("symbols_limit", symbolsLimitValue);
+                    else writer.WriteNull("symbols_limit");
+                    writer.WriteEndObject();
+                }
+                requestIdentity = Encoding.UTF8.GetString(identityStream.ToArray());
+            }
+            if (json && !string.IsNullOrWhiteSpace(continuation) && IsPopulationContinuation(continuation))
+                return ReadCachedImpactPage(continuation, requestIdentity);
+
             string output;
             int impactedCount;
             int returnedCount;
@@ -356,12 +415,13 @@ public sealed class ImpactTool
                 int totalBytes = Encoding.UTF8.GetByteCount(output);
                 if (totalBytes > ToolOutputBudget.ImpactMcpMaxBytes || !string.IsNullOrWhiteSpace(continuation))
                 {
-                    return PageMcpJson(
+                    return CreateCachedImpactPages(
                         execution.Traversal,
                         output,
                         max_depth,
                         limit,
                         continuationWorkspaceId,
+                        requestIdentity,
                         continuation,
                         diagnostic,
                         telemetry);
@@ -721,9 +781,8 @@ public sealed class ImpactTool
             try
             {
                 var req = new TestsCoreRequest(workspaceRoot, WorkspaceId: workspaceId);
-                string firstTestPath = rankedImpact.Tests[0].Symbol.FilePath;
-                string firstTestName = rankedImpact.Tests[0].Symbol.Name;
-                runnerRecipe = TestsCore.GetRunRecipe(req, testSelector: firstTestName, testFilePath: firstTestPath, scope: TestSelectorScope.SingleTest);
+                runnerRecipe = TestsCore.GetImpactRunRecipe(req,
+                    rankedImpact.Tests.Select(test => test.Symbol.FilePath).Distinct(StringComparer.Ordinal).ToArray());
             }
             catch
             {
@@ -1798,20 +1857,92 @@ public sealed class ImpactTool
         }
     }
 
+    private const int ImpactPageCacheMaxBytes = 8 * 1024 * 1024;
+    private const int ImpactPagePopulationMaxBytes = 2 * 1024 * 1024;
+    private static readonly object ImpactPageCacheGate = new();
+    private static readonly Dictionary<string, LinkedListNode<CachedImpactPage>> ImpactPageCache = new(StringComparer.Ordinal);
+    private static readonly LinkedList<CachedImpactPage> ImpactPageLru = new();
+    private static int _impactPageCacheBytes;
+
+    private sealed record CachedImpactPage(string Token, string RequestIdentity, string Output, int Bytes);
+
+    private static string ReadCachedImpactPage(string token, string requestIdentity)
+    {
+        lock (ImpactPageCacheGate)
+        {
+            if (!ImpactPageCache.TryGetValue(token, out var node))
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "continuation_expired", "Impact page expired; repeat the original query without continuation."));
+            if (!string.Equals(node.Value.RequestIdentity, requestIdentity, StringComparison.Ordinal))
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "stale_continuation", "Impact snapshot or query changed; repeat the query without continuation."));
+            ImpactPageLru.Remove(node);
+            ImpactPageLru.AddLast(node);
+            return node.Value.Output;
+        }
+    }
+
+    private static string CreateCachedImpactPages(
+        ImpactTraversal traversal, string fullOutput, int maxDepth, int limit,
+        string workspaceId, string requestIdentity, string? continuation,
+        ToolDiagnostic? diagnostic, TelemetryScope? telemetry)
+    {
+        string first = PageMcpJson(traversal, fullOutput, maxDepth, limit, workspaceId,
+            requestIdentity, continuation, diagnostic, telemetry);
+        string current = first;
+        var pages = new List<CachedImpactPage>();
+        int populationBytes = Encoding.UTF8.GetByteCount(first);
+        while (true)
+        {
+            using var document = JsonDocument.Parse(current);
+            string? next = document.RootElement.GetProperty("continuation").GetString();
+            if (next is null)
+                break;
+            current = PageMcpJson(traversal, fullOutput, maxDepth, limit, workspaceId,
+                requestIdentity, next, diagnostic, telemetry);
+            int bytes = Encoding.UTF8.GetByteCount(current) + Encoding.UTF8.GetByteCount(next)
+                + Encoding.UTF8.GetByteCount(requestIdentity);
+            populationBytes += bytes;
+            if (populationBytes > ImpactPagePopulationMaxBytes || pages.Count >= 256)
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "impact_page_cache_limit", "Impact pages exceed the bounded snapshot cache; narrow the target or lower tests_limit and symbols_limit."));
+            pages.Add(new CachedImpactPage(next, requestIdentity, current, bytes));
+        }
+        lock (ImpactPageCacheGate)
+        {
+            foreach (var page in pages)
+            {
+                if (ImpactPageCache.Remove(page.Token, out var old))
+                {
+                    ImpactPageLru.Remove(old);
+                    _impactPageCacheBytes -= old.Value.Bytes;
+                }
+                while (_impactPageCacheBytes + page.Bytes > ImpactPageCacheMaxBytes && ImpactPageLru.First is { } oldest)
+                {
+                    ImpactPageCache.Remove(oldest.Value.Token);
+                    ImpactPageLru.RemoveFirst();
+                    _impactPageCacheBytes -= oldest.Value.Bytes;
+                }
+                ImpactPageCache.Add(page.Token, ImpactPageLru.AddLast(page));
+                _impactPageCacheBytes += page.Bytes;
+            }
+        }
+        return first;
+    }
+
     private static string PageMcpJson(
         ImpactTraversal traversal,
         string fullOutput,
         int maxDepth,
         int limit,
         string workspaceId,
+        string requestIdentity,
         string? continuation,
         ToolDiagnostic? diagnostic,
         TelemetryScope? telemetry)
     {
-        string popKey = string.Join(';', traversal.Tests.Select(t => t.Symbol.SymbolId).Concat(traversal.Impacted.Select(i => i.Symbol.SymbolId)));
-        string populationFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(popKey)));
-        string reqKey = $"{traversal.View}:{maxDepth}:{limit}:{traversal.SeededPaths.Count}:{string.Join(',', traversal.SeededPaths)}";
-        string requestFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(reqKey)));
+        string populationFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(fullOutput)));
+        string requestFingerprint = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(requestIdentity)));
 
         var identity = new ToolPopulationContinuationIdentity(
             Kind: "impact",

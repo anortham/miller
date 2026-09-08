@@ -3,7 +3,7 @@ name: miller-text-audit
 description: Use when auditing registered Miller workspaces for dangerous strings, deprecated APIs, compatibility markers, secrets-like terms, or other exact text across source, docs, logs, external files, and web imports.
 user-invocable: true
 argument-hint: "<audit terms or term file>"
-allowed-tools: mcp__miller__content, mcp__miller__search, mcp__miller__workspace
+allowed-tools: mcp__miller__content, mcp__miller__search, mcp__miller__workspace, mcp__plugin_miller_miller__content, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__workspace
 ---
 
 # Miller Text Audit

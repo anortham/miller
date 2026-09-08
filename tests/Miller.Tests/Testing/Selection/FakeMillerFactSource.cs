@@ -29,6 +29,15 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
     /// <summary>Counts how many times <see cref="IdentifierEvidenceTo"/> was called.</summary>
     public int IdentifierEvidenceToCalls { get; private set; }
 
+    public bool NativeCandidatesTruncated { get; set; }
+
+    public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames)
+    {
+        string[] paths = Symbols.Where(symbol => classNames.Contains(symbol.Name, StringComparer.Ordinal))
+            .Select(symbol => symbol.FilePath).Distinct(StringComparer.Ordinal).ToArray();
+        return new(SymbolsForChangedFiles(paths), NativeCandidatesTruncated);
+    }
+
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths)
     {
         HashSet<string> paths = changedPaths
@@ -117,6 +126,9 @@ internal sealed class FakeCtFactSource : ICtFactSource
     public FakeMillerFactSource Inner => _inner;
 
     public CtIndexCursor Current => _inner.Current;
+
+    public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames) =>
+        _inner.NativeClassCandidates(classNames);
 
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         _inner.SymbolsForChangedFiles(changedPaths);

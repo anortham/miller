@@ -3,7 +3,7 @@ name: handoff-in
 description: Use when resuming Miller-backed work from a handoff packet or validating a packet before continuing in another harness, model, or session.
 user-invocable: true
 argument-hint: "[packet path]"
-allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, Bash
+allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, Bash, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__impact, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__trace
 ---
 
 # Handoff In

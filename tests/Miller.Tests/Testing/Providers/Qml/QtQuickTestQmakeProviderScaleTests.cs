@@ -28,6 +28,28 @@ public sealed class QtQuickTestQmakeProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_qmake_recipe_runs_headless_without_source_writes()
+    {
+        CtProviderTestSupport.RequireQmakeQuickTest();
+        CtProviderTestSupport.RequireQmakeMake();
+        string fixture = CopyFixture(Path.Combine(ScaleTestSupport.RepoRoot(), "tests", "Miller.Tests", "Fixtures", "QtQuickTestQmakeScale"),
+            Path.Combine(_dir, "direct fixture"));
+        var source = Snapshot(fixture);
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws:qmake-direct", fixture,
+            Path.Combine(fixture, "quicktest.pro"), "qml"));
+        TestProcessCommand command = OperatingSystem.IsWindows()
+            ? new TestProcessCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", recipe.PrimaryCommand], _dir)
+            : new TestProcessCommand("/bin/sh", ["-c", recipe.PrimaryCommand], _dir);
+        TestProcessResult result = await new TestProcessRunner().RunAsync(command, TestContext.Current.CancellationToken);
+        Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        Assert.Contains("3 passed, 0 failed", result.StandardOutput, StringComparison.Ordinal);
+        IReadOnlyDictionary<string, string> after = Snapshot(fixture);
+        foreach ((string path, string hash) in source)
+            Assert.Equal(hash, after[path]);
+        Assert.All(after.Keys.Except(source.Keys), path => Assert.StartsWith(".miller" + Path.DirectorySeparatorChar, path));
+    }
+
+    [Fact]
     public async Task Qmake_quick_test_fixture_runs_a_selected_target_without_source_writes()
     {
         string qmake = CtProviderTestSupport.RequireQmakeQuickTest();

@@ -6,6 +6,7 @@ using Miller.Indexing.Testing;
 using Miller.Testing;
 using Miller.Tests.Indexing;
 using Miller.Tests.Indexing.Resolution;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Testing.FactAdapter;
@@ -19,6 +20,79 @@ public sealed class CtFactAdapterTests
     private const string ProcessId = "fn-process";
     private const string TestClassId = "cls-tests";
     private const string ProcessWorksId = "fn-test";
+
+    [Fact]
+    public void Native_class_candidates_reject_excess_names_before_database_work()
+    {
+        using var adapter = new CtFactAdapter(new SnapshotOnlyReadSession(WorkspaceReadSnapshotTests.StoreSnapshot()));
+        CtNativeSymbolCandidates result = adapter.NativeClassCandidates(Enumerable.Range(0, 1025).Select(i => "Class" + i).ToArray());
+        Assert.True(result.Truncated);
+        Assert.Empty(result.Symbols);
+    }
+
+    [Fact]
+    public void Native_class_candidates_read_complete_parent_scopes_from_arbitrary_files()
+    {
+        using var fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("file", "Odd.kt", "kotlin");
+        fixture.AddSymbol("file", "package", "sample", "namespace", "Odd.kt", "kotlin");
+        fixture.AddSymbol("file", "type", "Suite", "class", "Odd.kt", "kotlin");
+        fixture.AddSymbol("file", "method", "selected", "method", "Odd.kt", "kotlin", parentId: "type");
+        using var adapter = CtFactAdapter.OpenArtifact(fixture.DbPath);
+        CtNativeSymbolCandidates result = adapter.NativeClassCandidates(["Suite", "Suite"]);
+        Assert.False(result.Truncated);
+        Assert.Equal(["method", "package", "type"], result.Symbols.Select(symbol => symbol.SymbolId).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Native_class_candidates_support_the_pinned_family_store_session()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using (var connection = new SqliteConnection($"Data Source={storePath};Pooling=False"))
+        {
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE file_versions SET language='scala' WHERE version_id=2;
+                UPDATE manifest_entries SET language='scala' WHERE view_id='view-a' AND generation=2;
+                UPDATE symbols SET language='scala', name='Suite' WHERE version_id=2 AND symbol_id='symbol';
+                INSERT INTO symbols VALUES
+                  (2,'package','same.cs','scala','sample','namespace',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,'method','same.cs','scala','selected','method',NULL,NULL,NULL,'symbol',1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,1,0,0,NULL);
+                """;
+            command.ExecuteNonQuery();
+        }
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace");
+        using var adapter = new CtFactAdapter(session);
+
+        CtNativeSymbolCandidates result = adapter.NativeClassCandidates(["Suite"]);
+
+        Assert.False(result.Truncated);
+        Assert.Equal(["method", "package", "symbol"], result.Symbols.Select(symbol => symbol.SymbolId).Order(StringComparer.Ordinal));
+        CtFileFact file = Assert.Single(result.Files!);
+        Assert.Equal("scala", file.Language);
+        Assert.Equal("blake3:visible", file.ContentHash);
+    }
+
+    [Fact]
+    public void Native_class_candidates_refuse_oversized_symbol_population_without_partial_results()
+    {
+        using ResolutionArtifactFixture fixture = CreateFixture();
+        fixture.ExecuteWrite("UPDATE symbols SET language='kotlin'; UPDATE files SET language='kotlin';");
+        fixture.ExecuteWrite("""
+            WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<16000)
+            INSERT INTO symbols (symbol_id,file_id,path,language,name,kind,signature,doc_comment,visibility,parent_symbol_id,
+                start_line,start_column,end_line,end_column,start_byte,end_byte,is_test,test_container,test_lifecycle,metadata_json)
+            SELECT 'extra-'||n.x,file_id,path,language,'extra-'||n.x,kind,signature,doc_comment,visibility,parent_symbol_id,
+                   start_line,start_column,end_line,end_column,start_byte,end_byte,is_test,test_container,test_lifecycle,metadata_json
+            FROM symbols,n WHERE symbol_id='cls-service';
+            """);
+        using var adapter = CtFactAdapter.OpenArtifact(fixture.DbPath);
+        CtNativeSymbolCandidates result = adapter.NativeClassCandidates(["Service"]);
+        Assert.True(result.Truncated);
+        Assert.Empty(result.Symbols);
+    }
 
     [Fact]
     public void Current_UsesTheSharedGenerationIdentityCursor()

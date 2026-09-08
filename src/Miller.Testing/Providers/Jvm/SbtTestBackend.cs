@@ -305,7 +305,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
         return new TestProcessCommand(fileName, arguments, workingDirectory, environment);
     }
 
-    private static string? WrapperPath(string shadowRoot)
+    internal static string? WrapperPath(string shadowRoot)
     {
         string[] names = OperatingSystem.IsWindows()
             ? ["sbt.bat", "sbt.cmd"]

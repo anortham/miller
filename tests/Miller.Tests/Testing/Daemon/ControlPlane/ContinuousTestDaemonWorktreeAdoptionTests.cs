@@ -372,7 +372,7 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                         wtStore.ListContinuousTestStatuses(wtId);
                     CtDaemonCommandAck? ack = CtCommandChannel.TryReadAck(MainRoot, request.CommandId);
                     if (statuses.Count == 0 || !provider.Started.Task.IsCompletedSuccessfully ||
-                        ack is not { State: CtDaemonCommandState.Acknowledged or CtDaemonCommandState.Completed, Reason: "run" or "completed" })
+                        ack is not { State: CtDaemonCommandState.Completed, Reason: "completed", ProjectRuns.Count: > 0 })
                         return false;
 
                     routedStatuses = statuses;
@@ -386,8 +386,9 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
             Assert.Equal("worktree-discovery",
                 Assert.Single(wtStore.ListTestCases(wtId)).Metadata?["inventory_probe"]?.ToString());
             Assert.True(File.Exists(CtSchema.DbPathFor(WorktreeRoot)));
-            Assert.True(routedAck?.State is CtDaemonCommandState.Acknowledged or CtDaemonCommandState.Completed);
-            Assert.True(routedAck?.Reason is "run" or "completed");
+            Assert.Equal(CtDaemonCommandState.Completed, routedAck?.State);
+            Assert.Equal(WorktreeRoot, routedAck?.WorkspaceRoot);
+            Assert.Equal(wtProject, Assert.Single(routedAck!.ProjectRuns!).ProjectPath);
 
             Assert.False(File.Exists(CtSchema.DbPathFor(MainRoot)));
             Assert.Empty(primaryEnqueuer.Changes);

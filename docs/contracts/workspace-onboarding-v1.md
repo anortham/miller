@@ -27,6 +27,9 @@ It is generic to any Miller-indexed repo and does not write `CLAUDE.md`, `AGENTS
   "successful_flows": [],
   "successful_flows_total_count": 0,
   "successful_flows_omitted_count": 0,
+  "historical_successful_flows": [],
+  "historical_successful_flows_total_count": 0,
+  "historical_successful_flows_omitted_count": 0,
   "hot_targets": [],
   "hot_targets_total_count": 0,
   "hot_targets_omitted_count": 0,
@@ -62,7 +65,10 @@ transaction instead of loading the full telemetry window into memory.
 - `available`: whether the shared telemetry DB was readable.
 - `state`: `ready`, `sparse`, `missing_telemetry_db`, `missing_telemetry_table`, or `unreadable_telemetry_db`.
 - `total_calls`: calls in the scoped onboarding window.
-- `window_start_ts`, `window_end_ts`: UTC timestamp bounds, or `null`.
+- `window_start_ts`, `window_end_ts`: first and last observed call timestamps in the current window, or `null`.
+- `current_window`: `{days, start_utc, end_utc}` for current recommendations, normally seven days; `null` when unavailable.
+- `historical_window`: `{days, start_utc, end_utc}` for the separate 30-day history; `null` when unavailable.
+- `historical_total_calls`: calls in that historical window. These are separate from current `total_calls`.
 - `error`: telemetry read error text, or `null`.
 
 `start_here`:
@@ -80,6 +86,12 @@ transaction instead of loading the full telemetry window into memory.
 
 - `from`, `to`: tool labels such as `search:auto` or `inspect:summary`.
 - `calls`: adjacent successful call count in the telemetry window.
+
+`historical_successful_flows` rows use the same `from`, `to`, `calls` shape, measured over
+`telemetry.historical_window`. A dormant workspace can have historical flows while current calls,
+misses and friction are empty. Historical flows do not become current recommendation evidence.
+Both windows share one observed clock anchor and exclude rows after it. Existing callers requesting
+an explicit current window retain that window; the separately labeled history remains 30 days.
 
 `hot_targets` rows:
 

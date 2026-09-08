@@ -151,8 +151,11 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
         TestProcessCommand command,
         CancellationToken cancellationToken = default)
     {
+        CtDiscoveryCapture.Starting(command);
         await using var process = Start(command);
-        return await RunCoreAsync(process, command.FileName, cancellationToken).ConfigureAwait(false);
+        TestProcessResult result = await RunCoreAsync(process, command.FileName, cancellationToken).ConfigureAwait(false);
+        CtDiscoveryCapture.Finished(result);
+        return result;
     }
 
     /// <summary>

@@ -36,7 +36,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceArtifactContext context, string? requestedWorkspaceId, bool json)
@@ -50,7 +51,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceSymbolSearchContext context, string? requestedWorkspaceId, bool json)
@@ -64,7 +66,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceSymbolReadContext context, string? requestedWorkspaceId, bool json)
@@ -78,7 +81,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceContentSearchContext context, string? requestedWorkspaceId, bool json)
@@ -92,7 +96,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceRegionSearchContext context, string? requestedWorkspaceId, bool json)
@@ -106,7 +111,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     public static string? CompactBanner(WorkspaceTextContentSearchContext context, string? requestedWorkspaceId, bool json)
@@ -120,7 +126,8 @@ internal static class ReadToolWorkspaceRouting
             context.Revision,
             requestedWorkspaceId,
             json,
-            context.WarningText);
+            context.WarningText,
+            context.BackgroundOperation);
     }
 
     internal static string? CompactBanner(
@@ -132,11 +139,13 @@ internal static class ReadToolWorkspaceRouting
         long revision,
         string? requestedWorkspaceId,
         bool json,
-        string? warningText = null)
+        string? warningText = null,
+        BackgroundRefreshOperationSnapshot? backgroundOperation = null)
     {
         if (json)
             return null;
 
+        freshnessStatus = WorkspaceFreshnessView.EvidenceStatusFor(indexFresh, freshnessStatus);
         bool showFreshness = ShouldShowFreshness(indexFresh, freshnessStatus);
         bool hasWarning = !string.IsNullOrWhiteSpace(warningText);
         if (string.IsNullOrWhiteSpace(requestedWorkspaceId) && !showFreshness && !hasWarning)
@@ -146,17 +155,18 @@ internal static class ReadToolWorkspaceRouting
         sb.Append("workspace: ")
           .Append(Display(displayId, workspaceId, requestedWorkspaceId));
 
+        bool hasBackground = backgroundOperation is { State: not BackgroundRefreshActivityState.Unknown };
+        string evidenceStatus = hasBackground && freshnessStatus == WorkspaceFreshnessView.RefreshPendingStatus
+            ? "unconfirmed"
+            : freshnessStatus;
         if (showFreshness)
-            sb.Append('\n').Append("freshness: ").Append(freshnessStatus);
+            sb.Append('\n').Append("freshness: ").Append(evidenceStatus);
 
-        // A serve-then-refresh read is the one state where the caller cannot tell WHAT was served from the status
-        // alone: the answer is a pinned view and a refresh is still running behind it. Name the revision it came
-        // from so a second call can tell "same view again" from "the refresh landed".
-        if (showFreshness && string.Equals(
-                freshnessStatus, WorkspaceFreshnessView.RefreshPendingStatus, StringComparison.Ordinal))
-        {
+        if (hasBackground || showFreshness && freshnessStatus == WorkspaceFreshnessView.RefreshPendingStatus)
             sb.Append('\n').Append("revision: ").Append(revision);
-        }
+
+        if (hasBackground)
+            sb.Append('\n').Append("background: ").Append(backgroundOperation!.State.ToString().ToLowerInvariant());
 
         if (hasWarning)
         {

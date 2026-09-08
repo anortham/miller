@@ -30,9 +30,9 @@ public sealed record GraphNeighbour(
     int Centrality,
     string? Visibility);
 
-/// <summary>A symbol reached by <see cref="SymbolGraph.Reach"/>, tagged with its minimum hop distance.</summary>
+/// <summary>A reached symbol with the selected path length and optional evidence.</summary>
 /// <param name="Id">The reached symbol's id (never one of the BFS start ids).</param>
-/// <param name="Hop">The shortest number of edges from the nearest start to this node (≥ 1).</param>
+/// <param name="Hop">Number of edges on the selected path (≥ 1). Evidence traversal prefers stronger certainty, then shorter paths; plain reach uses minimum distance.</param>
 public sealed record ReachedNode(
     string Id,
     int Hop,

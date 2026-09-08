@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -72,7 +73,7 @@ public interface ICtDiscoveryLedger
 
 public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
 {
-    private const int MaxOutputBytes = 32 * 1024; // 32 KB bounded output
+    private const int MaxOutputBytes = 32 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -83,6 +84,8 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
     private readonly object _gate = new();
     private readonly Dictionary<string, CtDiscoveryAttemptSummary> _cachedSummaries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loadedRoots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _projectRoots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _workspaceIds = new(StringComparer.Ordinal);
 
     public CtDiscoveryAttemptSummary? GetLatestAttempt(string projectPath)
     {
@@ -150,6 +153,8 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         {
             EnsureLoadedLocked(workspaceRoot);
             _cachedSummaries[boundedAttempt.ProjectPath] = summary;
+            _projectRoots[boundedAttempt.ProjectPath] = Path.GetFullPath(workspaceRoot);
+            _workspaceIds[Path.GetFullPath(workspaceRoot)] = boundedAttempt.WorkspaceId;
             PersistLedgerLocked(workspaceRoot, boundedAttempt.WorkspaceId);
         }
     }
@@ -164,7 +169,8 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
             EnsureLoadedLocked(workspaceRoot);
             if (_cachedSummaries.Remove(projectPath))
             {
-                PersistLedgerLocked(workspaceRoot, workspaceId: "");
+                _projectRoots.Remove(projectPath);
+                PersistLedgerLocked(workspaceRoot, _workspaceIds.GetValueOrDefault(Path.GetFullPath(workspaceRoot), ""));
             }
         }
     }
@@ -221,9 +227,11 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         CtDiscoveryWorkspaceLedger? ledger = LoadLedger(workspaceRoot);
         if (ledger?.Projects is { } projects)
         {
+            _workspaceIds[Path.GetFullPath(workspaceRoot)] = ledger.WorkspaceId;
             foreach ((string projectPath, CtDiscoveryAttemptSummary summary) in projects)
             {
                 _cachedSummaries[projectPath] = summary;
+                _projectRoots[projectPath] = Path.GetFullPath(workspaceRoot);
             }
         }
     }
@@ -237,7 +245,8 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         var ledger = new CtDiscoveryWorkspaceLedger(
             WorkspaceId: workspaceId,
             UpdatedAtUtc: DateTimeOffset.UtcNow,
-            Projects: new Dictionary<string, CtDiscoveryAttemptSummary>(_cachedSummaries, StringComparer.Ordinal));
+            Projects: _cachedSummaries.Where(row => _projectRoots.GetValueOrDefault(row.Key) == Path.GetFullPath(workspaceRoot))
+                .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal));
 
         string json = JsonSerializer.Serialize(ledger, JsonOptions);
         WriteAtomic(ledgerPath, json);
@@ -257,9 +266,18 @@ public sealed class CtDiscoveryLedger : ICtDiscoveryLedger
         if (output is null)
             return null;
 
-        if (output.Length <= maxBytes)
+        if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
             return output;
 
-        return output[..maxBytes] + "…";
+        var bounded = new StringBuilder();
+        int bytes = Encoding.UTF8.GetByteCount("…");
+        foreach (Rune rune in output.EnumerateRunes())
+        {
+            if (bytes + rune.Utf8SequenceLength > maxBytes)
+                break;
+            bounded.Append(rune.ToString());
+            bytes += rune.Utf8SequenceLength;
+        }
+        return bounded.Append('…').ToString();
     }
 }

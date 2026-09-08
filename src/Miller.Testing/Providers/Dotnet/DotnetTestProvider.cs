@@ -94,6 +94,137 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         _deleteRetrySleep = deleteRetrySleep ?? Thread.Sleep;
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        string workingDirectory = Path.GetDirectoryName(request.ProjectPath) ?? request.WorkspaceRoot;
+        if (!string.IsNullOrWhiteSpace(request.ConfiguredCommand))
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath,
+                request.Framework ?? "unknown", workingDirectory, [], request.Scope,
+                UnavailableReason: "This provider has no mapped custom-command contract; generating a default command would discard the configured override.");
+        string framework = request.Framework?.ToLowerInvariant() ?? "dotnet";
+        string? driver = request.ProjectMetadata?.GetValueOrDefault(DotnetTestBackend.MetadataGlobalJsonRunner)?.ToString();
+        if (driver is null && File.Exists(request.ProjectPath))
+            driver = DotnetTestBackend.ReadStatic(request.ProjectPath).GlobalJsonTestRunner;
+        bool mtpDriver = string.Equals(driver, "Microsoft.Testing.Platform", StringComparison.OrdinalIgnoreCase);
+        bool mtpBackend = mtpDriver || string.Equals(
+            request.ProjectMetadata?.GetValueOrDefault(DotnetTestBackend.MetadataBackend)?.ToString(),
+            DotnetTestBackendKind.MicrosoftTestingPlatform.ToString(), StringComparison.Ordinal);
+        var args = mtpDriver
+            ? new List<string> { "test", "--project", request.ProjectPath }
+            : new List<string> { "test", request.ProjectPath };
+        if (mtpBackend && framework == "xunit-v2")
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, workingDirectory,
+                [], TestSelectorScope.ProjectSuite, UnavailableReason: "xUnit v2 cannot run through the configured MTP driver; use VSTest or migrate to xUnit v3.");
+        if (mtpBackend && !mtpDriver)
+            args.Add("--");
+        if (mtpBackend && framework == "xunit")
+        {
+            foreach (string trait in request.ExcludeTraits ?? [])
+                args.AddRange(["--filter-not-trait", trait.Replace("!=", "=", StringComparison.Ordinal)]);
+            bool methodKnown = request.IsExact && request.TestSelector is not null;
+            if (methodKnown)
+                args.AddRange(["--filter-method", XunitMethodName(request.TestSelector!)]);
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, workingDirectory,
+                [new TestRunStep("dotnet", args, workingDirectory)],
+                methodKnown ? TestSelectorScope.MatchingTests : TestSelectorScope.ProjectSuite,
+                methodKnown ? request.TestSelector : null, Prerequisite: ".NET SDK and xUnit MTP packages installed",
+                ExcludeTraits: request.ExcludeTraits, IsExact: false,
+                UnavailableReason: request.TestSelector is null ? null : methodKnown
+                    ? "xUnit method filter includes every theory row for the method."
+                    : "Source names do not prove xUnit MTP method identities; recipe runs the project suite.");
+        }
+
+        bool parameterizedSelection = TryGetParameterizedGenericFilterTerm(request, framework, out string? parameterizedFilter);
+        string? filter = null;
+        if (!string.IsNullOrWhiteSpace(request.TestSelector))
+        {
+            if (parameterizedSelection)
+                filter = parameterizedFilter;
+            else
+            {
+                string comparison = request.IsExact ? "=" : "~";
+                filter = $"FullyQualifiedName{comparison}{VsTestFilterValue.Escape(request.TestSelector)}";
+            }
+        }
+
+        if (request.ExcludeTraits is { Count: > 0 })
+        {
+            string traitFilter = framework is "nunit" or "mstest"
+                ? GenericExclusionFilter(framework, request.ExcludeTraits) ?? ""
+                : string.Join("&", request.ExcludeTraits.Select(trait =>
+            {
+                int separator = trait.IndexOf('=');
+                string property = separator < 0 ? "Category" : trait[..separator].TrimEnd('!');
+                if (framework == "mstest")
+                    property = "TestCategory";
+                string value = separator < 0 ? trait : trait[(separator + 1)..];
+                return $"{VsTestFilterValue.Escape(property)}!={VsTestFilterValue.Escape(value)}";
+            }));
+            filter = filter is null
+                ? traitFilter
+                : $"({filter})&({traitFilter})";
+        }
+
+        if (filter is not null)
+        {
+            args.Add("--filter");
+            args.Add(filter);
+        }
+
+        string prerequisite = framework == "xunit-v2"
+            ? "xUnit v2 detected; .NET SDK runs tests via testhost (dotnet test). Migrate to xUnit v3 for self-executing CT assembly."
+            : ".NET SDK installed";
+
+        return new ContinuousTestRunRecipe(
+            WorkspaceId: request.WorkspaceId,
+            ProjectPath: request.ProjectPath,
+            Framework: framework,
+            WorkingDirectory: workingDirectory,
+            Steps: [new TestRunStep("dotnet", args, workingDirectory)],
+            Scope: parameterizedSelection ? TestSelectorScope.MatchingTests : request.Scope,
+            TargetSelector: request.TestSelector,
+            Prerequisite: prerequisite,
+            ExcludeTraits: request.ExcludeTraits,
+            IsExact: request.IsExact && !parameterizedSelection,
+            UnavailableReason: parameterizedSelection
+                ? "The native parameterized identity maps to a method filter that runs all data rows for the method."
+                : null);
+    }
+
+    private static bool TryGetParameterizedGenericFilterTerm(
+        ContinuousTestRunRecipeRequest request,
+        string framework,
+        out string? filterTerm)
+    {
+        filterTerm = null;
+        string? genericFramework = GenericFramework(framework);
+        if (!request.IsExact || request.TestSelector is null || genericFramework is null)
+            return false;
+
+        string nativePrefix = genericFramework + ":";
+        foreach (ContinuousTestCase testCase in request.Cases ?? [])
+        {
+            if (!testCase.Id.StartsWith(nativePrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            string nativeSelector = GenericSelectorFromTestCaseId(testCase.Id);
+            if (!string.Equals(nativeSelector, request.TestSelector, StringComparison.Ordinal))
+                continue;
+
+            string candidate = GenericFilterTerm(genericFramework, nativeSelector);
+            string exact = $"{GenericFilterProperty(nativeSelector)}={VsTestFilterValue.Escape(nativeSelector)}";
+            if (GenericDisplayNameFromTestCaseId(testCase.Id) is null
+                && string.Equals(candidate, exact, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            filterTerm = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
     public async Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
         ContinuousTestWorkspace workspace,
         CancellationToken cancellationToken = default)

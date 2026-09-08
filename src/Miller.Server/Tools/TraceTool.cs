@@ -1729,9 +1729,20 @@ public sealed class TraceTool
 
         if (frontendPresent && backendPresent)
         {
+            var uncertainObservations = graph.Nodes.Values
+                .Where(node => node.Kind == BridgeNodeKind.TsType && node.ObservationUncertainty is not null &&
+                    node.ObservationRoute is not null &&
+                    RouteNormalizer.FromClientCall("fetch", node.ObservationRoute).Route == targetRouteKey)
+                .Select(node => node.ObservationUncertainty)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var uncertainty = uncertainObservations.Length == 0
+                ? string.Empty
+                : $" Frontend template evidence is {string.Join(", ", uncertainObservations)}; it does not establish an exact route match.";
             diagnostic = new BridgeRouteDiagnostic(
                 "route_no_bridge_link",
-                $"frontend and backend route facts exist for {targetRoute}, but no bridge link was built for that route.");
+                $"frontend and backend route facts exist for {targetRoute}, but no bridge link was built for that route.{uncertainty}");
             return true;
         }
 
@@ -1952,22 +1963,24 @@ public sealed class TraceTool
         graph.Nodes.Values
             .Where(node => node.Kind == kind &&
                 (providerId is null || graph.ObservationProviders(node.Id).Contains(providerId, StringComparer.Ordinal)))
-            .Select(NodeRouteDisplay)
-            .Where(route => route is not null)
-            .Select(route => (Normalized: RouteNormalizer.FromClientCall("fetch", route!).Route, Display: NormalizeRouteDisplay(route!)))
+            .Select(node => (Node: node, Route: NodeRouteDisplay(node)))
+            .Where(item => item.Route is not null)
+            .Select(item => (Normalized: RouteNormalizer.FromClientCall("fetch", item.Route!).Route,
+                Display: NormalizeRouteDisplay(item.Route!) + (item.Node.ObservationUncertainty is null
+                    ? string.Empty : $" [{item.Node.ObservationUncertainty}]")))
             .Where(route => route.Normalized.Length > 0)
             .GroupBy(route => route.Normalized, StringComparer.Ordinal)
             .Select(group => group.OrderBy(route => route.Display, StringComparer.Ordinal).First())
             .OrderBy(route => route.Display, StringComparer.Ordinal);
 
     private static string? NodeRouteDisplay(BridgeNode node) =>
-        node.Kind switch
+        node.ObservationRoute ?? (node.Kind switch
         {
             BridgeNodeKind.TsType when node.Display.Contains('/', StringComparison.Ordinal) => node.Display,
             BridgeNodeKind.Endpoint => EndpointRouteDisplay(node.Display),
             BridgeNodeKind.FileRoute when node.Display.Contains('/', StringComparison.Ordinal) => node.Display,
             _ => null,
-        };
+        });
 
     private static string? EndpointRouteDisplay(string display)
     {
@@ -3310,6 +3323,8 @@ public sealed class TraceTool
         w.WriteString("id", node.Id);
         w.WriteString("kind", BridgeNodeKindJson(node.Kind));
         w.WriteString("display", node.Display);
+        if (node.ObservationRoute is not null) w.WriteString("observation_route", node.ObservationRoute);
+        if (node.ObservationUncertainty is not null) w.WriteString("observation_uncertainty", node.ObservationUncertainty);
         if (node.FilePath is null) w.WriteNull("file"); else w.WriteString("file", node.FilePath);
         w.WriteNumber("line", node.Line);
         if (role is null) w.WriteNull("role"); else w.WriteString("role", role);

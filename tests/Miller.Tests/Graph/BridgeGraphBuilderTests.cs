@@ -858,6 +858,35 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralFacts_PartialTemplatePreservesObservationWithoutInventingHits()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("htmx.form", "Panel", "component", file: "Panel.razor"),
+            Method("handler", "Start", "void Start()", string.Empty, "Api.cs")
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("request", "htmx.attribute.v1", "razor", "Panel.razor", "htmx.form", 10,
+                new Dictionary<string, string>
+                {
+                    ["target_path"] = "/tests/@Esc(Compute(id))/start",
+                    ["normalized_route_template"] = "/tests/:dynamic/start",
+                    ["route_template_uncertainty"] = "partial",
+                    ["verb"] = "POST"
+                }),
+            Fact("route", "aspnet.minimal_api.route.v1", "csharp", "Api.cs", "handler", 20,
+                new Dictionary<string, string>
+                {
+                    ["route_template"] = "/tests/{id}/start", ["verb"] = "POST", ["handler_name"] = "Start"
+                })
+        };
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+        Assert.DoesNotContain(graph.Edges, edge => edge.Edge.Kind == BridgeKind.Hits);
+        Assert.Contains(graph.Nodes.Values, node => node.Display == "/tests/{}/start [partial]");
+    }
+
+    [Fact]
     public void StructuralFacts_MinimalApiMapMethods_YieldsHitsEdgesForBothVerbs()
     {
         var symbols = new List<SymbolDetail>

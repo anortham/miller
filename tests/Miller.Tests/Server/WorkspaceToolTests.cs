@@ -1186,7 +1186,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(other.DbPath, doc.RootElement.GetProperty("workspace").GetProperty("db").GetString());
         Assert.True(doc.RootElement.GetProperty("index").GetProperty("document_count").GetInt64() > 0);
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
-        Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+        Assert.Equal("unconfirmed", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("index").GetProperty("index_fresh").ValueKind);
         JsonElement leader = doc.RootElement.GetProperty("indexer_leader");
         Assert.Equal(JsonValueKind.Object, leader.ValueKind);
         Assert.True(leader.TryGetProperty("own_extractor_version", out _));
@@ -1358,7 +1359,7 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains(otherRoot, output);
         Assert.Contains("other-111111111111", output);
         Assert.DoesNotContain(OtherWs, output);
-        Assert.Contains("freshness: ready", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("freshness: unconfirmed", output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- health ----

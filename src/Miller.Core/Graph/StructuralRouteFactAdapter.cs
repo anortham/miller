@@ -61,7 +61,9 @@ internal static class StructuralRouteFactAdapter
             verb,
             fact.ContainingSymbolId ?? string.Empty,
             fact.Path,
-            fact.Span.StartLine);
+            fact.Span.StartLine,
+            TemplateUncertain: MetadataString(fact, "route_template_uncertainty") is "partial" or "unknown",
+            TemplateUncertainty: MetadataString(fact, "route_template_uncertainty"));
         return true;
     }
 
@@ -393,7 +395,8 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, LaravelRoutePrefixPattern, StringComparison.Ordinal);
 
     private static string? RouteReferencePath(StructuralFactRecord fact) =>
-        MetadataString(fact, "target_path")
+        (fact.PatternId == HtmxAttributePattern ? MetadataString(fact, "normalized_route_template") : null)
+        ?? MetadataString(fact, "target_path")
         ?? MetadataString(fact, "attribute_value")
         ?? MetadataString(fact, "normalized_route_template")
         ?? MetadataString(fact, "route_template")
@@ -553,7 +556,9 @@ internal sealed record StructuralRouteReference(
     string? Verb,
     string ContainingSymbolId,
     string FilePath,
-    int Line);
+    int Line,
+    bool TemplateUncertain = false,
+    string? TemplateUncertainty = null);
 
 internal sealed record StructuralFileRoute(
     StructuralFactRecord Fact,

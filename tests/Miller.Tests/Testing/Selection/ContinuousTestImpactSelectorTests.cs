@@ -22,6 +22,133 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Declaration_expansion_does_not_propagate_missing_or_mismatched_symbol_links()
+    {
+        var cases = new Dictionary<string, (string? SymbolId, string Selector)>
+        {
+            ["linked:1"] = ("sym:shared", "linked1"),
+            ["linked:2"] = ("sym:shared", "linked2"),
+            ["unlinked:1"] = (null, "unlinked1"),
+            ["unlinked:2"] = (null, "unlinked2"),
+        };
+        var evidence = new List<ContinuousTestSelectionEvidence>
+        {
+            new("linked:1", "linked1", "graph_reference", 0.58, "different declaration", ["sym:different"]),
+            new("unlinked:1", "unlinked1", "graph_reference", 0.58, "no resolved declaration", ["sym:shared"]),
+        };
+        ContinuousTestImpactSelector.ExpandDeclarationEvidence(cases, row => row.SymbolId, row => row.Selector, evidence);
+        Assert.Equal(["linked:1", "unlinked:1"], evidence.Select(row => row.TestCaseId));
+    }
+
+    [Fact]
+    public void Declaration_expansion_adds_at_most_one_proof_per_native_row()
+    {
+        var cases = Enumerable.Range(0, 1000).ToDictionary(index => $"row:{index}",
+            index => (SymbolId: "sym:shared", Selector: $"case[{index}]"), StringComparer.Ordinal);
+        List<ContinuousTestSelectionEvidence> evidence = cases.Select(pair => new ContinuousTestSelectionEvidence(
+            pair.Key, pair.Value.Selector, "impacted_test", 0.88, "shared declaration", ["sym:shared", pair.Key])).ToList();
+        ContinuousTestImpactSelector.ExpandDeclarationEvidence(cases, row => row.SymbolId, row => row.Selector, evidence);
+        Assert.InRange(evidence.Count, cases.Count, cases.Count * 2);
+        Assert.Equal(cases.Count, evidence.Select(row => row.TestCaseId).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(evidence, row => Assert.Contains(row.TestCaseId, row.SourceFactIds));
+    }
+
+    [Theory]
+    [InlineData("csharp", "Cases.cs", "ct-provider:dotnet", true)]
+    [InlineData("vbnet", "Cases.vb", "ct-provider:dotnet", true)]
+    [InlineData("fsharp", "Cases.fs", "ct-provider:dotnet", false)]
+    [InlineData("java", "Cases.java", "ct-provider:jvm", true)]
+    [InlineData("kotlin", "Cases.kt", "ct-provider:jvm", true)]
+    [InlineData("rust", "cases.rs", "ct-provider:rust", true)]
+    public void Source_declaration_selection_covers_every_native_case_only_for_mapped_languages(
+        string language, string path, string provider, bool mapped)
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        foreach (string id in new[] { "row:1", "row:2", "other" })
+        {
+            string name = id == "other" ? "Other" : "Parameterized";
+            store.PutTestCase(new ContinuousTestCase(id, Workspace, name, name, id,
+                FilePath: path, SymbolName: name, SymbolPath: path, Source: provider,
+                Metadata: new Dictionary<string, object?> { ["file_language"] = language }));
+        }
+        var facts = new FakeMillerFactSource();
+        facts.FileFacts.Add(new CtFileFact(path, language, "hash", mapped ? "indexed" : "unsupported", false, mapped));
+        if (mapped)
+        {
+            facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:shared", "Parameterized", path, true, language));
+            facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:other", "Other", path, true, language));
+        }
+        var selector = new ContinuousTestImpactSelector(store, facts);
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(Workspace,
+            ChangedPaths: mapped ? null : [path],
+            ImpactedSymbols: [new ContinuousTestImpactedSymbol(SymbolId: "sym:shared", Path: path, Name: "Parameterized")]));
+        Assert.Equal(mapped ? ["row:1", "row:2"] : Array.Empty<string>(), result.SelectedTestCaseIds.Order(StringComparer.Ordinal));
+        Assert.Equal(mapped ? ContinuousTestSelectionOutcome.Impacted : ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Shared_declaration_does_not_broaden_case_specific_coverage_or_execute_unknown_evidence(bool typedIdentity)
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        foreach (string id in new[] { "row:1", "row:2" })
+            SeedLinkedCase(store, id, "sym:shared", "tests/Cases.cs", "Parameterized", typedIdentity: typedIdentity);
+        var facts = new FakeMillerFactSource();
+        facts.FileFacts.Add(new CtFileFact("tests/Cases.cs", "csharp", "hash", "indexed", false, true));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:shared", "Parameterized", "tests/Cases.cs", true));
+        var coverage = new FakeCoverageFactSource();
+        coverage.Spans.Add(new CtCoverageSpanFact("sym:shared", "row:1", "sym:production", "src/Service.cs", 1));
+        var selector = new ContinuousTestImpactSelector(store, facts, coverage);
+        var request = new ContinuousTestImpactSelectionRequest(Workspace,
+            ImpactedSymbols: [new ContinuousTestImpactedSymbol(SymbolId: "sym:production", Path: "src/Service.cs", Name: "Service")]);
+        ContinuousTestSelectionResult known = selector.Select(request);
+        Assert.Equal(["row:1"], known.SelectedTestCaseIds);
+        Assert.Equal("coverage", Assert.Single(known.Evidence).Tier);
+        facts.ImpactTruncatedByLimit = true;
+        ContinuousTestSelectionResult unknown = selector.Select(request);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, unknown.Outcome);
+        Assert.Empty(unknown.SelectedTestCaseIds);
+    }
+
+    [Fact]
+    public void Background_selection_uses_captured_cases_after_live_store_disposal()
+    {
+        var store = new ContinuousTestStore(DbPath);
+        store.PutTestCase(new ContinuousTestCase("test:snapshot", Workspace, "Test", "Test", "Test",
+            Source: "ct-provider:dotnet"));
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var work = selector.PrepareBackgroundSelection(
+            new ContinuousTestImpactSelectionRequest(Workspace, WorkspaceScope: true), new CtFreshnessKey("gen-1", 1));
+        store.Dispose();
+        var phases = new List<string>();
+
+        ContinuousTestSelectionResult result = work(CancellationToken.None, phases.Add);
+
+        Assert.Equal(["test:snapshot"], result.SelectedTestCaseIds);
+        Assert.Equal(["snapshot", "completed"], phases);
+    }
+
+    [Fact]
+    public void Background_selection_cancellation_prevents_opening_facts()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        int opens = 0;
+        var selector = new ContinuousTestImpactSelector(store, new ReopeningMillerFactSource(() =>
+        {
+            opens++;
+            return new FakeMillerFactSource();
+        }));
+        var work = selector.PrepareBackgroundSelection(
+            new ContinuousTestImpactSelectionRequest(Workspace), new CtFreshnessKey("gen-1", 1));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => work(cancellation.Token, _ => { }));
+        Assert.Equal(0, opens);
+    }
+
+    [Fact]
     public void Confidence_table_matches_eros_weights()
     {
         Assert.Equal(0.78, ContinuousTestImpactSelector.TierConfidence["test_result"]);

@@ -772,11 +772,12 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(1, doc.RootElement.GetProperty("truncated_line_count").GetInt32());
         JsonElement line = Assert.Single(doc.RootElement.GetProperty("lines").EnumerateArray());
         Assert.True(line.GetProperty("truncated").GetBoolean());
-        Assert.EndsWith("…", line.GetProperty("text").GetString(), StringComparison.Ordinal);
+        Assert.Equal(160, line.GetProperty("text").GetString()!.Length);
+        Assert.True(doc.RootElement.TryGetProperty("line_continuation_token", out _));
     }
 
     [Fact]
-    public void Content_Read_JsonTruncationReportsSameLengthReplacement()
+    public void Content_Read_JsonEscapingPreservesCompleteLineWithinBudget()
     {
         string logPath = Path.Combine(_dir, "same-length-truncation.log");
         File.WriteAllText(logPath, new string('a', 156) + "\u0001");
@@ -791,10 +792,10 @@ public sealed class ContentToolTests : IDisposable
             format: "json");
 
         using JsonDocument doc = JsonDocument.Parse(output);
-        Assert.Equal(1, doc.RootElement.GetProperty("truncated_line_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("truncated_line_count").GetInt32());
         JsonElement line = Assert.Single(doc.RootElement.GetProperty("lines").EnumerateArray());
-        Assert.True(line.GetProperty("truncated").GetBoolean());
-        Assert.EndsWith("…", line.GetProperty("text").GetString(), StringComparison.Ordinal);
+        Assert.False(line.GetProperty("truncated").GetBoolean());
+        Assert.Equal(new string('a', 156) + "\u0001", line.GetProperty("text").GetString());
     }
 
     [Fact]
@@ -1228,6 +1229,7 @@ public sealed class ContentToolTests : IDisposable
                 "degraded_workspace_count",
                 "skipped_missing_workspaces",
                 "searched_workspace_count",
+                "skipped_state_workspaces",
                 "diagnostic_code",
                 "degraded_workspaces",
                 "degraded_workspaces_omitted_count",
@@ -2087,6 +2089,69 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
+    public void Content_SearchAll_ReportsSkippedStateWithoutOpeningItsSidecar()
+    {
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("error-row", "error-row", _dir, Path.Combine(_dir, "corrupt.db"));
+            registry.MarkError("error-row", "failed extract");
+        }
+        File.WriteAllText(Path.Combine(_dir, "corrupt.db"), "not sqlite");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string output = tool.Content("search", query: "target", workspace_id: "all", format: "json");
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal(1, doc.RootElement.GetProperty("skipped_state_workspaces").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("searched_workspace_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        Assert.Contains("skipped_state_workspaces=1", tool.Content("search", query: "target", workspace_id: "all"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchAll_InaccessibleRootIsFailureInsteadOfMissing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        string parent = Path.Combine(_dir, "denied");
+        string root = Path.Combine(parent, "workspace");
+        Directory.CreateDirectory(root);
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("denied-row", "denied-row", root, Path.Combine(root, "symbols.db"));
+            registry.MarkScanned("denied-row", revision: 1);
+        }
+        UnixFileMode original = File.GetUnixFileMode(parent);
+        try
+        {
+            File.SetUnixFileMode(parent, UnixFileMode.None);
+            var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+            string output = tool.Content("search", query: "target", workspace_id: "all", format: "json");
+            using var doc = JsonDocument.Parse(output);
+            Assert.Equal(0, doc.RootElement.GetProperty("skipped_missing_workspaces").GetInt32());
+            Assert.Equal(1, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+            Assert.Equal(0, doc.RootElement.GetProperty("searched_workspace_count").GetInt32());
+        }
+        finally
+        {
+            File.SetUnixFileMode(parent, original);
+        }
+    }
+
+    [Fact]
+    public void Content_SearchAll_RejectsUniqueShortSourceOwner()
+    {
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("workspace-full-owner", "full-owner", _dir, _workspace.ExtractDbPath);
+            registry.MarkScanned("workspace-full-owner", revision: 1);
+        }
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string output = tool.Content("search", query: "target", source_id: "workspace-full:external_file:abc",
+            workspace_id: "all", format: "json");
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("unqualified_source_id", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
     public void Content_SearchAll_SkipsMissingRootsWithoutProbingOrDegrading()
     {
         using var fixture = JulieDbFixture.Create(
@@ -2631,6 +2696,60 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("ambiguous", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("json", 1000)]
+    [InlineData("json", 32000)]
+    [InlineData("compact", 32000)]
+    public void Content_Read_UnicodePagesReconstructExactlyWithinMcpBudget(string format, int width)
+    {
+        string expected = string.Concat(Enumerable.Repeat("Aé🙂漢", 4000));
+        string path = Path.Combine(_dir, "unicode-pages.log");
+        File.WriteAllText(path, expected + "\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: path, display_path: "unicode-pages.log");
+        var reconstructed = new StringBuilder();
+        string? continuation = null;
+        do
+        {
+            string output = tool.Content("read", source_id: "unicode-pages.log", line: 1,
+                context_lines: 0, max_line_chars: width, continuation: continuation, format: format);
+            Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.ContentMcpMaxBytes);
+            string text;
+            if (format == "json")
+            {
+                using var doc = JsonDocument.Parse(output);
+                var row = doc.RootElement.GetProperty("lines")[0];
+                text = row.GetProperty("text").GetString()!;
+                if (row.TryGetProperty("char_length", out var length))
+                    Assert.Equal(text.Length, length.GetInt32());
+                continuation = doc.RootElement.TryGetProperty("line_continuation_token", out var token)
+                    ? token.GetString() : null;
+            }
+            else
+            {
+                text = output.Split('\n').Single(line => line.StartsWith("    1: ", StringComparison.Ordinal))[7..];
+                string? action = output.Split('\n').FirstOrDefault(line => line.StartsWith("continuation:", StringComparison.Ordinal));
+                continuation = action?.Split(" continuation=", StringSplitOptions.None)[1];
+            }
+            Assert.NotEmpty(text);
+            reconstructed.Append(text);
+            Assert.True(reconstructed.Length <= expected.Length);
+        } while (continuation is not null);
+        Assert.Equal(expected, reconstructed.ToString());
+    }
+
+    [Fact]
+    public void Content_Search_UnknownSourceReturnsTypedFailure()
+    {
+        string path = Path.Combine(_dir, "known-search.log");
+        File.WriteAllText(path, "dogfood target\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: path);
+        string output = tool.Content("search", source_id: "external_file:unknown", query: "target", format: "json");
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("source_not_found", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
     [Fact]
     public void Content_Read_LongLine_ReturnsTruncatedSliceAndContinuationToken()
     {
@@ -2660,6 +2779,33 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(100, lineElem.GetProperty("char_length").GetInt32());
         Assert.Equal(500, lineElem.GetProperty("total_chars").GetInt32());
         Assert.Equal(new string('a', 100), lineElem.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void Content_Read_Continuation_RejectsIdenticalImportInAnotherWorkspace()
+    {
+        string logPath = Path.Combine(_dir, "shared-line.log");
+        File.WriteAllText(logPath, new string('a', 500) + "\n");
+        string secondRoot = Path.Combine(_dir, "second");
+        Directory.CreateDirectory(secondRoot);
+        var secondWorkspace = _workspace with
+        {
+            WorkspaceRoot = secondRoot,
+            ExtractDbPath = Path.Combine(secondRoot, ".miller", "symbols.db"),
+            WorkspaceId = "workspace-2",
+        };
+        var first = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        var second = new ContentTool(secondWorkspace, new ContentCorpusExternalStore());
+        first.Content("import", path: logPath, display_path: "shared-line.log");
+        second.Content("import", path: logPath, display_path: "shared-line.log");
+        using var page = JsonDocument.Parse(first.Content("read", source_id: "shared-line.log", line: 1,
+            context_lines: 0, max_line_chars: 100, format: "json"));
+        string token = page.RootElement.GetProperty("line_continuation_token").GetString()!;
+
+        string output = second.Content("read", source_id: "shared-line.log", line: 1,
+            context_lines: 0, max_line_chars: 100, continuation: token, format: "json");
+
+        Assert.Contains("continuation_workspace_mismatch", output, StringComparison.Ordinal);
     }
 
     [Fact]

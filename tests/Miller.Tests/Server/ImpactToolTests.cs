@@ -2041,6 +2041,102 @@ public sealed class ImpactToolTests
         Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
     }
 
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("generation")]
+    [InlineData("tests_limit")]
+    [InlineData("symbols_limit")]
+    [InlineData("target")]
+    public void Impact_PopulationContinuation_RejectsChangedSnapshotOrRequest(string change)
+    {
+        var (index, _) = BuildManyImpactedFixture(impactedCount: 250);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-identity-" + Guid.NewGuid().ToString("N"));
+        var original = ReadToolRoutingTestSupport.ContextFor(index, "impact-original.db", "current", root);
+        var firstTool = new ImpactTool(new RecordingWorkspaceIndexProvider(original));
+        using JsonDocument first = JsonDocument.Parse(firstTool.Impact(
+            target: "Validate", max_depth: 1, limit: 1000, format: "json", tests_limit: 500, symbols_limit: 500));
+        string continuation = first.RootElement.GetProperty("continuation").GetString()!;
+        var nextContext = change switch
+        {
+            "revision" => original with { Revision = original.Revision + 1 },
+            "generation" => ReadToolRoutingTestSupport.ContextFor(index, "impact-rebuilt.db", "current", root),
+            _ => original
+        };
+        var nextTool = new ImpactTool(new RecordingWorkspaceIndexProvider(nextContext));
+        using JsonDocument next = JsonDocument.Parse(nextTool.Impact(
+            target: change == "target" ? ValidateId : "Validate",
+            max_depth: 1, limit: 1000, format: "json", continuation: continuation,
+            tests_limit: change == "tests_limit" ? 501 : 500,
+            symbols_limit: change == "symbols_limit" ? 501 : 500));
+        Assert.Equal("stale_continuation", next.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Impact_PopulationContinuation_ReusesRenderedPageWithoutTraversing()
+    {
+        var (index, _) = BuildManyImpactedFixture(impactedCount: 250);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-cache-" + Guid.NewGuid().ToString("N"));
+        var context = ReadToolRoutingTestSupport.ContextFor(index, "impact-cache.db", "current", root);
+        var graph = new CountingReachGraph(context.Graph);
+        var tool = new ImpactTool(new RecordingWorkspaceIndexProvider(context with { Graph = graph }));
+        using JsonDocument first = JsonDocument.Parse(tool.Impact(
+            target: "Validate", max_depth: 1, limit: 1000, format: "json", tests_limit: 500));
+        string? continuation = first.RootElement.GetProperty("continuation").GetString();
+        var ids = first.RootElement.GetProperty("impacted").EnumerateArray()
+            .Select(row => row.GetProperty("symbol_id").GetString()!).ToList();
+        int calls = graph.Calls;
+        Assert.True(calls > 0);
+        Assert.NotNull(continuation);
+        while (continuation is not null)
+        {
+            string output = tool.Impact(target: "Validate", max_depth: 1, limit: 1000,
+                format: "json", tests_limit: 500, continuation: continuation);
+            Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.ImpactMcpMaxBytes);
+            using JsonDocument next = JsonDocument.Parse(output);
+            Assert.Equal("impact_result_page", next.RootElement.GetProperty("kind").GetString());
+            ids.AddRange(next.RootElement.GetProperty("impacted").EnumerateArray()
+                .Select(row => row.GetProperty("symbol_id").GetString()!));
+            continuation = next.RootElement.GetProperty("continuation").GetString();
+            Assert.Equal(calls, graph.Calls);
+        }
+        Assert.Equal(250, ids.Count);
+        Assert.Equal(250, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public void Impact_PopulationContinuation_RefusesChangedGitDiffAtSameIndexRevision()
+    {
+        var (index, _) = BuildManyImpactedFixture(impactedCount: 250);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-git-cache-" + Guid.NewGuid().ToString("N"));
+        var context = ReadToolRoutingTestSupport.ContextFor(index, "impact-git-cache.db", "current", root);
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(ValidateDiff()), GitDiffResult.Ok(ValidateDiff() + "\n"));
+        var tool = new ImpactTool(new RecordingWorkspaceIndexProvider(context), git);
+        using var first = JsonDocument.Parse(tool.Impact(git: true, max_depth: 1,
+            limit: 1000, tests_limit: 500, format: "json"));
+        string continuation = first.RootElement.GetProperty("continuation").GetString()!;
+        using var next = JsonDocument.Parse(tool.Impact(git: true, max_depth: 1,
+            limit: 1000, tests_limit: 500, format: "json", continuation: continuation));
+        Assert.Equal("stale_continuation", next.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Equal(2, git.Requests.Count);
+    }
+
+    private sealed class CountingReachGraph(ISymbolGraphReachability inner) : ISymbolGraphReachability
+    {
+        public int Calls { get; private set; }
+
+        public GraphReachResult ReachWithEvidence(IEnumerable<string> starts, int maxDepth, int limit, Direction dir)
+        {
+            Calls++;
+            return inner.ReachWithEvidence(starts, maxDepth, limit, dir);
+        }
+
+        public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
+            inner.ShortestPath(from, to, maxDepth);
+
+        public GraphPath? ShortestPathWithEvidence(string from, string to, int maxDepth,
+            Func<GraphNeighbour, bool> edgeFilter) => inner.ShortestPathWithEvidence(from, to, maxDepth, edgeFilter);
+    }
+
     [Fact]
     public void Impact_GitFlag_UsesWorkspaceRootDiff()
     {

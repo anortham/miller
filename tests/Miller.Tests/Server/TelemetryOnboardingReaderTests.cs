@@ -151,6 +151,37 @@ public sealed class TelemetryOnboardingReaderTests : IDisposable
     }
 
     [Fact]
+    public void Read_Dormant_workspace_preserves_separately_dated_historical_flows()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-history")) { }
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-09-08T12:00:00Z", CultureInfo.InvariantCulture);
+        Insert("2026-08-25T10:00:00.000Z", "search", "auto", "ws-history", "ok", 20, 1, 50, 10, null);
+        Insert("2026-08-25T10:00:20.000Z", "inspect", "summary", "ws-history", "ok", 20, 1, 50, 10, null);
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-history", anchor: anchor);
+        Assert.Equal(0, facts.TotalCalls);
+        Assert.Empty(facts.SuccessfulFlows);
+        Assert.Empty(facts.Friction);
+        var json = System.Text.Json.JsonSerializer.SerializeToElement(facts);
+        Assert.True(json.TryGetProperty("HistoricalSuccessfulFlows", out var history));
+        Assert.Single(history.EnumerateArray());
+        Assert.Equal(7, json.GetProperty("CurrentWindow").GetProperty("Days").GetInt32());
+        Assert.Equal(30, json.GetProperty("HistoricalWindow").GetProperty("Days").GetInt32());
+        Assert.Equal(anchor, json.GetProperty("HistoricalWindow").GetProperty("EndUtc").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public void Read_Anchored_windows_exclude_future_rows()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-future")) { }
+        DateTimeOffset anchor = DateTimeOffset.Parse("2026-09-08T12:00:00Z", CultureInfo.InvariantCulture);
+        Insert("2026-09-09T10:00:00.000Z", "search", "auto", "ws-future", "error", 20, 0, 50, 10, null);
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-future", anchor: anchor);
+        Assert.Equal(0, facts.TotalCalls);
+        Assert.Empty(facts.ToolMix);
+        Assert.Empty(facts.CommonMisses);
+    }
+
+    [Fact]
     public void Read_DormantWorkspace_ReturnsSparseWithZeroCalls()
     {
         using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-dormant"))

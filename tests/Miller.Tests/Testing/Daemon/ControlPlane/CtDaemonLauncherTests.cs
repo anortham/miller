@@ -35,6 +35,24 @@ public sealed class CtDaemonLauncherTests : IDisposable
         Assert.True(File.Exists(path));
     }
 
+    [Theory]
+    [InlineData("dotnet")]
+    [InlineData("dotnet.exe")]
+    public void ResolveExecutablePath_DotnetHostUsesEntryAssembly(string hostName)
+    {
+        string host = Path.Combine(_root, hostName);
+        string assembly = Path.Combine(_root, "miller.dll");
+        File.WriteAllText(assembly, "assembly");
+        Assert.Equal(assembly, CtDaemonLauncher.ResolveExecutablePath(host, assembly));
+    }
+
+    [Fact]
+    public void ResolveExecutablePath_ApphostKeepsNativeExecutable()
+    {
+        string host = Path.Combine(_root, "miller");
+        Assert.Equal(host, CtDaemonLauncher.ResolveExecutablePath(host, Path.Combine(_root, "miller.dll")));
+    }
+
     [Fact]
     public void SpawnDetached_RefusesSensitiveRoot_BeforeCreatingControlPlane()
     {

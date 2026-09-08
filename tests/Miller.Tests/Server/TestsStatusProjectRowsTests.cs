@@ -34,6 +34,42 @@ public sealed class TestsStatusProjectRowsTests : IDisposable
     }
 
     [Fact]
+    public void Daemon_adoption_records_discovered_projects_for_cheap_status_reads()
+    {
+        string project = Path.Combine(_root, "Sample.csproj");
+        File.WriteAllText(project, "<Project><ItemGroup><PackageReference Include=\"xunit.v3\" Version=\"3.2.2\" /></ItemGroup></Project>");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        Assert.Single(TestsCore.LoadDaemonProjects(_root, _workspaceId, store));
+        Assert.Equal(project, Assert.Single(store.ListContinuousTestProjects(_workspaceId)).ProjectPath);
+    }
+
+    [Fact]
+    public void Daemon_adoption_does_not_rediscover_explicitly_disabled_projects()
+    {
+        string project = Path.Combine(_root, "Sample.csproj");
+        File.WriteAllText(project, "<Project><ItemGroup><PackageReference Include=\"xunit.v3\" Version=\"3.2.2\" /></ItemGroup></Project>");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutContinuousTestProject(new ContinuousTestProject("disabled", _workspaceId, project,
+            Framework: "xunit", Enabled: false));
+        Assert.Empty(TestsCore.LoadDaemonProjects(_root, _workspaceId, store));
+        Assert.False(Assert.Single(store.ListContinuousTestProjects(_workspaceId, includeDisabled: true)).Enabled);
+    }
+
+    [Fact]
+    public void Opted_in_workspace_without_recorded_projects_reports_inventory_without_writing_store()
+    {
+        string project = Path.Combine(_root, "Sample.csproj");
+        File.WriteAllText(project, "<Project><ItemGroup><PackageReference Include=\"xunit.v3\" Version=\"3.2.2\" /></ItemGroup></Project>");
+        string marker = ContinuousTestPolicy.EnabledMarkerPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, "");
+        TestsStatusResult status = TestsCore.Status(Request(FactsHooks("gen-live", 1)));
+        Assert.Equal(project, Assert.Single(status.Projects).ProjectPath);
+        Assert.True(status.ProjectsDiscovered);
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+    }
+
+    [Fact]
     public void Status_reports_each_projects_counts_verdict_and_last_run()
     {
         string green = PutProject("p-green", "tests/Green.Tests/Green.Tests.csproj");

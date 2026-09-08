@@ -163,7 +163,8 @@ internal static class CrossToolHandoff
             ContinuousTestRunRecipe? recipe = TestsCore.GetRunRecipe(req, testFilePath: sampleFile);
             if (recipe is not null && !string.IsNullOrWhiteSpace(recipe.PrimaryCommand))
             {
-                return NextStepHint.Render(recipe.PrimaryCommand, "run tests directly to verify changes");
+                return "# test command\n" + recipe.PrimaryCommand + "\n"
+                    + NextStepHint.Render("run the direct recipe above", "run tests directly to verify changes");
             }
             return null;
         }
@@ -226,7 +227,7 @@ internal static class CrossToolHandoff
         {
             if (runnerRecipe is not null && !string.IsNullOrWhiteSpace(runnerRecipe.PrimaryCommand))
             {
-                return NextStepHint.Render(runnerRecipe.PrimaryCommand, "run likely impacted tests directly");
+                return NextStepHint.Render("run the direct recipe above", "run likely impacted tests directly");
             }
             return null;
         }

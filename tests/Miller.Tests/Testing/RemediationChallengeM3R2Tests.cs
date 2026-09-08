@@ -205,7 +205,7 @@ public sealed class RemediationChallengeM3R2Tests : IDisposable
     }
 
     [Fact]
-    public async Task C3_ExplicitRun_WithProjects_ZeroImpactedTests_AckReasonIsRun_AndStateIsCompleted()
+    public async Task C3_ExplicitRun_WithProjects_ZeroImpactedTests_ReachesTerminalCompleted()
     {
         BuildLinkedWorktree();
         EnableMain();
@@ -248,7 +248,6 @@ public sealed class RemediationChallengeM3R2Tests : IDisposable
         {
             await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
 
-            // Issue an explicit routed run with reason: "run"
             CtDaemonCommandRequest rerun = CtDaemonRouting.WriteRoutedRequest(
                 _mainRoot,
                 CtDaemonCommandKind.Run,
@@ -256,13 +255,18 @@ public sealed class RemediationChallengeM3R2Tests : IDisposable
                 freshness: freshness,
                 targetWorkspaceRoot: _worktreeRoot);
 
-            CtDaemonCommandAck? rerunAck = await Task.Run(() => CtCommandChannel.WaitForAck(
-                _mainRoot,
-                rerun.CommandId,
-                TimeSpan.FromSeconds(5)));
+            CtDaemonCommandAck? rerunAck = null;
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (deadline.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                rerunAck = CtCommandChannel.TryReadAck(_mainRoot, rerun.CommandId);
+                if (rerunAck?.State == CtDaemonCommandState.Completed)
+                    break;
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
 
             Assert.NotNull(rerunAck);
-            Assert.Equal("run", rerunAck.Reason);
+            Assert.Equal("completed", rerunAck.Reason);
             Assert.Equal(CtDaemonCommandState.Completed, rerunAck.State);
         }
         finally

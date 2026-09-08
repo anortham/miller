@@ -194,6 +194,9 @@ public sealed class GodotTestProvider : IContinuousTestProvider
         }
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request) =>
+        GodotDirectRunRecipe.Build(request);
+
     public static bool IsGodotProjectFile(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

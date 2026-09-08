@@ -42,7 +42,9 @@ public sealed record TsClientCall(
     bool IsTest,
     string FilePath,
     int Line,
-    string? AttestedVerb = null);
+    string? AttestedVerb = null,
+    bool TemplateUncertain = false,
+    string? TemplateUncertainty = null);
 
 /// <summary>
 /// A C# controller action endpoint, already reduced from julie's <c>symbol_annotations</c> + the parent class
@@ -169,7 +171,7 @@ public static class RouteBridge
         var normalizedCalls = new List<(TsClientCall Call, NormalizedRoute Route)>();
         foreach (var call in input.ClientCalls)
         {
-            if (!IsRealClientCall(call))
+            if (call.TemplateUncertain || !IsRealClientCall(call))
                 continue;
             normalizedCalls.Add((call, NormalizeClientCall(call)));
         }

@@ -51,6 +51,10 @@ split erodes).
   fail) when `.tools/julie-extract` or a provider toolchain is missing.
 - **Never rerun a green suite on an unchanged tree.** Cite the prior run instead.
 
+For ongoing verdicts in an opted-in workspace, use Miller `tests status` after edits and
+`tests run wait=true` when idle, with the explicit workspace ID and the reported run scope.
+When CT is off, keep using the focused test commands above; status does not enable it.
+
 Rules when adding tests:
 
 - A test that spawns `julie-extract` MUST be `[Trait("Category","Scale")]` at class level and MUST

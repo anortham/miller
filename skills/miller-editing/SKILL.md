@@ -1,7 +1,7 @@
 ---
 name: miller-editing
 description: Use before changing existing indexed files with Miller edit, especially symbol rewrites, text replacements, renames, or refactors.
-allowed-tools: mcp__miller__edit, mcp__miller__inspect, mcp__miller__impact, mcp__miller__search, mcp__miller__workspace, mcp__miller__tests
+allowed-tools: mcp__miller__edit, mcp__miller__inspect, mcp__miller__impact, mcp__miller__search, mcp__miller__workspace, mcp__miller__tests, mcp__plugin_miller_miller__edit, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__impact, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__tests
 ---
 
 # Miller Editing

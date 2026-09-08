@@ -2,6 +2,7 @@ using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Tools;
 using Miller.Testing;
+using Miller.Testing.Providers.Jvm;
 using Xunit;
 
 namespace Miller.Tests.Testing;
@@ -29,6 +30,210 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         {
             // best effort
         }
+    }
+
+    [Theory]
+    [InlineData("xunit", "Sample.csproj")]
+    [InlineData("qml", "CMakeLists.txt")]
+    public void Providers_without_custom_command_mapping_do_not_discard_the_override(string framework, string projectName)
+    {
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            Path.Combine(_workspaceRoot, projectName), framework, ConfiguredCommand: "custom-runner --scope special"));
+        Assert.Empty(recipe.Steps);
+        Assert.Contains("custom", recipe.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Copyable_single_step_recipe_includes_the_provider_working_directory()
+    {
+        string directory = Path.Combine(_workspaceRoot, "sub project");
+        var recipe = new ContinuousTestRunRecipe("ws", Path.Combine(directory, "composer.json"), "phpunit",
+            directory, [new TestRunStep("phpunit", [], directory)], TestSelectorScope.ProjectSuite);
+        Assert.Contains(directory, recipe.PrimaryCommand, StringComparison.Ordinal);
+        Assert.Contains(OperatingSystem.IsWindows() ? "Set-Location" : "cd --", recipe.PrimaryCommand, StringComparison.Ordinal);
+        Assert.Contains("-ErrorAction Stop", recipe.ToExecutableScript(isWindows: true), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Qml_recipe_does_not_silently_ignore_trait_exclusions()
+    {
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            Path.Combine(_workspaceRoot, "CMakeLists.txt"), "qml", ExcludeTraits: ["slow"]));
+        Assert.Empty(recipe.Steps);
+        Assert.Contains("exclusion", recipe.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Disabled_status_recipe_covers_all_known_projects()
+    {
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_workspaceRoot));
+        foreach (string name in new[] { "One", "Two" })
+        {
+            string project = Path.Combine(_workspaceRoot, name + ".csproj");
+            File.WriteAllText(project, "<Project />");
+            store.PutContinuousTestProject(new ContinuousTestProject(project, "ws", project, Framework: "xunit"));
+        }
+        ContinuousTestRunRecipe? recipe = TestsCore.GetRunRecipe(new TestsCoreRequest(_workspaceRoot, WorkspaceId: "ws"));
+        Assert.NotNull(recipe);
+        Assert.Equal(TestSelectorScope.ProjectSet, recipe.Scope);
+        Assert.Equal(2, recipe.ProjectPaths?.Count);
+        Assert.Equal(2, recipe.Steps.Count);
+    }
+
+    [Fact]
+    public void Python_recipe_preserves_custom_marker_selection_when_adding_exclusions()
+    {
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            Path.Combine(_workspaceRoot, "pyproject.toml"), "pytest", ExcludeTraits: ["slow"],
+            ConfiguredCommand: "python -m pytest -m fast"));
+        Assert.Equal(["-m", "pytest", "-m", "(fast) and (not slow)"], recipe.Steps[0].Arguments);
+        Assert.Equal("python", recipe.Steps[0].Executable);
+    }
+
+    [Fact]
+    public void Javascript_recipe_keeps_the_existing_package_script_configuration()
+    {
+        string project = Path.Combine(_workspaceRoot, "package.json");
+        File.WriteAllText(project, """{"scripts":{"test":"vitest run --config custom.config.ts"}}""");
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            project, "vitest"));
+        Assert.Equal("npm", recipe.Steps[0].Executable);
+        Assert.Equal(["run", "test", "--"], recipe.Steps[0].Arguments);
+    }
+
+    [Fact]
+    public void Impact_recipe_includes_every_containing_project_and_preserves_stored_exclusions()
+    {
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_workspaceRoot));
+        string first = Path.Combine(_workspaceRoot, "one", "One.csproj");
+        string second = Path.Combine(_workspaceRoot, "two", "Two.csproj");
+        foreach (string path in new[] { first, second })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "<Project />");
+            store.PutContinuousTestProject(new ContinuousTestProject(path, "ws", path,
+                Framework: "xunit", ExcludeTraits: ["Category=Scale"]));
+        }
+        ContinuousTestRunRecipe? recipe = TestsCore.GetImpactRunRecipe(new TestsCoreRequest(_workspaceRoot, WorkspaceId: "ws"),
+            ["one/Test.cs", "two/Test.cs"]);
+
+        Assert.NotNull(recipe);
+        Assert.Equal(TestSelectorScope.ProjectSet, recipe.Scope);
+        Assert.Equal(2, recipe.Steps.Count);
+        Assert.Equal([first, second], recipe.ProjectPaths);
+        Assert.All(recipe.Steps, step => Assert.Contains("Category!=Scale", step.Arguments));
+        Assert.False(recipe.IsExact);
+        Assert.Contains("2 containing project suites", recipe.UnavailableReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Recipe_kill_switch_does_not_read_an_unreadable_ct_store()
+    {
+        Directory.CreateDirectory(Path.Combine(_workspaceRoot, ".miller"));
+        File.WriteAllText(CtSchema.DbPathFor(_workspaceRoot), "invalid sqlite database");
+        ContinuousTestRunRecipe? recipe = TestsCore.GetRunRecipe(new TestsCoreRequest(
+            _workspaceRoot, KillSwitch: "off"));
+        Assert.Null(recipe);
+    }
+
+    [Fact]
+    public void Node_recipe_filters_literal_test_names_before_file_arguments()
+    {
+        string file = Path.Combine(_workspaceRoot, "sample.test.js");
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", _workspaceRoot, Path.Combine(_workspaceRoot, "package.json"), "node:test",
+            TestSelector: "target [x]", TestFilePath: file, IsExact: true));
+
+        Assert.Equal(["--test", "--test-name-pattern", @"^target \[x]$", "sample.test.js"], recipe.Steps[0].Arguments);
+    }
+
+    [Theory]
+    [InlineData("xunit", "--filter-not-trait", "Category=Scale")]
+    [InlineData("mstest", "--filter", "TestCategory!=Scale")]
+    [InlineData("nunit", "--filter", "Category!=Scale")]
+    public void Mtp_recipe_uses_project_driver_and_framework_owned_exclusions(string framework, string option, string filter)
+    {
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            Path.Combine(_workspaceRoot, "Tests.csproj"), framework, ExcludeTraits: ["Category=Scale"],
+            ProjectMetadata: new Dictionary<string, object?> { ["dotnet_global_json_test_runner"] = "Microsoft.Testing.Platform" }));
+        Assert.Equal(["test", "--project"], recipe.Steps[0].Arguments.Take(2));
+        Assert.Contains(option, recipe.Steps[0].Arguments);
+        Assert.Contains(filter, recipe.Steps[0].Arguments);
+    }
+
+    [Fact]
+    public void Mtp_xunit_method_recipe_reports_every_matching_theory_row()
+    {
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", _workspaceRoot, Path.Combine(_workspaceRoot, "Tests.csproj"), "xunit",
+            TestSelector: "Sample.Tests.Rows.Positive", Scope: TestSelectorScope.SingleTest, IsExact: true,
+            ProjectMetadata: new Dictionary<string, object?>
+            {
+                ["dotnet_global_json_test_runner"] = "Microsoft.Testing.Platform",
+            }));
+
+        Assert.False(recipe.IsExact);
+        Assert.Equal(TestSelectorScope.MatchingTests, recipe.Scope);
+        Assert.Contains("every theory row", recipe.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Dotnet_recipe_excludes_configured_traits_instead_of_selecting_them()
+    {
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", _workspaceRoot, Path.Combine(_workspaceRoot, "Tests.csproj"), "xunit",
+            TestSelector: "Name&(Other)", ExcludeTraits: ["Category=Scale"]));
+
+        Assert.Contains(@"(FullyQualifiedName~Name\&\(Other\))&(Category!=Scale)", recipe.Steps[0].Arguments);
+        Assert.False(recipe.IsExact);
+    }
+
+    [Theory]
+    [InlineData("mstest", "mstest:Sample.Tests.Rows.Positive::display=Positive (1)",
+        "Sample.Tests.Rows.Positive", "FullyQualifiedName=Sample.Tests.Rows.Positive", "TestCategory!=Scale")]
+    [InlineData("nunit", "nunit:Sample.Tests.Rows.Positive(1)",
+        "Sample.Tests.Rows.Positive(1)", "FullyQualifiedName=Sample.Tests.Rows.Positive", "Category!=Scale")]
+    public void Dotnet_parameterized_native_ids_report_the_method_scope_the_recipe_executes(
+        string framework,
+        string nativeId,
+        string selector,
+        string expectedSelection,
+        string expectedExclusion)
+    {
+        var testCase = new ContinuousTestCase(nativeId, "ws", "Positive", selector, selector,
+            Framework: framework, Source: "ct-provider:dotnet");
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "ws", _workspaceRoot, Path.Combine(_workspaceRoot, "Tests.csproj"), framework,
+            TestSelector: selector, Scope: TestSelectorScope.SingleTest, ExcludeTraits: ["Category=Scale"],
+            IsExact: true, Cases: [testCase]));
+
+        Assert.False(recipe.IsExact);
+        Assert.Equal(TestSelectorScope.MatchingTests, recipe.Scope);
+        Assert.Contains("parameterized", recipe.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+        int filterIndex = recipe.Steps[0].Arguments.ToList().IndexOf("--filter");
+        string filter = recipe.Steps[0].Arguments[filterIndex + 1];
+        Assert.Contains(expectedSelection, filter, StringComparison.Ordinal);
+        Assert.Contains(expectedExclusion, filter, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, "'a'\"'\"'b;$(echo bad)&c'")]
+    [InlineData(true, "'a''b;$(echo bad)&c'")]
+    public void Recipe_shell_rendering_preserves_quotes_and_command_metacharacters(bool windows, string expected)
+    {
+        var step = new TestRunStep("runner", ["a'b;$(echo bad)&c"], _workspaceRoot);
+        Assert.Equal("runner " + expected, step.RenderCommand(windows));
+    }
+
+    [Fact]
+    public void Recipe_scripts_change_to_each_step_directory_and_stop_on_failure()
+    {
+        var recipe = new ContinuousTestRunRecipe("ws", "project", "test", _workspaceRoot,
+            [new TestRunStep("runner", [], _workspaceRoot)], TestSelectorScope.ProjectSuite);
+
+        Assert.Contains("cd -- ", recipe.ToExecutableScript());
+        Assert.Contains("Set-Location -LiteralPath", recipe.ToExecutableScript(isWindows: true));
+        Assert.Contains("$LASTEXITCODE", recipe.ToExecutableScript(isWindows: true));
     }
 
     [Fact]
@@ -98,7 +303,8 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             Framework: "pytest",
             TestSelector: "test_addition",
             TestFilePath: testFilePath,
-            Scope: TestSelectorScope.SingleTest);
+            Scope: TestSelectorScope.SingleTest,
+            IsExact: true);
 
         ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(request);
         Assert.Equal("uv", recipe.Steps[0].Executable);
@@ -125,11 +331,14 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             Framework: "vitest",
             TestSelector: "renders properly",
             TestFilePath: testFile,
-            Scope: TestSelectorScope.SingleTest);
+            Scope: TestSelectorScope.SingleTest,
+            IsExact: true);
 
         ContinuousTestRunRecipe vitestRecipe = ContinuousTestRecipeBuilder.Build(vitestReq);
-        Assert.Equal("npx", vitestRecipe.Steps[0].Executable);
-        Assert.Equal(["vitest", "run", "test/foo.test.ts", "-t", "renders properly"], vitestRecipe.Steps[0].Arguments);
+        Assert.EndsWith("vitest" + (OperatingSystem.IsWindows() ? ".cmd" : ""), vitestRecipe.Steps[0].Executable, StringComparison.Ordinal);
+        Assert.Equal(["run", "-t", "^renders properly$"], vitestRecipe.Steps[0].Arguments.Take(3));
+        Assert.Equal(testFile, vitestRecipe.Steps[0].Arguments[^1]);
+        Assert.Contains("--exclude", vitestRecipe.Steps[0].Arguments);
 
         // Jest
         var jestReq = new ContinuousTestRunRecipeRequest(
@@ -139,11 +348,12 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             Framework: "jest",
             TestSelector: "renders properly",
             TestFilePath: testFile,
-            Scope: TestSelectorScope.SingleTest);
+            Scope: TestSelectorScope.SingleTest,
+            IsExact: true);
 
         ContinuousTestRunRecipe jestRecipe = ContinuousTestRecipeBuilder.Build(jestReq);
-        Assert.Equal("npx", jestRecipe.Steps[0].Executable);
-        Assert.Equal(["jest", "test/foo.test.ts", "-t", "renders properly"], jestRecipe.Steps[0].Arguments);
+        Assert.EndsWith("jest" + (OperatingSystem.IsWindows() ? ".cmd" : ""), jestRecipe.Steps[0].Executable, StringComparison.Ordinal);
+        Assert.Equal(["-t", "^renders properly$", "--runTestsByPath", testFile], jestRecipe.Steps[0].Arguments);
     }
 
     [Fact]
@@ -159,12 +369,37 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             ProjectPath: cargoToml,
             Framework: "cargo",
             TestSelector: "tests::test_foo",
-            Scope: TestSelectorScope.SingleTest);
+            Scope: TestSelectorScope.SingleTest,
+            Cases: [new ContinuousTestCase("rust-test:demo::lib/demo::tests::test_foo", "ws1",
+                "test_foo", "tests::test_foo", "tests::test_foo", Source: "ct-provider:rust")]);
 
         ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(request);
         Assert.Equal("cargo", recipe.Steps[0].Executable);
-        Assert.Equal(["test", "--", "tests::test_foo", "--exact"], recipe.Steps[0].Arguments);
-        Assert.Equal("cargo test -- tests::test_foo --exact", recipe.PrimaryCommand);
+        Assert.Equal(["test", "-p", "demo", "--lib"], recipe.Steps[0].Arguments.Take(4));
+        Assert.Equal(["--", "--exact", "tests::test_foo"], recipe.Steps[0].Arguments.TakeLast(3));
+        Assert.True(recipe.IsExact);
+    }
+
+    [Fact]
+    public void Rust_recipe_preserves_custom_command_and_all_known_target_groups()
+    {
+        string project = Path.Combine(_workspaceRoot, "Cargo.toml");
+        var custom = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            project, "cargo", ConfiguredCommand: "cargo nextest run --profile 'ci slow'"));
+        Assert.Equal(["nextest", "run", "--profile", "ci slow"], custom.Steps[0].Arguments.Take(4));
+        Assert.False(custom.IsExact);
+        var grouped = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _workspaceRoot,
+            project, "cargo", IsExact: true, Cases:
+            [
+                new ContinuousTestCase("rust-test:one::lib/one::selected", "ws", "selected", "selected", "selected", Source: "ct-provider:rust"),
+                new ContinuousTestCase("rust-test:two::test/integration::selected", "ws", "selected", "selected", "selected", Source: "ct-provider:rust"),
+            ]));
+        Assert.Equal(2, grouped.Steps.Count);
+        Assert.Contains("one", grouped.Steps[0].Arguments);
+        Assert.Contains("two", grouped.Steps[1].Arguments);
+        Assert.Contains("--lib", grouped.Steps[0].Arguments);
+        Assert.Contains("--test", grouped.Steps[1].Arguments);
+        Assert.Contains("integration", grouped.Steps[1].Arguments);
     }
 
     [Fact]
@@ -179,12 +414,16 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             WorkspaceRoot: _workspaceRoot,
             ProjectPath: goMod,
             Framework: "go",
-            TestSelector: "TestSpecial(Case)",
-            Scope: TestSelectorScope.SingleTest);
+            TestSelector: "TestSpecial/(Case)",
+            TestFilePath: Path.Combine(goDir, "sample_test.go"),
+            Scope: TestSelectorScope.SingleTest,
+            IsExact: true);
 
         ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(request);
-        Assert.Equal("go", recipe.Steps[0].Executable);
-        Assert.Equal(["test", "-run", @"^TestSpecial\(Case\)$", "./..."], recipe.Steps[0].Arguments);
+        Assert.Equal("go", recipe.Steps[^1].Executable);
+        Assert.Equal(["test", "-json", "-count=1", "-run", @"^(?:TestSpecial)$/^(?:\(Case\))$", "."], recipe.Steps[^1].Arguments);
+        Assert.NotNull(recipe.Steps[^1].Environment);
+        Assert.Equal("prepare", recipe.Steps[0].StepKind);
     }
 
     [Fact]
@@ -193,7 +432,8 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         string rubyDir = Path.Combine(_workspaceRoot, "ruby_proj");
         Directory.CreateDirectory(rubyDir);
         string gemfile = Path.Combine(rubyDir, "Gemfile");
-        File.WriteAllText(gemfile, "source 'https://rubygems.org'\n");
+        File.WriteAllText(gemfile, "source 'https://rubygems.org'\ngem 'rspec'\n");
+        File.WriteAllText(Path.Combine(rubyDir, "Gemfile.lock"), "");
 
         var rspecReq = new ContinuousTestRunRecipeRequest(
             WorkspaceId: "ws1",
@@ -201,7 +441,8 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             ProjectPath: gemfile,
             Framework: "rspec",
             TestSelector: "spec/models/user_spec.rb:42",
-            Scope: TestSelectorScope.SingleTest);
+            Scope: TestSelectorScope.SingleTest,
+            IsExact: true);
 
         ContinuousTestRunRecipe rspecRecipe = ContinuousTestRecipeBuilder.Build(rspecReq);
         Assert.Equal("bundle", rspecRecipe.Steps[0].Executable);
@@ -224,6 +465,9 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         string phpDir = Path.Combine(_workspaceRoot, "php_proj");
         Directory.CreateDirectory(phpDir);
         string composerJson = Path.Combine(phpDir, "composer.json");
+        Directory.CreateDirectory(Path.Combine(phpDir, "vendor", "bin"));
+        File.WriteAllText(Path.Combine(phpDir, "vendor", "bin", "phpunit"), "");
+        File.WriteAllText(Path.Combine(phpDir, "vendor", "bin", "pest"), "");
 
         var phpunitReq = new ContinuousTestRunRecipeRequest(
             WorkspaceId: "ws1",
@@ -248,84 +492,52 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         Assert.Equal(["--filter", "it performs calculation"], pestRecipe.Steps[0].Arguments);
     }
 
-    [Fact]
-    public void JvmRecipe_GradleAndMavenAndSbt_GeneratedProperly()
+    [Theory]
+    [InlineData("gradle", "build.gradle", "gradle")]
+    [InlineData("maven", "pom.xml", "mvn")]
+    [InlineData("sbt", "build.sbt", "sbt")]
+    public void JvmRecipe_Uses_provider_identity_and_backend_command(string backend, string filename, string executable)
     {
-        string jvmDir = Path.Combine(_workspaceRoot, "jvm_proj");
-        Directory.CreateDirectory(jvmDir);
-
-        // Gradle
-        string gradleFile = Path.Combine(jvmDir, "build.gradle");
-        var gradleReq = new ContinuousTestRunRecipeRequest(
-            WorkspaceId: "ws1",
-            WorkspaceRoot: _workspaceRoot,
-            ProjectPath: gradleFile,
-            Framework: "gradle",
-            TestSelector: "com.example.AppTest.testApp");
-
-        ContinuousTestRunRecipe gradleRecipe = ContinuousTestRecipeBuilder.Build(gradleReq);
-        Assert.Contains("gradle", gradleRecipe.Steps[0].Executable);
-        Assert.Equal(["test", "--tests", "com.example.AppTest.testApp"], gradleRecipe.Steps[0].Arguments);
-
-        // Maven
-        string mavenFile = Path.Combine(jvmDir, "pom.xml");
-        var mavenReq = new ContinuousTestRunRecipeRequest(
-            WorkspaceId: "ws1",
-            WorkspaceRoot: _workspaceRoot,
-            ProjectPath: mavenFile,
-            Framework: "maven",
-            TestSelector: "AppTest#testApp");
-
-        ContinuousTestRunRecipe mavenRecipe = ContinuousTestRecipeBuilder.Build(mavenReq);
-        Assert.Contains("mvn", mavenRecipe.Steps[0].Executable);
-        Assert.Equal(["test", "-Dtest=AppTest#testApp"], mavenRecipe.Steps[0].Arguments);
-
-        // Sbt
-        string sbtFile = Path.Combine(jvmDir, "build.sbt");
-        var sbtReq = new ContinuousTestRunRecipeRequest(
-            WorkspaceId: "ws1",
-            WorkspaceRoot: _workspaceRoot,
-            ProjectPath: sbtFile,
-            Framework: "sbt",
-            TestSelector: "com.example.AppSpec");
-
-        ContinuousTestRunRecipe sbtRecipe = ContinuousTestRecipeBuilder.Build(sbtReq);
-        Assert.Equal("sbt", sbtRecipe.Steps[0].Executable);
-        Assert.Equal(["testOnly com.example.AppSpec"], sbtRecipe.Steps[0].Arguments);
+        string project = Path.Combine(_workspaceRoot, filename);
+        string method = backend == "gradle" ? "testApp" : JvmTestBackendIds.ClassCaseSentinel;
+        string id = JvmTestTooling.EncodeCaseId("ws1", project, backend, "com.example.AppTest", method);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new("ws1", _workspaceRoot,
+            project, backend, id, Scope: TestSelectorScope.SingleTest));
+        TestRunStep step = Assert.Single(recipe.Steps);
+        Assert.Contains(executable, step.Executable, StringComparison.Ordinal);
+        Assert.Equal(_workspaceRoot, step.WorkingDirectory);
+        if (backend == "gradle")
+        {
+            Assert.Contains("--tests", step.Arguments);
+            Assert.Contains("com.example.AppTest.testApp", step.Arguments);
+            Assert.True(recipe.IsExact);
+        }
+        else
+        {
+            Assert.Contains(backend == "maven" ? "-Dtest=com.example.AppTest" : "testOnly com.example.AppTest", step.Arguments);
+            Assert.False(recipe.IsExact);
+            Assert.Equal(TestSelectorScope.MatchingTests, recipe.Scope);
+        }
     }
 
     [Fact]
-    public void GodotRecipe_GutAndGdUnit4_GeneratedProperly()
+    public void GodotRecipe_Prepares_and_imports_Gut_and_refuses_unsupported_GdUnit4()
     {
-        string godotDir = Path.Combine(_workspaceRoot, "godot_proj");
-        Directory.CreateDirectory(godotDir);
-        string godotFile = Path.Combine(godotDir, "project.godot");
-
-        // GUT
-        var gutReq = new ContinuousTestRunRecipeRequest(
-            WorkspaceId: "ws1",
-            WorkspaceRoot: _workspaceRoot,
-            ProjectPath: godotFile,
-            Framework: "gut",
-            TestFilePath: Path.Combine(godotDir, "test", "unit", "test_player.gd"),
-            TestSelector: "test_move");
-
-        ContinuousTestRunRecipe gutRecipe = ContinuousTestRecipeBuilder.Build(gutReq);
-        Assert.Equal("godot", gutRecipe.Steps[0].Executable);
-        Assert.Equal(["--headless", "-s", "addons/gut/gut_cmdln.gd", "-gselect=res://test/unit/test_player.gd", "-gunit_test_name=test_move"], gutRecipe.Steps[0].Arguments);
-        Assert.True(gutRecipe.IsExact);
-
-        // gdUnit4
-        var gdUnitReq = new ContinuousTestRunRecipeRequest(
-            WorkspaceId: "ws1",
-            WorkspaceRoot: _workspaceRoot,
-            ProjectPath: godotFile,
-            Framework: "gdunit4");
-
-        ContinuousTestRunRecipe gdUnitRecipe = ContinuousTestRecipeBuilder.Build(gdUnitReq);
-        Assert.False(gdUnitRecipe.IsExact);
-        Assert.NotNull(gdUnitRecipe.UnavailableReason);
-        Assert.Contains("gdUnit4", gdUnitRecipe.UnavailableReason, StringComparison.Ordinal);
+        string project = Path.Combine(_workspaceRoot, "project.godot");
+        string script = Path.Combine(_workspaceRoot, "test_player.gd");
+        File.WriteAllText(script, "extends GutTest\n");
+        ContinuousTestRunRecipe gut = ContinuousTestRecipeBuilder.Build(new("ws1", _workspaceRoot,
+            project, "gut", "gut:res://test_player.gd", Scope: TestSelectorScope.SingleTest));
+        Assert.Equal(4, gut.Steps.Count);
+        Assert.Contains("--import", gut.Steps[2].Arguments);
+        Assert.Contains("addons/gut/gut_cmdln.gd", gut.Steps[3].Arguments);
+        Assert.Contains("res://test_player.gd", string.Join(" ", gut.Steps.SelectMany(step => step.Arguments)), StringComparison.Ordinal);
+        Assert.True(gut.IsExact);
+        Assert.Equal(TestSelectorScope.TestFile, gut.Scope);
+        ContinuousTestRunRecipe unsupported = ContinuousTestRecipeBuilder.Build(new("ws1", _workspaceRoot,
+            project, "gdunit4"));
+        Assert.Empty(unsupported.Steps);
+        Assert.Contains("not supported", unsupported.UnavailableReason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -343,8 +555,12 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             TestSelector: "tst_mycomponent");
 
         ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(request);
-        Assert.Equal("ctest", recipe.Steps[0].Executable);
-        Assert.Equal(["--output-on-failure", "-R", "^tst_mycomponent$"], recipe.Steps[0].Arguments);
+        Assert.Equal(["configure", "build", "test"], recipe.Steps.Select(step => step.StepKind));
+        Assert.Equal("ctest", recipe.Steps[^1].Executable);
+        Assert.DoesNotContain("-R", recipe.Steps[^1].Arguments);
+        Assert.Equal(TestSelectorScope.ProjectSuite, recipe.Scope);
+        Assert.NotNull(recipe.UnavailableReason);
+        Assert.False(Directory.Exists(recipe.Steps[^1].WorkingDirectory));
     }
 
     [Fact]
@@ -377,7 +593,7 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         Assert.Contains(csprojPath, recipe.Steps[0].Arguments);
         Assert.Contains("--filter", recipe.Steps[0].Arguments);
         Assert.Contains("FullyQualifiedName~MyLib.Tests.UnitTest1.TestA", recipe.Steps[0].Arguments);
-        Assert.True(recipe.IsExact);
+        Assert.False(recipe.IsExact);
 
         // Verify still no .miller/ct.enabled or .miller/ct.db created
         Assert.False(File.Exists(Path.Combine(_workspaceRoot, ".miller", "ct.enabled")));
@@ -395,15 +611,15 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
             ("dotnet", "tests/App.Tests.csproj", "App.Tests.ServiceTest.Execute", "dotnet", "--filter"),
             ("xunit", "tests/App.Xunit.csproj", "App.Tests.Class.Method", "dotnet", "FullyQualifiedName~"),
             ("pytest", "python/pyproject.toml", "test_worker_execute", "pytest", "-k"),
-            ("vitest", "client/package.json", "ButtonComponent should render", "vitest", "ButtonComponent should render"),
-            ("jest", "server/package.json", "AuthController should login", "jest", "-t"),
-            ("cargo", "rust/Cargo.toml", "tests::integration_test", "cargo", "tests::integration_test"),
-            ("go", "backend/go.mod", "TestServerHandler", "go", "-run"),
-            ("rspec", "ruby/Gemfile", "spec/models/user_spec.rb", "bundle", "rspec"),
+            ("vitest", "client/package.json", "ButtonComponent should render", "vitest", "run"),
+            ("jest", "server/package.json", "AuthController should login", "jest", null),
+            ("cargo", "rust/Cargo.toml", "tests::integration_test", "cargo", "--workspace"),
+            ("go", "backend/go.mod", "TestServerHandler", "go", "-count=1"),
+            ("rspec", "ruby/Gemfile", "spec/models/user_spec.rb", "rspec", "rspec"),
             ("phpunit", "php/composer.json", "Tests\\Unit\\OrderTest", "phpunit", "--filter"),
-            ("gradle", "jvm/build.gradle", "com.example.AppTest.testRun", "gradle", "--tests"),
-            ("godot", "game/project.godot", "test_combat", "godot", "-gunit_test_name=test_combat"),
-            ("ctest", "native/CMakeLists.txt", "tst_widget", "ctest", "-R"),
+            ("gradle", "jvm/build.gradle", "com.example.AppTest.testRun", "gradle", "test"),
+            ("godot", "game/project.godot", "test_combat", "godot", null),
+            ("ctest", "native/CMakeLists.txt", "tst_widget", "ctest", "--test-dir"),
         };
 
         foreach (var tc in testCases)
@@ -423,10 +639,10 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
 
             ContinuousTestRunRecipe singleRecipe = ContinuousTestRecipeBuilder.Build(singleReq);
             Assert.NotNull(singleRecipe);
-            Assert.NotEmpty(singleRecipe.Steps);
-            if (tc.ExpectedExe != null)
+            Assert.True(singleRecipe.Steps.Count > 0 || !string.IsNullOrWhiteSpace(singleRecipe.UnavailableReason));
+            if (singleRecipe.Steps.Count > 0 && tc.ExpectedExe != null)
                 Assert.Contains(tc.ExpectedExe, singleRecipe.PrimaryCommand);
-            if (tc.ExpectedArgSubstring != null)
+            if (singleRecipe.Steps.Count > 0 && tc.ExpectedArgSubstring != null)
                 Assert.Contains(tc.ExpectedArgSubstring, singleRecipe.PrimaryCommand);
 
             // Test WholeSuite / ProjectSuite scope
@@ -439,7 +655,7 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
 
             ContinuousTestRunRecipe suiteRecipe = ContinuousTestRecipeBuilder.Build(suiteReq);
             Assert.NotNull(suiteRecipe);
-            Assert.NotEmpty(suiteRecipe.Steps);
+            Assert.True(suiteRecipe.Steps.Count > 0 || !string.IsNullOrWhiteSpace(suiteRecipe.UnavailableReason));
 
             // Test with complex filters (spaces, regex characters)
             var filterReq = new ContinuousTestRunRecipeRequest(
@@ -452,8 +668,9 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
 
             ContinuousTestRunRecipe filterRecipe = ContinuousTestRecipeBuilder.Build(filterReq);
             Assert.NotNull(filterRecipe);
-            Assert.NotEmpty(filterRecipe.Steps);
-            Assert.NotEmpty(filterRecipe.PrimaryCommand);
+            Assert.True(filterRecipe.Steps.Count > 0 || !string.IsNullOrWhiteSpace(filterRecipe.UnavailableReason));
+            if (filterRecipe.Steps.Count > 0)
+                Assert.NotEmpty(filterRecipe.PrimaryCommand);
         }
 
         // Test TestsCore.GetRunRecipe directly
@@ -481,4 +698,3 @@ public sealed class ContinuousTestRunRecipeTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_workspaceRoot, ".miller", "ct")));
     }
 }
-

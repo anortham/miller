@@ -119,7 +119,7 @@ public static class SqliteSymbolReader
         return session.Read(connection => ReadForSymbolIds(connection, symbolIds));
     }
 
-    private static IReadOnlyList<IndexedSymbol> ReadForPaths(
+    internal static IReadOnlyList<IndexedSymbol> ReadForPaths(
         SqliteConnection connection,
         IReadOnlyCollection<string> paths)
     {

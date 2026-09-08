@@ -41,7 +41,8 @@ public enum BridgeNodeKind
 /// <param name="Display">The human-readable label (leaf type name, table name, or normalized route).</param>
 /// <param name="FilePath">The workspace-relative file the node lives in, or null for a pure route/table node.</param>
 /// <param name="Line">The 1-based declaration line, or 0 when there is no single site.</param>
-public sealed record BridgeNode(string Id, BridgeNodeKind Kind, string Display, string? FilePath, int Line);
+public sealed record BridgeNode(string Id, BridgeNodeKind Kind, string Display, string? FilePath, int Line,
+    string? ObservationRoute = null, string? ObservationUncertainty = null);
 
 /// <summary>
 /// The pure, immutable cross-language bridge graph. Built once per index from the surviving <see cref="ScoredEdge"/>s
@@ -89,6 +90,17 @@ public sealed class BridgeGraph
         CapabilityReport = capabilityReport;
         _observationProviders = observationProviders;
     }
+
+    /// <summary>Estimated retained bytes for nodes, edge evidence, and adjacency collections.</summary>
+    public long EstimatedRetainedBytes => 256L +
+        _nodes.Values.Sum(node => 192L + 2L * (node.Id.Length + node.Display.Length + (node.FilePath?.Length ?? 0) +
+            (node.ObservationRoute?.Length ?? 0) + (node.ObservationUncertainty?.Length ?? 0))) +
+        _adjacency.Sum(entry => 64L + 2L * entry.Key.Length + 8L * entry.Value.Length) +
+        _edges.Sum(edge => 1024L + 128L * edge.Edge.Signals.Count +
+            edge.Edge.Evidence.Sum(evidence => 48L + 2L * evidence.FilePath.Length) +
+            2L * (edge.Edge.SourceRef.Display.Length + edge.Edge.TargetRef.Display.Length +
+                (edge.Edge.SourceRef.FilePath?.Length ?? 0) + (edge.Edge.TargetRef.FilePath?.Length ?? 0))) +
+        _observationProviders.Sum(entry => 64L + entry.Value.Sum(provider => 32L + 2L * provider.Length));
 
     public BridgeCapabilityReport CapabilityReport { get; }
 

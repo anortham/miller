@@ -4,7 +4,7 @@ description: >-
   Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, Vue/React references to route definitions, or backend-http client requests to Express/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/Symfony/Ktor route facts.
 user-invocable: true
 argument-hint: "<client call, URL, route, endpoint, DTO, entity, or table>"
-allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns
+allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns, mcp__plugin_miller_miller__trace, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__patterns
 ---
 
 # Miller Bridge Trace

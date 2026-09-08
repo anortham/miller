@@ -31,7 +31,7 @@ internal static class GutTooling
         ArgumentNullException.ThrowIfNull(shadow);
         return new(
             executable,
-            ["--headless", "--path", shadow.ProjectMirrorRoot, "--import"],
+            BuildImportArguments(shadow.ProjectMirrorRoot),
             shadow.ProjectMirrorRoot,
             BuildEnvironment(shadow));
     }
@@ -44,24 +44,22 @@ internal static class GutTooling
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executable);
         ArgumentNullException.ThrowIfNull(shadow);
-        string configResPath = NormalizeResPath(configPath);
-        string reportResPath = NormalizeResPath(reportPath);
         return new(
             executable,
-            [
-                "--headless",
-                "--path",
-                shadow.ProjectMirrorRoot,
-                "-s",
-                "addons/gut/gut_cmdln.gd",
-                "-gexit",
-                "-gdisable_colors",
-                $"-gconfig={configResPath}",
-                $"-gjunit_xml_file={reportResPath}",
-            ],
+            BuildRunArguments(shadow.ProjectMirrorRoot, configPath, reportPath),
             shadow.ProjectMirrorRoot,
             BuildEnvironment(shadow));
     }
+
+    internal static IReadOnlyList<string> BuildImportArguments(string projectRoot) =>
+        ["--headless", "--path", projectRoot, "--import"];
+
+    internal static IReadOnlyList<string> BuildRunArguments(string projectRoot, string configPath, string reportPath) =>
+        [
+            "--headless", "--path", projectRoot, "-s", "addons/gut/gut_cmdln.gd",
+            "-gexit", "-gdisable_colors", $"-gconfig={NormalizeResPath(configPath)}",
+            $"-gjunit_xml_file={NormalizeResPath(reportPath)}",
+        ];
 
     internal static IReadOnlyDictionary<string, string?> BuildEnvironment(
         GodotProjectShadowResult shadow)

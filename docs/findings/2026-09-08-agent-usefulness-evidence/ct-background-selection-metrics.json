@@ -1,0 +1,42 @@
+[
+  {
+    "targetWorktree": false,
+    "selectorFails": true,
+    "changedPaths": 5000,
+    "requestToAckMilliseconds": 41.7244,
+    "requestToCompletionMilliseconds": 341.6954,
+    "ackBytes": 464,
+    "selectorSymbolReads": 1,
+    "discoveryFailureObserved": false
+  },
+  {
+    "targetWorktree": false,
+    "selectorFails": false,
+    "changedPaths": 5000,
+    "requestToAckMilliseconds": 15.5117,
+    "requestToCompletionMilliseconds": 221.1033,
+    "ackBytes": 464,
+    "selectorSymbolReads": 1,
+    "discoveryFailureObserved": false
+  },
+  {
+    "targetWorktree": true,
+    "selectorFails": false,
+    "changedPaths": 5000,
+    "requestToAckMilliseconds": 16.0143,
+    "requestToCompletionMilliseconds": 442.833,
+    "ackBytes": 485,
+    "selectorSymbolReads": 1,
+    "discoveryFailureObserved": true
+  },
+  {
+    "targetWorktree": true,
+    "selectorFails": true,
+    "changedPaths": 5000,
+    "requestToAckMilliseconds": 15.7576,
+    "requestToCompletionMilliseconds": 259.0528,
+    "ackBytes": 485,
+    "selectorSymbolReads": 1,
+    "discoveryFailureObserved": true
+  }
+]

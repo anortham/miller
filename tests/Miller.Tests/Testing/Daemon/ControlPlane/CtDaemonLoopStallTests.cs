@@ -885,17 +885,14 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         Assert.Equal(JsonValueKind.Null, daemon.GetProperty("loop_stall_seconds").ValueKind);
     }
 
-    /// <summary>
-    /// Miller reports and never kills by itself. The nudge names the recovery an operator has: stop
-    /// escalates to a process-tree kill after a short unacked wait, and start puts a live loop back.
-    /// </summary>
     [Fact]
-    public void A_wedged_loop_nudges_stop_then_start()
+    public void A_wedged_loop_points_to_observed_diagnostics()
     {
         string? hint = TestsTool.StatusHint(StatusWith(Evaluate(Record(lag: TimeSpan.FromMinutes(5)))));
 
-        Assert.Contains("tests operation=stop", hint ?? "", StringComparison.Ordinal);
-        Assert.Contains("wedged", hint ?? "", StringComparison.Ordinal);
+        Assert.Contains("tests operation=status", hint ?? "", StringComparison.Ordinal);
+        Assert.Contains("unresponsive", hint ?? "", StringComparison.Ordinal);
+        Assert.DoesNotContain("operation=stop", hint ?? "", StringComparison.Ordinal);
 
         string? healthy = TestsTool.StatusHint(StatusWith(Evaluate(Record(lag: TimeSpan.FromSeconds(1)))));
         Assert.DoesNotContain("wedged", healthy ?? "", StringComparison.Ordinal);

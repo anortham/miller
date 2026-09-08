@@ -23,7 +23,8 @@ public sealed record WorkspaceRegionSearchContext(
     string FreshnessStatus,
     string? WarningText,
     string? DisplayId = null,
-    string IndexLevel = IndexLevels.FullMetadataValue) : IDisposable
+    string IndexLevel = IndexLevels.FullMetadataValue,
+    BackgroundRefreshOperationSnapshot? BackgroundOperation = null) : IDisposable
 {
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 

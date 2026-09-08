@@ -99,6 +99,9 @@ public sealed record CtImpactResult(
     bool TruncatedByDepth,
     bool TruncatedByLimit);
 
+/// <summary>Bounded native-class candidate facts; truncated reads cannot prove a match or absence.</summary>
+public sealed record CtNativeSymbolCandidates(IReadOnlyList<CtSymbolFact> Symbols, bool Truncated, IReadOnlyList<CtFileFact>? Files = null);
+
 /// <summary>
 /// Public typed Miller fact surface for continuous testing. Implemented in Indexing so it can read
 /// <c>RevisionFactCache</c> without <c>InternalsVisibleTo</c>.
@@ -106,6 +109,9 @@ public sealed record CtImpactResult(
 public interface ICtFactSource
 {
     CtIndexCursor Current { get; }
+
+    /// <summary>Returns candidate-file symbols for exact native scope binding; unsupported readers return truncated.</summary>
+    CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames) => new([], true);
 
     IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths);
 

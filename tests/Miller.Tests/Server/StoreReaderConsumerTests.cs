@@ -7,6 +7,7 @@ using Miller.Indexing.Store;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Miller.Tests.Support;
@@ -49,6 +50,29 @@ public sealed class StoreReaderConsumerTests : IDisposable
         Assert.Equal(row, registry.Get("workspace-a"));
         Assert.DoesNotContain("open", reader.Events);
         Assert.Equal(0, reader.Owed);
+    }
+
+    [Theory]
+    [InlineData("McpHealth")]
+    [InlineData("McpStatus")]
+    public void ReaderAdmissionBusy_HealthPreservesRegistryAndReportsTemporaryUnavailable(string profileName)
+    {
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding,
+            _ => throw new StoreReaderRegistrationException(ReaderFailure.Busy));
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(fixture.Root, "registry.db"));
+        WorkspaceRegistryRow row = registry.UpsertSeen("workspace-a", "example", fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(registry, row, Enum.Parse<WorkspaceRegisteredFactsProfile>(profileName),
+            SymbolSearchSidecar.Disabled, new ContentCorpusSidecar(), readerClient: () => reader.Client);
+
+        Assert.Equal(row, registry.Get(row.WorkspaceId));
+        Assert.Equal("reader_admission_busy", facts.FreshnessStatus);
+        Assert.Null(facts.IndexFresh);
+        Assert.Contains("retry", facts.WarningText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

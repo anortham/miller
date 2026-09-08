@@ -1,0 +1,68 @@
+{
+  "kind": "fixed mocked semantic arm; production fusion and renderer",
+  "query": "how does the workspace refresh converge",
+  "candidateLimit": 10,
+  "boundedMcpOutput": true,
+  "lexical": [
+    {
+      "file": "docs/literal.md",
+      "line": 2,
+      "score": 2,
+      "snippet": "how does the workspace refresh converge exact literal"
+    },
+    {
+      "file": "docs/loose.md",
+      "line": 7,
+      "score": 2,
+      "snippet": "workspace refresh loose explanation"
+    }
+  ],
+  "hybrid": [
+    {
+      "file": "docs/literal.md",
+      "line": 2,
+      "score": 2,
+      "final_rank": 1,
+      "ranking_method": "protected_lexical_leader",
+      "rrf_score": 0.024069737184491284,
+      "snippet": "how does the workspace refresh converge exact literal"
+    },
+    {
+      "file": "docs/loose.md",
+      "line": 7,
+      "score": 2,
+      "final_rank": 2,
+      "ranking_method": "rrf",
+      "rrf_score": 0.024193548387096774,
+      "snippet": "workspace refresh loose explanation"
+    },
+    {
+      "file": "docs/semantic.md",
+      "line": 9,
+      "score": 2,
+      "final_rank": 3,
+      "ranking_method": "rrf",
+      "rrf_score": 0.01639344262295082,
+      "snippet": "new concept-only explanation"
+    }
+  ],
+  "semantic_input": [
+    {
+      "file": "docs/semantic.md",
+      "rank": 1,
+      "cosine": 0.89
+    },
+    {
+      "file": "docs/loose.md",
+      "rank": 2,
+      "cosine": 0.88
+    },
+    {
+      "file": "docs/literal.md",
+      "rank": 3,
+      "cosine": 0.87
+    }
+  ],
+  "comparison": "same Release implementation lexical output versus fixed-semantic-arm fusion; not a prior-commit or live-embedder benchmark",
+  "server_sha256": "483a73c523a2144a54e97bc87f5acb238c497dadfa0f9a65e4d1066447782ece"
+}

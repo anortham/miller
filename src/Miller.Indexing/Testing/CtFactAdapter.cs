@@ -46,6 +46,69 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
         }
     }
 
+    public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames)
+    {
+        ArgumentNullException.ThrowIfNull(classNames);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        string[] names = classNames.Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal).Take(1025).ToArray();
+        if (names.Length > 1024) return new([], true);
+        if (names.Length == 0) return new([], false);
+        return _session.Read(connection =>
+        {
+            using var transaction = connection.BeginTransaction(deferred: true);
+            if (_session.Snapshot.Mode == WorkspaceReadMode.LegacyArtifact)
+            {
+                using var identity = connection.CreateCommand();
+                identity.CommandText = "SELECT value FROM artifact_metadata WHERE key='artifact_id'";
+                string? artifact = identity.ExecuteScalar() as string;
+                identity.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions";
+                long revision = Convert.ToInt64(identity.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+                if (artifact != _session.Snapshot.ArtifactOrStoreId || revision != _session.Snapshot.Freshness.Revision)
+                    return new CtNativeSymbolCandidates([], true);
+            }
+            var found = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string[] batch in names.Chunk(128))
+            {
+                using var command = connection.CreateCommand();
+                string parameters = string.Join(',', batch.Select((name, index) =>
+                {
+                    string key = "$n" + index;
+                    command.Parameters.AddWithValue(key, name);
+                    return key;
+                }));
+                command.CommandText = $"SELECT DISTINCT path FROM symbols WHERE name IN ({parameters}) AND language IN ('java','kotlin','scala') AND kind IN ('class','interface','enum','struct') LIMIT 257";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    found.Add(reader.GetString(0));
+                    if (found.Count > 256) return new CtNativeSymbolCandidates([], true);
+                }
+            }
+            int count = 0;
+            foreach (string[] batch in found.Chunk(128))
+            {
+                using var command = connection.CreateCommand();
+                string parameters = string.Join(',', batch.Select((path, index) =>
+                {
+                    string key = "$p" + index;
+                    command.Parameters.AddWithValue(key, path);
+                    return key;
+                }));
+                command.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM symbols WHERE path IN ({parameters}) LIMIT 16001)";
+                count += Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+                if (count > 16000) return new CtNativeSymbolCandidates([], true);
+            }
+            string[] paths = found.Order(StringComparer.Ordinal).ToArray();
+            IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.ReadForPaths(connection, paths);
+            if (symbols.Count > 16000) return new CtNativeSymbolCandidates([], true);
+            IReadOnlyList<CtFileFact> files = ReadFileFacts(connection, paths);
+            var hashes = files.ToDictionary(file => file.Path, file => file.ContentHash, StringComparer.Ordinal);
+            return new CtNativeSymbolCandidates(symbols.Select(symbol => ToSymbolFact(symbol,
+                hashes.GetValueOrDefault(symbol.FilePath))).ToArray(), false, files);
+        });
+    }
+
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths)
     {
         ArgumentNullException.ThrowIfNull(changedPaths);
@@ -236,54 +299,54 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
         });
     }
 
-    private IReadOnlyList<CtFileFact> ReadFileFacts(IReadOnlyList<string> paths)
+    private IReadOnlyList<CtFileFact> ReadFileFacts(IReadOnlyList<string> paths) =>
+        _session.Read(connection => ReadFileFacts(connection, paths));
+
+    private static IReadOnlyList<CtFileFact> ReadFileFacts(SqliteConnection connection, IReadOnlyList<string> paths)
     {
-        return _session.Read(connection =>
-        {
-            var facts = paths.ToDictionary(
-                path => path,
-                static path => new CtFileFact(path, null, null, null, false, false),
-                StringComparer.Ordinal);
-            if (!SqliteSchemaObjects.Exists(connection, "files"))
-                return paths.Select(path => facts[path]).ToArray();
-
-            bool hasDiagnostics = SqliteSchemaObjects.Exists(connection, "parse_diagnostics");
-            using SqliteCommand command = connection.CreateCommand();
-            var placeholders = new string[paths.Count];
-            for (int i = 0; i < paths.Count; i++)
-            {
-                string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                placeholders[i] = name;
-                command.Parameters.AddWithValue(name, paths[i]);
-            }
-
-            string diagnostics = hasDiagnostics
-                ? "LEFT JOIN (SELECT path FROM parse_diagnostics GROUP BY path) AS d ON d.path = f.path"
-                : string.Empty;
-            string hasParseDiagnostics = hasDiagnostics
-                ? "CASE WHEN d.path IS NULL THEN 0 ELSE 1 END"
-                : "0";
-            command.CommandText = $"""
-                SELECT f.path, f.language, f.content_hash, f.status, {hasParseDiagnostics}
-                FROM files AS f
-                {diagnostics}
-                WHERE f.path IN ({string.Join(", ", placeholders)})
-                """;
-            using SqliteDataReader reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                string path = reader.GetString(0);
-                facts[path] = new CtFileFact(
-                    path,
-                    reader.IsDBNull(1) ? null : reader.GetString(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.GetInt64(4) != 0,
-                    true);
-            }
-
+        var facts = paths.ToDictionary(
+            path => path,
+            static path => new CtFileFact(path, null, null, null, false, false),
+            StringComparer.Ordinal);
+        if (!SqliteSchemaObjects.Exists(connection, "files"))
             return paths.Select(path => facts[path]).ToArray();
-        });
+
+        bool hasDiagnostics = SqliteSchemaObjects.Exists(connection, "parse_diagnostics");
+        using SqliteCommand command = connection.CreateCommand();
+        var placeholders = new string[paths.Count];
+        for (int i = 0; i < paths.Count; i++)
+        {
+            string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeholders[i] = name;
+            command.Parameters.AddWithValue(name, paths[i]);
+        }
+
+        string diagnostics = hasDiagnostics
+            ? "LEFT JOIN (SELECT path FROM parse_diagnostics GROUP BY path) AS d ON d.path = f.path"
+            : string.Empty;
+        string hasParseDiagnostics = hasDiagnostics
+            ? "CASE WHEN d.path IS NULL THEN 0 ELSE 1 END"
+            : "0";
+        command.CommandText = $"""
+            SELECT f.path, f.language, f.content_hash, f.status, {hasParseDiagnostics}
+            FROM files AS f
+            {diagnostics}
+            WHERE f.path IN ({string.Join(", ", placeholders)})
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            string path = reader.GetString(0);
+            facts[path] = new CtFileFact(
+                path,
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt64(4) != 0,
+                true);
+        }
+
+        return paths.Select(path => facts[path]).ToArray();
     }
 
     private static string? Relativize(string? workspaceRoot, string path)

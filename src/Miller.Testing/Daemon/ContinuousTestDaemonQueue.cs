@@ -421,7 +421,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
 
     public async Task<IReadOnlyList<ContinuousTestDaemonDrainResult>> DrainReadyAsync(
         DateTimeOffset now,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, string>? runStarted = null)
     {
         (PendingKey Key, ContinuousTestDaemonPendingRun Pending, bool WholeSuiteEligible)[] ready = SnapshotReady(now);
         var results = new List<ContinuousTestDaemonDrainResult>(ready.Length);
@@ -496,6 +497,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     ReasonCode: SelectionReason(readyPending, wholeSuite, coverage),
                     SelectionDigest: SelectionDigest(readyPending.TestCaseIds));
                 string runId = NewRunId();
+                runStarted?.Invoke(readyPending.Workspace.ProjectPath, runId);
 
                 // The daemon blocks here for the whole run. Without this the published status froze at the
                 // reason "executing" until the run ended, so nothing could name the project it was on.
@@ -991,12 +993,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             }
 
             if ((latestAttempt.Outcome == CtDiscoveryOutcome.Failed || latestAttempt.Outcome == CtDiscoveryOutcome.TimedOut)
-                && latestAttempt.Revision == pending.Freshness.Revision)
+                && latestAttempt.Revision == pending.Freshness.Revision
+                && string.Equals(latestAttempt.IndexIdentity, pending.IndexIdentity, StringComparison.Ordinal))
             {
                 return pending with { RefreshInventory = false };
             }
         }
 
+        using var capture = new CtDiscoveryCapture();
         string? framework = pending.Framework ?? pending.Workspace.Framework;
         if (!ContinuousTestFrameworkSupport.IsSupported(framework))
         {
@@ -1008,7 +1012,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 outcome: CtDiscoveryOutcome.Refused,
                 stage: CtDiscoveryStage.FrameworkClassification,
                 reason: reason,
-                remedy: remedy);
+                remedy: remedy,
+                capture: capture);
             return pending with { RefreshInventory = false };
         }
 
@@ -1024,7 +1029,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         }
         catch (Exception ex)
         {
-            RecordDiscoveryFailure(pending, ex);
+            RecordDiscoveryFailure(pending, ex, capture: capture);
             return pending;
         }
 
@@ -1116,7 +1121,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         CtDiscoveryOutcome outcome = CtDiscoveryOutcome.Failed,
         CtDiscoveryStage stage = CtDiscoveryStage.Execution,
         string? reason = null,
-        string? remedy = null)
+        string? remedy = null,
+        CtDiscoveryCapture? capture = null)
     {
         ContinuousTestWorkspace workspace = pending.Workspace;
         string framework = pending.Framework ?? workspace.Framework ?? "unknown";
@@ -1142,7 +1148,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         remedy ??= ContinuousTestFrameworkSupport.RemedyFor(framework)
             ?? "Check project configuration and runner prerequisites, or run the suite directly.";
 
-        string attemptId = $"ct-disc-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{RandomNumberGenerator.GetHexString(4).ToLowerInvariant()}";
+        string attemptId = capture?.AttemptId ?? $"ct-disc-{Guid.NewGuid():N}";
         string artifactDir = Path.Combine(workspace.WorkspaceRoot, ".miller", "ct", "discovery-attempts");
         string artifactPath = Path.Combine(artifactDir, $"{attemptId}.json");
 
@@ -1160,10 +1166,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             FailureReason: reason,
             FailureDetail: exception is not null ? CtDaemonLog.FailureDetail(exception) : reason,
             Remedy: remedy,
-            ExitCode: null,
-            Command: null,
-            StandardOutput: null,
-            StandardError: null,
+            ExitCode: capture?.Result?.ExitCode,
+            Command: capture?.Command,
+            StandardOutput: capture?.Result?.StandardOutput,
+            StandardError: capture?.Result?.StandardError,
             ExceptionType: exception?.GetType().FullName,
             ArtifactPath: artifactPath);
 

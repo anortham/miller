@@ -20,6 +20,18 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
 
     public int DocumentCount => _tables.DocumentCount;
 
+    /// <summary>Estimated retained bytes, including symbol strings, lookup tables, and lexical postings.</summary>
+    public long EstimatedRetainedBytes => _index.EstimatedRetainedBytes +
+        Enumerable.Range(0, DocumentCount).Sum(id =>
+        {
+            IndexedSymbol symbol = _tables.Resolve(id);
+            return 640L + 2L * (symbol.SymbolId.Length + symbol.Name.Length +
+                (symbol.Signature?.Length ?? 0) + symbol.Kind.Length + symbol.Language.Length +
+                symbol.FilePath.Length + (symbol.ParentId?.Length ?? 0) +
+                symbol.TestEvidenceStatus.Length + (symbol.TestEvidenceReason?.Length ?? 0) +
+                (symbol.Visibility?.Length ?? 0));
+        });
+
     public IReadOnlySet<string> KnownExtensions => _tables.KnownExtensions;
 
     public static SymbolSearchProjection Build(IReadOnlyList<IndexedSymbol> symbols)

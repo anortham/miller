@@ -4,7 +4,7 @@ namespace Miller.Testing;
 
 public sealed partial class ContinuousTestStore
 {
-    internal IReadOnlyList<ContinuousTestCase> ListTestCasesForProject(
+    public IReadOnlyList<ContinuousTestCase> ListTestCasesForProject(
         string workspaceId,
         string projectPath,
         bool includeLifecycle = false)

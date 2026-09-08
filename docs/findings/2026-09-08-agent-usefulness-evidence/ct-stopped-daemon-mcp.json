@@ -1,0 +1,43 @@
+{
+  "purpose": "Fresh Release MCP proof that wait=true with a stopped daemon returns before foreground execution",
+  "source_commit": "4a21c9baa52919b950426e2f6a5967257e6d5c2c",
+  "source_state": "dirty dogfood repairs",
+  "binary": {
+    "configuration": "Release",
+    "path": "src/Miller.Server/bin/Release/net10.0/miller",
+    "sha256": "8c5675c070fd51cd8a52147e078c268ccb0b8a58b04f296f150703412d4f9640"
+  },
+  "environment": {
+    "profile": "private disposable MILLER_HOME",
+    "workspace": "disposable registered project with .miller/ct.enabled",
+    "MILLER_SEMANTIC": "off",
+    "MILLER_INDEX_STORE": "off"
+  },
+  "request": {
+    "operation": "run",
+    "wait": true,
+    "wait_seconds": 1
+  },
+  "json_elapsed_ms": 14,
+  "compact_elapsed_ms": 2,
+  "json": {
+    "execution": "foreground_one_shot",
+    "verdict": "unknown",
+    "reason": "CT daemon is stopped.",
+    "waited": false,
+    "paused": false,
+    "selected": null,
+    "wait": {
+      "wait_complete": false,
+      "state": "daemon_stopped",
+      "elapsed_seconds": 0,
+      "timeout_seconds": 1,
+      "command_id": null,
+      "run_id": null
+    }
+  },
+  "compact_next_step": "tests operation=start workspace_id=<disposable-workspace-id>",
+  "ct_db_created": false,
+  "daemon_lease_created": false,
+  "cleanup": "Disposable workspace and private profile removed after the calls; no live daemon was started or stopped."
+}

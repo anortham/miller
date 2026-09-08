@@ -3,7 +3,7 @@ name: miller-search-debug
 description: Use when Miller search misses expected results, ranks surprising hits, returns noisy output, or needs mode/content/region troubleshooting.
 user-invocable: true
 argument-hint: "<query and expected result>"
-allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__workspace
+allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__workspace, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__trace, mcp__plugin_miller_miller__workspace
 ---
 
 # Miller Search Debug
@@ -50,7 +50,7 @@ search(workspace_id="<id>", query="<known area>", file_pattern="src/ui/**", lang
 - Comment, doc-comment, and string-literal searches require region indexing and a fresh sidecar.
 - File/path queries should use `mode=file` when auto mode looks noisy.
 - Scoped workflows should use `file_pattern` and `language` before raising `limit`.
-- Stale indexes should be refreshed with `workspace(operation="refresh")`.
+- Stale indexes should be refreshed with `workspace(workspace_id="<id>", operation="refresh")`.
 
 4. Verify the expected item exists:
 

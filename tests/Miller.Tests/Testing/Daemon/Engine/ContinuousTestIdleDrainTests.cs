@@ -324,6 +324,20 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
     }
 
     [Fact]
+    public void Quiet_wait_reports_the_later_cooldown_deadline()
+    {
+        var policy = new CtIdleDrainPolicy(Quiet);
+        CtIdleDrainDecision decision = policy.Evaluate(AllGuardsMet() with
+        {
+            LastActivityAt = T0,
+            LastDrainAt = T0,
+        });
+
+        Assert.Equal(T0 + CtIdleDrainPolicy.Cooldown, decision.NextEligibleAtUtc);
+        Assert.Equal(300, decision.RemainingCooldownSeconds);
+    }
+
+    [Fact]
     public async Task A_settled_idle_daemon_drains_the_stale_backlog_through_the_loop_once()
     {
         var workspace = EngineTestSupport.Workspace(_root);
@@ -370,24 +384,40 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
         await delay.WaitForDelayCountAsync(2, TestContext.Current.CancellationToken);
         delay.CompleteNext();
         await delay.WaitForDelayCountAsync(3, TestContext.Current.CancellationToken);
+        int nextDelay = 4;
+        while (host.LastSnapshot?.IdleDrain?.Reason != "waiting_quiet" && nextDelay < 20)
+        {
+            delay.CompleteNext();
+            await delay.WaitForDelayCountAsync(nextDelay++, TestContext.Current.CancellationToken);
+        }
         Assert.Empty(provider.RunRequests);
+        System.Text.Json.JsonElement status = System.Text.Json.JsonSerializer.SerializeToElement(host.LastSnapshot);
+        Assert.True(status.TryGetProperty("IdleDrain", out var idleDrain));
+        Assert.Equal("waiting_quiet", idleDrain.GetProperty("Reason").GetString());
+        Assert.Equal(T0 + CtIdleDrainPolicy.Cooldown, idleDrain.GetProperty("NextEligibleAtUtc").GetDateTimeOffset());
+        Assert.Equal(300, idleDrain.GetProperty("RemainingCooldownSeconds").GetInt32());
 
         clock.Advance(CtIdleDrainPolicy.Cooldown + TimeSpan.FromSeconds(1));
         delay.CompleteNext();
-        await WaitUntil(() => provider.RunRequests.Count == 1, TestContext.Current.CancellationToken);
+        while (provider.RunRequests.Count == 0)
+        {
+            await delay.WaitForDelayCountAsync(nextDelay++, TestContext.Current.CancellationToken);
+            delay.CompleteNext();
+            await Task.Yield();
+        }
 
         ContinuousTestProviderRunRequest request = provider.RunRequests[0];
         Assert.Equal(["test:app"], request.TestCaseIds);
         Assert.False(request.WholeSuite);
 
         clock.Advance(CtIdleDrainPolicy.Cooldown + TimeSpan.FromSeconds(1));
-        for (int i = 4; i <= 7; i++)
+        for (int i = 0; i < 4; i++)
         {
-            await delay.WaitForDelayCountAsync(i, TestContext.Current.CancellationToken);
+            await delay.WaitForDelayCountAsync(nextDelay++, TestContext.Current.CancellationToken);
             delay.CompleteNext();
         }
 
-        await delay.WaitForDelayCountAsync(8, TestContext.Current.CancellationToken);
+        await delay.WaitForDelayCountAsync(nextDelay, TestContext.Current.CancellationToken);
         Assert.Single(provider.RunRequests);
 
         cancellation.Cancel();

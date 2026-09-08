@@ -631,6 +631,39 @@ public sealed class TestsToolTests : IDisposable
         Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
     }
 
+    [Fact]
+    public void Mcp_wait_with_stopped_daemon_returns_without_starting_foreground_run()
+    {
+        WriteTestProject();
+        CreateTool().Tests(operation: "enable", format: "json");
+
+        bool foregroundStarted = false;
+        var tool = new TestsTool(_workspace, new TestsCoreHooks(
+            ForegroundRun: _ =>
+            {
+                foregroundStarted = true;
+                return new TestsRunOutcome(
+                    CtRunExecution.ForegroundOneShot,
+                    ContinuousTestVerdict.Unknown,
+                    "foreground",
+                    Waited: true);
+            },
+            OpenFacts: (_, _) => throw new InvalidOperationException("stopped wait opened facts")));
+
+        var elapsed = Stopwatch.StartNew();
+        string json = tool.Tests(operation: "run", format: "json", wait: true, wait_seconds: 1);
+
+        Assert.False(foregroundStarted);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1), elapsed.Elapsed.ToString());
+        using JsonDocument document = JsonDocument.Parse(json);
+        Assert.Equal("daemon_stopped", document.RootElement.GetProperty("wait").GetProperty("state").GetString());
+        Assert.Equal("CT daemon is stopped.", document.RootElement.GetProperty("reason").GetString());
+
+        string compact = tool.Tests(operation: "run", wait: true, wait_seconds: 1);
+        Assert.Contains($"tests operation=start workspace_id={_workspace.WorkspaceId}", compact, StringComparison.Ordinal);
+        Assert.False(foregroundStarted);
+    }
+
     [Theory]
     [InlineData(null, 240)]
     [InlineData(1, 1)]
@@ -711,7 +744,8 @@ public sealed class TestsToolTests : IDisposable
         string compact = tool.Tests(operation: "status", format: "compact");
         string json = tool.Tests(operation: "status", format: "json");
 
-        Assert.Contains("next: dotnet test", compact, StringComparison.Ordinal);
+        Assert.Contains("next: run the direct recipe above", compact, StringComparison.Ordinal);
+        Assert.Contains("dotnet test", compact, StringComparison.Ordinal);
         Assert.DoesNotContain("next:", json, StringComparison.Ordinal);
     }
 
@@ -1200,7 +1234,7 @@ public sealed class TestsToolTests : IDisposable
 
         string? hint = TestsTool.StatusHint(result);
         Assert.NotNull(hint);
-        Assert.Contains("dotnet test", hint, StringComparison.Ordinal);
+        Assert.Contains("run the direct recipe above", hint, StringComparison.Ordinal);
         Assert.Contains("run tests directly (or enable CT: tests operation=enable)", hint, StringComparison.Ordinal);
     }
 
@@ -1221,7 +1255,7 @@ public sealed class TestsToolTests : IDisposable
 
         string? hint = TestsTool.StatusHint(result);
         Assert.NotNull(hint);
-        Assert.Contains("dotnet test", hint, StringComparison.Ordinal);
+        Assert.Contains("run the direct recipe above", hint, StringComparison.Ordinal);
         Assert.Contains("run tests directly (framework unsupported under CT)", hint, StringComparison.Ordinal);
     }
 
@@ -1255,19 +1289,21 @@ public sealed class TestsToolTests : IDisposable
         Assert.Null(TestsTool.StatusHint(result));
     }
 
-    [Fact]
-    public void StatusHint_ActiveSelection_OverridesLoopLag()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StatusHint_Selection_distinguishes_reported_progress_from_stall(bool stalled)
     {
         var result = CreateStatusResult(
             enabled: true,
             daemonActivity: CtDaemonActivity.Selecting,
             daemonSelection: new CtDaemonSelectionProgress("ws", "tests/A.csproj", "collect_tests", new CtFreshnessKey("gen", 1), DateTimeOffset.UtcNow.AddSeconds(-3), DateTimeOffset.UtcNow),
-            daemonLoop: new CtLoopHealthVerdict(CtLoopHealth.LoopStalled, 120, "heartbeat lag"));
+            daemonLoop: new CtLoopHealthVerdict(stalled ? CtLoopHealth.LoopStalled : CtLoopHealth.Healthy, 120, "heartbeat lag"));
 
         string? hint = TestsTool.StatusHint(result);
         Assert.NotNull(hint);
         Assert.Contains("tests operation=status", hint, StringComparison.Ordinal);
-        Assert.Contains("selection in progress (phase=collect_tests", hint, StringComparison.Ordinal);
+        Assert.Contains(stalled ? "selection has not reported progress" : "selection in progress (phase=collect_tests", hint, StringComparison.Ordinal);
         Assert.DoesNotContain("wedged", hint, StringComparison.Ordinal);
     }
 
@@ -1308,8 +1344,8 @@ public sealed class TestsToolTests : IDisposable
 
         string? hint = TestsTool.StatusHint(result);
         Assert.NotNull(hint);
-        Assert.Contains("tests operation=stop", hint, StringComparison.Ordinal);
-        Assert.Contains("daemon loop wedged", hint, StringComparison.Ordinal);
+        Assert.Contains("tests operation=status", hint, StringComparison.Ordinal);
+        Assert.Contains("daemon loop unresponsive", hint, StringComparison.Ordinal);
     }
 
     [Fact]

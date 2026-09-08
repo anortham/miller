@@ -19,6 +19,23 @@ public sealed class JavaScriptProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_executes_literal_node_name_and_excludes_failing_neighbor()
+    {
+        CtProviderTestSupport.RequireNode();
+        string project = Path.Combine(_dir, "package.json");
+        string file = Path.Combine(_dir, "literal.test.cjs");
+        File.WriteAllText(project, "{}");
+        File.WriteAllText(file, "const test = require('node:test'); test('target [x]', () => { if (!require('fs').existsSync('package.json')) throw Error('wrong cwd'); }); test('target x', () => { throw Error('wrong selection'); });");
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _dir, project,
+            "node-test", "target [x]", file, TestSelectorScope.SingleTest, IsExact: true));
+        TestProcessCommand command = OperatingSystem.IsWindows()
+            ? new TestProcessCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", recipe.PrimaryCommand], Path.GetTempPath())
+            : new TestProcessCommand("/bin/sh", ["-c", recipe.PrimaryCommand], Path.GetTempPath());
+        TestProcessResult result = await new TestProcessRunner().RunAsync(command, TestContext.Current.CancellationToken);
+        Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+    }
+
+    [Fact]
     public async Task Node_smoke_executes_a_tiny_node_test_fixture_and_parses_results()
     {
         CtProviderTestSupport.RequireNode();

@@ -109,7 +109,7 @@ public static class CtDaemonLauncher
     public static string ResolveCurrentExecutable()
     {
         if (Environment.ProcessPath is { Length: > 0 } processPath && File.Exists(processPath))
-            return Path.GetFullPath(processPath);
+            return ResolveExecutablePath(processPath, System.Reflection.Assembly.GetEntryAssembly()?.Location);
 
         using var process = Process.GetCurrentProcess();
         string? module = process.MainModule?.FileName;
@@ -121,6 +121,15 @@ public static class CtDaemonLauncher
             return Path.GetFullPath(args[0]);
 
         throw new InvalidOperationException("Cannot resolve the current executable for the CT daemon.");
+    }
+
+    internal static string ResolveExecutablePath(string processPath, string? entryAssemblyPath)
+    {
+        string name = Path.GetFileNameWithoutExtension(processPath);
+        return name.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(entryAssemblyPath) && File.Exists(entryAssemblyPath)
+            ? Path.GetFullPath(entryAssemblyPath)
+            : Path.GetFullPath(processPath);
     }
 
     /// <summary>

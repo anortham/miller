@@ -1,0 +1,1036 @@
+{
+  "initial": [
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "mapped.test.ts"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.ts"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.ts || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "mapped.test.ts"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.ts (2 tests | 1 skipped) 1ms\n \u2713 mapped.test.tsx (2 tests | 1 skipped) 1ms\n\n Test Files  2 passed (2)\n      Tests  2 passed | 2 skipped (4)\n   Start at  00:20:54\n   Duration  103ms (transform 40ms, setup 0ms, import 55ms, tests 3ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "mapped.test.jsx"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.jsx"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.jsx || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "mapped.test.jsx"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.jsx (2 tests | 1 skipped) 1ms\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  00:20:55\n   Duration  101ms (transform 24ms, setup 0ms, import 30ms, tests 1ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "mapped.test.tsx"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.tsx"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' mapped.test.tsx || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "mapped.test.tsx"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.tsx (2 tests | 1 skipped) 1ms\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  00:20:55\n   Duration  99ms (transform 21ms, setup 0ms, import 27ms, tests 1ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    }
+  ],
+  "fixed": [
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "--exclude",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.ts)",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.ts"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.ts)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.ts"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.ts)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.ts || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "--exclude",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.ts)",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.ts"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.ts (2 tests | 1 skipped) 2ms\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  00:38:33\n   Duration  118ms (transform 26ms, setup 0ms, import 34ms, tests 2ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "--exclude",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.jsx)",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.jsx"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.jsx)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.jsx"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.jsx)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.jsx || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "--exclude",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.jsx)",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.jsx"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.jsx (2 tests | 1 skipped) 1ms\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  00:38:33\n   Duration  124ms (transform 24ms, setup 0ms, import 34ms, tests 1ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "recipe": {
+        "WorkspaceId": "node-native-parity",
+        "ProjectPath": "/home/murphy/.cache/miller-dogfood/node-language-probe/package.json",
+        "Framework": "vitest",
+        "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+        "Steps": [
+          {
+            "Executable": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "Arguments": [
+              "run",
+              "-t",
+              "^mapped target \\[x]$",
+              "--exclude",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.tsx)",
+              "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.tsx"
+            ],
+            "WorkingDirectory": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+            "StepKind": "test",
+            "Environment": null,
+            "DisplayCommand": "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.tsx)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.tsx"
+          }
+        ],
+        "Scope": "SingleTest",
+        "TargetSelector": "mapped target [x]",
+        "Prerequisite": "Node.js and the project's package dependencies installed",
+        "ExcludeTraits": null,
+        "IsExact": true,
+        "UnavailableReason": null,
+        "ProjectPaths": null,
+        "PrimaryCommand": "cd -- /home/murphy/.cache/miller-dogfood/node-language-probe || exit\n/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest run -t '^mapped target \\[x]$' --exclude '/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.tsx)' /home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.tsx || exit $?"
+      },
+      "execution": [
+        {
+          "argv": [
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/node_modules/.bin/vitest",
+            "run",
+            "-t",
+            "^mapped target \\[x]$",
+            "--exclude",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/!(mapped.test.tsx)",
+            "/home/murphy/.cache/miller-dogfood/node-language-probe/mapped.test.tsx"
+          ],
+          "cwd": "/home/murphy/.cache/miller-dogfood/node-language-probe",
+          "exit_code": 0,
+          "stdout": "\n RUN  v4.0.18 /home/murphy/.cache/miller-dogfood/node-language-probe\n\n \u2713 mapped.test.tsx (2 tests | 1 skipped) 2ms\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  00:38:34\n   Duration  110ms (transform 22ms, setup 0ms, import 29ms, tests 2ms, environment 0ms)\n\n",
+          "stderr": ""
+        }
+      ]
+    }
+  ],
+  "final_contract_probes": {
+    "exact_file_native": {
+      "passed": 4,
+      "scope": "Jest and Vitest exact-file commands exclude sibling extensions, descendant-prefix paths and duplicate names in other directories"
+    },
+    "name_only": {
+      "passed": 3,
+      "scope": "Vitest, Jest and node:test name-only requests report MatchingTests rather than SingleTest"
+    },
+    "pure_glob": {
+      "passed": 2,
+      "scope": "generated exact-file exclusions remain glob patterns and do not depend on a shell-specific extglob parser"
+    },
+    "mapped_languages": {
+      "typescript": { "passed": 1, "skipped": 1 },
+      "jsx": { "passed": 1, "skipped": 1 },
+      "tsx": { "passed": 1, "skipped": 1 },
+      "source_test_facts": 6
+    }
+  },
+  "extract": {
+    "scan": {
+      "report_schema_version": 3,
+      "status": "ok",
+      "operation": "scan",
+      "mode": "incremental",
+      "input": {
+        "db_path": "/home/murphy/.cache/miller-dogfood/node-language-probe/facts.db",
+        "root_path": "/tmp/miller-node-extract-_gpv2tgq",
+        "file_path": null,
+        "root_relative_path": null,
+        "format": null,
+        "output_path": null
+      },
+      "artifact": {
+        "db_path": "/home/murphy/.cache/miller-dogfood/node-language-probe/facts.db",
+        "root_path": "/tmp/miller-node-extract-_gpv2tgq",
+        "artifact_id": "artifact-1788844855559599223",
+        "schema_version": 7,
+        "extract_contract_version": 4,
+        "sqlite_schema_version": 7,
+        "jsonl_schema_version": 5,
+        "hash_algorithm": "blake3",
+        "parser_inventory_fingerprint": "sha256:c11baa95c0ffd67772247a046841be087188ec11ead21ce66e5ee8fd1757baf7",
+        "capability_snapshot_fingerprint": "sha256:0e54f9ef462a3f767b73dc06961f8ba6ba09ada296f87ddd5f91af99312c4ca5",
+        "index_level": "full"
+      },
+      "tool": {
+        "binary_name": "julie-extract",
+        "binary_version": "2.41.0"
+      },
+      "revision": {
+        "latest_revision_id": 1,
+        "created_revision_id": 1
+      },
+      "counts": {
+        "files_scanned": 3,
+        "files_changed": 3,
+        "files_unchanged": 0,
+        "files_unsupported": 0,
+        "files_deleted": 0,
+        "files_failed": 0,
+        "rows_written": {
+          "artifact_metadata": 0,
+          "parser_inventory": 40,
+          "language_capabilities": 40,
+          "language_capability_fixtures": 266,
+          "language_capability_gaps": 21,
+          "extraction_revisions": 0,
+          "revision_file_changes": 3,
+          "files": 3,
+          "symbols": 17,
+          "symbol_annotations": 0,
+          "reference_sites": 18,
+          "identifiers": 18,
+          "relationships": 0,
+          "pending_relationships": 0,
+          "type_facts": 3,
+          "type_argument_usages": 0,
+          "type_arguments": 0,
+          "literals": 0,
+          "source_regions": 12,
+          "structural_facts": 0,
+          "complexity_metrics": 11,
+          "parse_diagnostics": 0
+        },
+        "totals": {
+          "artifact_metadata": 12,
+          "parser_inventory": 40,
+          "language_capabilities": 40,
+          "language_capability_fixtures": 266,
+          "language_capability_gaps": 21,
+          "extraction_revisions": 1,
+          "revision_file_changes": 3,
+          "files": 3,
+          "symbols": 17,
+          "symbol_annotations": 0,
+          "reference_sites": 18,
+          "identifiers": 18,
+          "relationships": 0,
+          "pending_relationships": 0,
+          "type_facts": 3,
+          "type_argument_usages": 0,
+          "type_arguments": 0,
+          "literals": 0,
+          "source_regions": 12,
+          "structural_facts": 0,
+          "complexity_metrics": 11,
+          "parse_diagnostics": 0
+        },
+        "file_rows_truncated": false,
+        "file_rows": [
+          {
+            "path": "mapped.test.tsx",
+            "language": "tsx",
+            "status": "indexed",
+            "total_rows": 29,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 6,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 2,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 4,
+              "parse_diagnostics": 0
+            }
+          },
+          {
+            "path": "mapped.test.jsx",
+            "language": "jsx",
+            "status": "indexed",
+            "total_rows": 27,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 6,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 0,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 4,
+              "parse_diagnostics": 0
+            }
+          },
+          {
+            "path": "mapped.test.ts",
+            "language": "typescript",
+            "status": "indexed",
+            "total_rows": 26,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 5,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 1,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 3,
+              "parse_diagnostics": 0
+            }
+          }
+        ]
+      },
+      "profile": {
+        "total_duration_ms": 137,
+        "phases": {
+          "artifact_write": 63,
+          "artifact_write_child_rows": 4,
+          "artifact_write_commit": 0,
+          "artifact_write_file_symbol_insert": 0,
+          "artifact_write_foreign_key_check": 0,
+          "artifact_write_index_build": 2,
+          "artifact_write_plan": 45,
+          "artifact_write_wal_checkpoint": 10,
+          "discovery": 0,
+          "existing_artifact": 0,
+          "extraction_spool": 10,
+          "force_metadata": 0,
+          "writer_open": 42
+        },
+        "languages": {
+          "jsx": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 238,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 3,
+            "spool_write_duration_ms": 0
+          },
+          "tsx": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 246,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 2,
+            "spool_write_duration_ms": 0
+          },
+          "typescript": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 199,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 3,
+            "spool_write_duration_ms": 0
+          }
+        }
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "symbols": [
+      {
+        "symbol_id": "46a49046d530236a13a05d3bcb642af5",
+        "file_id": "file-fbc7840f7e20e39e8da24788677e541d",
+        "path": "mapped.test.jsx",
+        "language": "jsx",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "signature": "test(\"mapped target [x]\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 4,
+        "start_column": 0,
+        "end_line": 4,
+        "end_column": 59,
+        "start_byte": 103,
+        "end_byte": 162,
+        "body_start_line": 4,
+        "body_start_column": 32,
+        "body_end_line": 4,
+        "body_end_column": 58,
+        "body_start_byte": 135,
+        "body_end_byte": 161,
+        "body_hash": "a19eee649bdb4c83db8a313bba8054c3",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "symbol_id": "06bed71f42de773b4e1aa2cd4aa4d447",
+        "file_id": "file-fbc7840f7e20e39e8da24788677e541d",
+        "path": "mapped.test.jsx",
+        "language": "jsx",
+        "name": "unrelated failure",
+        "kind": "function",
+        "signature": "test(\"unrelated failure\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 5,
+        "start_column": 0,
+        "end_line": 5,
+        "end_column": 72,
+        "start_byte": 164,
+        "end_byte": 236,
+        "body_start_line": 5,
+        "body_start_column": 32,
+        "body_end_line": 5,
+        "body_end_column": 71,
+        "body_start_byte": 196,
+        "body_end_byte": 235,
+        "body_hash": "be401e0186681f0801ca2617210fd05c",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "symbol_id": "b8d28a110c2e5d75603f5ac38f3401d3",
+        "file_id": "file-6d425527fff7f743acb70f9ef5e518cd",
+        "path": "mapped.test.ts",
+        "language": "typescript",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "signature": "test(\"mapped target [x]\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 3,
+        "start_column": 0,
+        "end_line": 3,
+        "end_column": 59,
+        "start_byte": 64,
+        "end_byte": 123,
+        "body_start_line": 3,
+        "body_start_column": 32,
+        "body_end_line": 3,
+        "body_end_column": 58,
+        "body_start_byte": 96,
+        "body_end_byte": 122,
+        "body_hash": "a19eee649bdb4c83db8a313bba8054c3",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "symbol_id": "1ff314a12ccbd7dc28a25ed0e6b455e2",
+        "file_id": "file-6d425527fff7f743acb70f9ef5e518cd",
+        "path": "mapped.test.ts",
+        "language": "typescript",
+        "name": "unrelated failure",
+        "kind": "function",
+        "signature": "test(\"unrelated failure\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 4,
+        "start_column": 0,
+        "end_line": 4,
+        "end_column": 72,
+        "start_byte": 125,
+        "end_byte": 197,
+        "body_start_line": 4,
+        "body_start_column": 32,
+        "body_end_line": 4,
+        "body_end_column": 71,
+        "body_start_byte": 157,
+        "body_end_byte": 196,
+        "body_hash": "be401e0186681f0801ca2617210fd05c",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "symbol_id": "6ebbb6752705beaad83144bfd6031225",
+        "file_id": "file-9523f4d8c02a863ee97e8b0c08c9460d",
+        "path": "mapped.test.tsx",
+        "language": "tsx",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "signature": "test(\"mapped target [x]\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 4,
+        "start_column": 0,
+        "end_line": 4,
+        "end_column": 59,
+        "start_byte": 111,
+        "end_byte": 170,
+        "body_start_line": 4,
+        "body_start_column": 32,
+        "body_end_line": 4,
+        "body_end_column": 58,
+        "body_start_byte": 143,
+        "body_end_byte": 169,
+        "body_hash": "a19eee649bdb4c83db8a313bba8054c3",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "symbol_id": "a3e8cb96b5325a309dbf75caaa3bea51",
+        "file_id": "file-9523f4d8c02a863ee97e8b0c08c9460d",
+        "path": "mapped.test.tsx",
+        "language": "tsx",
+        "name": "unrelated failure",
+        "kind": "function",
+        "signature": "test(\"unrelated failure\")",
+        "doc_comment": null,
+        "visibility": null,
+        "parent_symbol_id": null,
+        "start_line": 5,
+        "start_column": 0,
+        "end_line": 5,
+        "end_column": 72,
+        "start_byte": 172,
+        "end_byte": 244,
+        "body_start_line": 5,
+        "body_start_column": 32,
+        "body_end_line": 5,
+        "body_end_column": 71,
+        "body_start_byte": 204,
+        "body_end_byte": 243,
+        "body_hash": "be401e0186681f0801ca2617210fd05c",
+        "semantic_group": null,
+        "confidence": null,
+        "content_type": null,
+        "is_test": 1,
+        "test_container": 0,
+        "test_lifecycle": 0,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      }
+    ]
+  },
+  "scope": "Real TS/JSX/TSX Vitest commands and extraction; initial TS command incorrectly ran TSX too, fixed commands each run exactly one named case with config retained",
+  "pinned_extract": {
+    "scan": {
+      "report_schema_version": 3,
+      "status": "ok",
+      "operation": "scan",
+      "mode": "incremental",
+      "input": {
+        "db_path": "/home/murphy/.cache/miller-dogfood/node-language-probe/pinned-facts.db",
+        "root_path": "/home/murphy/.cache/miller-dogfood/tmp/node-pinned-y71buzqj",
+        "file_path": null,
+        "root_relative_path": null,
+        "format": null,
+        "output_path": null
+      },
+      "artifact": {
+        "db_path": "/home/murphy/.cache/miller-dogfood/node-language-probe/pinned-facts.db",
+        "root_path": "/home/murphy/.cache/miller-dogfood/tmp/node-pinned-y71buzqj",
+        "artifact_id": "artifact-1788846592567089264",
+        "schema_version": 7,
+        "extract_contract_version": 4,
+        "sqlite_schema_version": 7,
+        "jsonl_schema_version": 5,
+        "hash_algorithm": "blake3",
+        "parser_inventory_fingerprint": "sha256:c11baa95c0ffd67772247a046841be087188ec11ead21ce66e5ee8fd1757baf7",
+        "capability_snapshot_fingerprint": "sha256:b57ba7edaabf8862d8367a9903ad1a6697d54bfc4853806df3e390a92345e483",
+        "index_level": "full"
+      },
+      "tool": {
+        "binary_name": "julie-extract",
+        "binary_version": "2.40.6"
+      },
+      "revision": {
+        "latest_revision_id": 1,
+        "created_revision_id": 1
+      },
+      "counts": {
+        "files_scanned": 3,
+        "files_changed": 3,
+        "files_unchanged": 0,
+        "files_unsupported": 0,
+        "files_deleted": 0,
+        "files_failed": 0,
+        "rows_written": {
+          "artifact_metadata": 0,
+          "parser_inventory": 40,
+          "language_capabilities": 40,
+          "language_capability_fixtures": 234,
+          "language_capability_gaps": 21,
+          "extraction_revisions": 0,
+          "revision_file_changes": 3,
+          "files": 3,
+          "symbols": 17,
+          "symbol_annotations": 0,
+          "reference_sites": 18,
+          "identifiers": 18,
+          "relationships": 0,
+          "pending_relationships": 0,
+          "type_facts": 3,
+          "type_argument_usages": 0,
+          "type_arguments": 0,
+          "literals": 0,
+          "source_regions": 12,
+          "structural_facts": 0,
+          "complexity_metrics": 11,
+          "parse_diagnostics": 0
+        },
+        "totals": {
+          "artifact_metadata": 12,
+          "parser_inventory": 40,
+          "language_capabilities": 40,
+          "language_capability_fixtures": 234,
+          "language_capability_gaps": 21,
+          "extraction_revisions": 1,
+          "revision_file_changes": 3,
+          "files": 3,
+          "symbols": 17,
+          "symbol_annotations": 0,
+          "reference_sites": 18,
+          "identifiers": 18,
+          "relationships": 0,
+          "pending_relationships": 0,
+          "type_facts": 3,
+          "type_argument_usages": 0,
+          "type_arguments": 0,
+          "literals": 0,
+          "source_regions": 12,
+          "structural_facts": 0,
+          "complexity_metrics": 11,
+          "parse_diagnostics": 0
+        },
+        "file_rows_truncated": false,
+        "file_rows": [
+          {
+            "path": "mapped.test.tsx",
+            "language": "tsx",
+            "status": "indexed",
+            "total_rows": 29,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 6,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 2,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 4,
+              "parse_diagnostics": 0
+            }
+          },
+          {
+            "path": "mapped.test.jsx",
+            "language": "jsx",
+            "status": "indexed",
+            "total_rows": 27,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 6,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 0,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 4,
+              "parse_diagnostics": 0
+            }
+          },
+          {
+            "path": "mapped.test.ts",
+            "language": "typescript",
+            "status": "indexed",
+            "total_rows": 26,
+            "rows": {
+              "artifact_metadata": 0,
+              "parser_inventory": 0,
+              "language_capabilities": 0,
+              "language_capability_fixtures": 0,
+              "language_capability_gaps": 0,
+              "extraction_revisions": 0,
+              "revision_file_changes": 0,
+              "files": 1,
+              "symbols": 5,
+              "symbol_annotations": 0,
+              "reference_sites": 6,
+              "identifiers": 6,
+              "relationships": 0,
+              "pending_relationships": 0,
+              "type_facts": 1,
+              "type_argument_usages": 0,
+              "type_arguments": 0,
+              "literals": 0,
+              "source_regions": 4,
+              "structural_facts": 0,
+              "complexity_metrics": 3,
+              "parse_diagnostics": 0
+            }
+          }
+        ]
+      },
+      "profile": {
+        "total_duration_ms": 111,
+        "phases": {
+          "artifact_write": 47,
+          "artifact_write_child_rows": 1,
+          "artifact_write_commit": 0,
+          "artifact_write_file_symbol_insert": 0,
+          "artifact_write_foreign_key_check": 0,
+          "artifact_write_index_build": 0,
+          "artifact_write_plan": 37,
+          "artifact_write_wal_checkpoint": 7,
+          "discovery": 1,
+          "existing_artifact": 0,
+          "extraction_spool": 10,
+          "force_metadata": 0,
+          "writer_open": 45
+        },
+        "languages": {
+          "jsx": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 238,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 5,
+            "spool_write_duration_ms": 1
+          },
+          "tsx": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 246,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 1,
+            "spool_write_duration_ms": 0
+          },
+          "typescript": {
+            "files": 1,
+            "changed_files": 1,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "bytes": 199,
+            "read_duration_ms": 0,
+            "extract_duration_ms": 0,
+            "spool_write_duration_ms": 0
+          }
+        }
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "symbols": [
+      {
+        "language": "jsx",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "path": "mapped.test.jsx",
+        "start_line": 4,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "language": "typescript",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "path": "mapped.test.ts",
+        "start_line": 3,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "language": "tsx",
+        "name": "mapped target [x]",
+        "kind": "function",
+        "path": "mapped.test.tsx",
+        "start_line": 4,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "language": "jsx",
+        "name": "unrelated failure",
+        "kind": "function",
+        "path": "mapped.test.jsx",
+        "start_line": 5,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "language": "typescript",
+        "name": "unrelated failure",
+        "kind": "function",
+        "path": "mapped.test.ts",
+        "start_line": 4,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      },
+      {
+        "language": "tsx",
+        "name": "unrelated failure",
+        "kind": "function",
+        "path": "mapped.test.tsx",
+        "start_line": 5,
+        "metadata_json": "{\"is_test\":true,\"test_role\":\"test_case\"}"
+      }
+    ]
+  },
+  "independent_review": "/home/murphy/.cache/miller-dogfood/js-recipe-review/probe.json"
+}

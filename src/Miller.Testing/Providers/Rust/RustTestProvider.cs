@@ -476,6 +476,62 @@ public sealed class RustTestProvider : IContinuousTestProvider
             GenerationId = paths.GenerationId,
         };
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        string projectRoot = Path.GetDirectoryName(request.ProjectPath) ?? request.WorkspaceRoot;
+        string targetDirectory = Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests", Guid.NewGuid().ToString("N"));
+        if (request.ExcludeTraits is { Count: > 0 })
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "cargo", projectRoot,
+                [], TestSelectorScope.ProjectSuite, IsExact: false,
+                UnavailableReason: "Rust has no trait selector for the configured exclusions; supply exclusions in the custom command.");
+        var steps = new List<TestRunStep>();
+        if (!string.IsNullOrWhiteSpace(request.ConfiguredCommand))
+        {
+            IReadOnlyList<string> parts = SplitCommand(request.ConfiguredCommand);
+            if (parts.Count == 0)
+                return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "cargo", projectRoot,
+                    [], TestSelectorScope.ProjectSuite, UnavailableReason: "Configured Rust command is empty.");
+            var arguments = parts.Skip(1).ToList();
+            if (!ContainsOption(arguments, "--manifest-path"))
+                arguments.AddRange(["--manifest-path", request.ProjectPath]);
+            if (!ContainsOption(arguments, "--target-dir"))
+                arguments.AddRange(["--target-dir", targetDirectory]);
+            steps.Add(new TestRunStep(parts[0], arguments, projectRoot));
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "cargo", projectRoot,
+                steps, TestSelectorScope.ProjectSuite, IsExact: false,
+                Prerequisite: "Configured Rust runner installed; command controls its declared scope.");
+        }
+        var cases = new List<RunCase>();
+        foreach (ContinuousTestCase row in request.Cases ?? [])
+        {
+            bool selected = request.IsExact || (request.TestSelector is { } selector
+                && (row.Id == selector || row.Selector == selector || row.QualifiedName == selector));
+            if (selected && row.Source == "ct-provider:rust" && row.Role == ContinuousTestRole.TestCase
+                && RustTestCaseId.TryParse(row.Id, out var parsed))
+                cases.Add(new RunCase(row.Id, parsed));
+        }
+        foreach (RunGroup group in GroupCases(cases))
+        {
+            RustTestCaseId first = group.Cases[0].Parsed;
+            IReadOnlyList<IReadOnlyList<string>> chunks = first.IsDoc || group.Cases.Any(row => row.Parsed.IsWholeTarget)
+                ? [Array.Empty<string>()]
+                : ChunkFilters(group.Cases.Select(row => row.Parsed.TestName!).ToArray());
+            foreach (IReadOnlyList<string> chunk in chunks)
+                steps.Add(new TestRunStep("cargo", BuildRunArguments(group.Package, first.SelectorArgs(),
+                    request.ProjectPath, targetDirectory, chunk), projectRoot));
+        }
+        bool exact = steps.Count > 0;
+        if (!exact)
+            steps.Add(new TestRunStep("cargo", ["test", "--workspace", "--manifest-path", request.ProjectPath,
+                "--target-dir", targetDirectory, "--no-fail-fast"], projectRoot));
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "cargo", projectRoot,
+            steps, exact ? request.Scope : TestSelectorScope.ProjectSuite,
+            exact ? request.TestSelector : null,
+            Prerequisite: "Rust toolchain installed; cargo builds required targets before testing.", IsExact: exact,
+            UnavailableReason: !exact && request.TestSelector is not null
+                ? "No stored Rust provider identity matches the source name; recipe runs the workspace suite." : null);
+    }
+
     /// <summary>
     /// A single representative run command for the request — the C1/C2/C6 conformance subject and a
     /// unit-test seam, built against the latest existing generation (or the would-be first). Production
@@ -570,21 +626,22 @@ public sealed class RustTestProvider : IContinuousTestProvider
         IReadOnlyList<string> selector,
         IReadOnlyList<string>? filters)
     {
+        return new("cargo", BuildRunArguments(package, selector, manifestPath, TargetDir(workspace), filters),
+            ProjectRoot(workspace), WorkspaceEnvironment(workspace, paths));
+    }
+
+    private static IReadOnlyList<string> BuildRunArguments(string package, IReadOnlyList<string> selector,
+        string manifestPath, string targetDirectory, IReadOnlyList<string>? filters)
+    {
         var args = new List<string> { "test", "-p", package };
         args.AddRange(selector);
-        args.Add("--manifest-path");
-        args.Add(manifestPath);
-        args.Add("--target-dir");
-        args.Add(TargetDir(workspace));
-        args.Add("--no-fail-fast");
+        args.AddRange(["--manifest-path", manifestPath, "--target-dir", targetDirectory, "--no-fail-fast"]);
         if (filters is { Count: > 0 })
         {
-            args.Add("--");
-            args.Add("--exact");
+            args.AddRange(["--", "--exact"]);
             args.AddRange(filters);
         }
-
-        return new("cargo", args, ProjectRoot(workspace), WorkspaceEnvironment(workspace, paths));
+        return args;
     }
 
     private TestProcessCommand WorkspaceCommand(

@@ -1,6 +1,8 @@
 # Agent usefulness execution program
 
-This is the entry point for the [validated review](../findings/2026-09-07-agent-usefulness-validation.md). The work is planned, not implemented. Every original table row has a disposition in a linked plan; confirmed problems remain assigned even when the review's suggested fix was rejected.
+This is the execution map for the [validated review](../findings/2026-09-07-agent-usefulness-validation.md). Implementation and corrective dogfood work now exist in the source checkouts. The [2026-09-08 verification ledger](../findings/2026-09-08-agent-usefulness-dogfood.md) records verified behavior, test scope and remaining checks; unchecked boxes below are the original acceptance checklist, not a current claim that no implementation exists.
+
+**Status — 2026-09-08:** Source verification and the public julie-extract 2.41.1 pin adoption are complete; the [adoption finding](../findings/2026-09-08-julie-extract-2.41.1-adoption.md) records the four public hashes, epoch-10 upgrade and final Miller gates. Actual trusted, untrusted and disabled hook delivery in named Codex/Cursor runtimes remains unverified; adapter tests alone do not close G2. Miller release/Windows verification is not claimed. Final integration/comparison status follows the verification ledger.
 
 ## Plans
 

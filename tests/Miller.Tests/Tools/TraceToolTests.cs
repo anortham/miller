@@ -3217,6 +3217,30 @@ public sealed class TraceToolTests
         Assert.Contains("observed file routes: /settings", diagnostic.GetProperty("message").GetString());
     }
 
+    [Theory]
+    [InlineData("partial")]
+    [InlineData("unknown")]
+    public void Bridge_PartialTemplateObservation_IsVisibleWithoutClaimingAnExactLink(string uncertainty)
+    {
+        var handler = DetailMethod("handler", "Start", "Api", "Api.cs");
+        var client = DetailFunction("client", "Panel", "Panel.razor");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("frontend", "htmx.attribute.v1", "razor", "Panel.razor", "client", 1,
+                """{"verb":"POST","target_path":"/tests/@Esc(id)/start","normalized_route_template":"/tests/:dynamic/start","route_template_uncertainty":"partial"}""".Replace("partial", uncertainty, StringComparison.Ordinal)),
+            StructuralFact("backend", "aspnet.minimal_api.route.v1", "csharp", "Api.cs", "handler", 1,
+                """{"verb":"POST","route_template":"/tests/{id}/start","handler_name":"Start"}""")
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([handler, client], facts);
+        string output = TraceTool.Run(index, ResolverFor(index), target: "/tests/{id}/start", mode: "bridge",
+            to: null, depth: 2, limit: 20, fullFormat: false, json: true, out int emitted, out _);
+        Assert.Equal(0, emitted);
+        using var document = JsonDocument.Parse(output);
+        var diagnostic = Assert.Single(document.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        Assert.Contains(uncertainty, diagnostic.GetProperty("message").GetString());
+    }
+
     [Fact]
     public void Bridge_RouteStringTarget_MixedMonorepo_AspNetRouteNotClaimedByNextJsApi()
     {
@@ -3914,7 +3938,7 @@ public sealed class TraceToolTests
             "current-ws",
             "/repo",
             Revision: 1,
-            IndexFresh: null,
+            IndexFresh: true,
             FreshnessStatus: "current",
             WarningText: null);
         var familyTool = new TraceTool(new RecordingWorkspaceIndexProvider(familyContext));

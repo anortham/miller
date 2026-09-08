@@ -130,6 +130,9 @@ public sealed class JvmTestProvider : IContinuousTestProvider
         }
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request) =>
+        JvmDirectRunRecipe.Build(request);
+
     public TestProcessCommand BuildRunCommand(ContinuousTestProviderRunRequest request)
     {
         IReadOnlyList<TestProcessCommand> commands = BuildRunCommands(request);

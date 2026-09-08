@@ -90,7 +90,8 @@ public sealed record WorkspaceRefreshResult(
     TimeSpan? ScanDuration = null,
     TimeSpan? TotalDuration = null,
     string? ArtifactId = null,
-    SidecarConvergenceFacts? Sidecars = null)
+    SidecarConvergenceFacts? Sidecars = null,
+    string? IndexGenerationIdentity = null)
 {
     public string StatusText =>
         Status switch

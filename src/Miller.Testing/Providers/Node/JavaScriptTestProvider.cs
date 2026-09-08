@@ -197,6 +197,110 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         };
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        string framework = request.Framework?.ToLowerInvariant() ?? "node-test";
+        if (framework is "node" or "node:test")
+            framework = "node-test";
+        string root = Path.GetDirectoryName(request.ProjectPath) ?? request.WorkspaceRoot;
+        if (request.ExcludeTraits is { Count: > 0 })
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                [], request.Scope, UnavailableReason: "Configured trait exclusions have no mapped JavaScript runner selector.");
+        (string executable, IReadOnlyList<string> prefix, _) = DirectCommandPrefix(request.ConfiguredCommand, framework, root);
+        var selection = new List<string>();
+        bool provenName = request.IsExact && request.TestSelector is not null;
+        bool exact = provenName && request.TestFilePath is not null;
+        if (provenName)
+        {
+            string pattern = System.Text.RegularExpressions.Regex.Escape(request.TestSelector!).Replace("\\ ", " ", StringComparison.Ordinal);
+            selection.AddRange([framework == "node-test" ? "--test-name-pattern" : "-t", $"^{pattern}$"]);
+        }
+        if (request.TestFilePath is { } file)
+        {
+            string absoluteFile = Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file));
+            if (framework == "vitest")
+            {
+                string workspaceRoot = Path.GetFullPath(request.WorkspaceRoot);
+                string relative = Path.GetRelativePath(workspaceRoot, absoluteFile);
+                if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                        [], request.Scope, UnavailableReason: "The selected Vitest file must be inside the workspace for an exact file constraint.");
+                foreach (string exclusion in VitestExactFileExclusions(
+                             workspaceRoot.Replace(Path.DirectorySeparatorChar, '/'), relative.Replace(Path.DirectorySeparatorChar, '/')))
+                    selection.AddRange(["--exclude", exclusion]);
+                selection.Add(absoluteFile);
+            }
+            else if (framework == "jest")
+                selection.AddRange(["--runTestsByPath", absoluteFile]);
+            else
+                selection.Add(Path.GetRelativePath(root, absoluteFile).Replace('\\', '/'));
+        }
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+            [new TestRunStep(executable, prefix.Concat(selection).ToArray(), root)],
+            exact ? TestSelectorScope.SingleTest : provenName ? TestSelectorScope.MatchingTests
+                : request.TestFilePath is null ? TestSelectorScope.ProjectSuite : TestSelectorScope.TestFile,
+            provenName ? request.TestSelector : null, Prerequisite: "Node.js and the project's package dependencies installed",
+            IsExact: exact, UnavailableReason: provenName && !exact
+                ? "No file identity was supplied; the anchored name filter can match tests in multiple files."
+                : !exact && request.TestSelector is not null
+                    ? "Source names do not prove runner test identities; recipe runs the containing file or project." : null);
+    }
+
+    internal static IReadOnlyList<string> VitestExactFileExclusions(string absoluteRoot, string relativeFile)
+    {
+        var exclusions = new List<string>();
+        string prefix = absoluteRoot.TrimEnd('/');
+        foreach (string segment in relativeFile.Split('/'))
+        {
+            exclusions.Add(EscapeVitestGlob(prefix) + "/!(" + EscapeVitestGlob(segment) + ")");
+            prefix += "/" + segment;
+        }
+        return exclusions;
+    }
+
+    private static string EscapeVitestGlob(string path)
+    {
+        var escaped = new StringBuilder(path.Length);
+        foreach (char value in path)
+        {
+            if (value is '\\' or '*' or '?' or '[' or ']' or '{' or '}' or '(' or ')' or '!' or '+' or '@' or '|')
+                escaped.Append('\\');
+            escaped.Append(value);
+        }
+        return escaped.ToString();
+    }
+
+    private static (string Executable, IReadOnlyList<string> Arguments, string? RejectedScriptReason) DirectCommandPrefix(
+        string? command, string framework, string packageRoot, Func<string, string?>? findPackageManagerOnPath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(command))
+        {
+            IReadOnlyList<string> tokens = NodeCommandLine.SplitCommand(command);
+            if (tokens.Count == 0)
+                throw new ContinuousTestProviderException("JavaScript test command must not be empty.");
+            var arguments = tokens.Skip(1).ToList();
+            if (RequiresPackageManagerArgumentSeparator(tokens[0]))
+                arguments.Add("--");
+            return (tokens[0], arguments, null);
+        }
+        var selected = SelectPackageScript(packageRoot, framework);
+        if (selected.Script is { } script)
+        {
+            string manager = PackageManager(packageRoot, findPackageManagerOnPath ?? FindPackageManagerOnSystemPath);
+            var arguments = new List<string> { "run", script.Name };
+            if (RequiresPackageManagerArgumentSeparator(manager))
+                arguments.Add("--");
+            return (manager, arguments, null);
+        }
+        return framework switch
+        {
+            "vitest" => (LocalBin(packageRoot, "vitest"), new[] { "run" }, selected.RejectedScriptReason),
+            "jest" => (LocalBin(packageRoot, "jest"), Array.Empty<string>(), selected.RejectedScriptReason),
+            "node-test" => ("node", new[] { "--test" }, selected.RejectedScriptReason),
+            _ => throw new ContinuousTestProviderException($"Unsupported JavaScript framework '{framework}'."),
+        };
+    }
+
     /// <summary>
     /// Preview/test seam: builds the run command against the latest existing generation (or the
     /// would-be first). Production runs never use it — <see cref="RunAsync"/> allocates its own
@@ -381,70 +485,12 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         string packageRoot,
         string[] reporterArgs)
     {
-        if (!string.IsNullOrWhiteSpace(request.Command))
-        {
-            var tokens = NodeCommandLine.SplitCommand(request.Command);
-            if (tokens.Count == 0)
-                throw new ContinuousTestProviderException("JavaScript test command must not be empty.");
-
-            var args = tokens.Skip(1).ToList();
-            if (RequiresPackageManagerArgumentSeparator(tokens[0]))
-                args.Add("--");
-            args.AddRange(reporterArgs);
-            return new TestProcessCommand(tokens[0], args, packageRoot, WorkspaceEnvironment(request.Workspace, paths));
-        }
-
-        var selection = SelectPackageScript(packageRoot, framework);
-        if (selection.Script is { } script)
-        {
-            var packageManager = PackageManager(packageRoot);
-            var args = new List<string> { "run", script.Name };
-            if (RequiresPackageManagerArgumentSeparator(packageManager))
-                args.Add("--");
-            args.AddRange(reporterArgs);
-            return new TestProcessCommand(
-                packageManager,
-                args,
-                packageRoot,
-                WorkspaceEnvironment(request.Workspace, paths));
-        }
-
-        return BuildDirectRunnerCommand(
-            request, paths, framework, packageRoot, reporterArgs, selection.RejectedScriptReason);
+        (string executable, IReadOnlyList<string> prefix, string? rejected) = DirectCommandPrefix(request.Command, framework, packageRoot, _findPackageManagerOnPath);
+        if (rejected is not null && framework != "node-test")
+            executable = RequiredLocalBin(packageRoot, framework, framework, request, rejected);
+        return new TestProcessCommand(executable, prefix.Concat(reporterArgs).ToArray(), packageRoot,
+            WorkspaceEnvironment(request.Workspace, paths));
     }
-
-    /// <summary>
-    /// The run that goes straight to the runner binary, with no package script between it and the
-    /// reporter arguments. Reached when the manifest names no usable script — either because it names none
-    /// at all, or because <see cref="SelectPackageScript"/> refused the ones it names.
-    /// </summary>
-    private TestProcessCommand BuildDirectRunnerCommand(
-        ContinuousTestProviderRunRequest request,
-        CtGenerationPaths paths,
-        string framework,
-        string packageRoot,
-        string[] reporterArgs,
-        string? rejectedScriptReason) =>
-        framework switch
-        {
-            "vitest" => new TestProcessCommand(
-                RequiredLocalBin(packageRoot, "vitest", framework, request, rejectedScriptReason),
-                new[] { "run" }.Concat(reporterArgs).ToArray(),
-                packageRoot,
-                WorkspaceEnvironment(request.Workspace, paths)),
-            "jest" => new TestProcessCommand(
-                RequiredLocalBin(packageRoot, "jest", framework, request, rejectedScriptReason),
-                reporterArgs,
-                packageRoot,
-                WorkspaceEnvironment(request.Workspace, paths)),
-            // node's runner needs no install: the same node that runs the project runs its tests.
-            "node-test" => new TestProcessCommand(
-                "node",
-                new[] { "--test" }.Concat(reporterArgs).ToArray(),
-                packageRoot,
-                WorkspaceEnvironment(request.Workspace, paths)),
-            _ => throw UnsupportedFramework(framework, request.Workspace.ProjectPath),
-        };
 
     /// <summary>
     /// The workspace-local runner binary to launch.
@@ -1132,13 +1178,13 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     /// <see cref="LocalBin"/> keeps its unconditional <c>.cmd</c>: it names a file inside
     /// node_modules/.bin, where npm always writes a <c>.cmd</c> shim, so there is nothing to probe.
     /// </summary>
-    private string PackageManager(string packageRoot)
+    private static string PackageManager(string packageRoot, Func<string, string?> findPackageManagerOnPath)
     {
         string manager =
             File.Exists(Path.Combine(packageRoot, "pnpm-lock.yaml")) ? "pnpm"
             : File.Exists(Path.Combine(packageRoot, "yarn.lock")) ? "yarn"
             : "npm";
-        return _findPackageManagerOnPath(manager) ?? manager;
+        return findPackageManagerOnPath(manager) ?? manager;
     }
 
     /// <summary>

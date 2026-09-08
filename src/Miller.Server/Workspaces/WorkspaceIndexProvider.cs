@@ -487,6 +487,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -534,7 +536,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
-                IndexLevel: readSession.Snapshot.IndexLevel)
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                BackgroundOperation: state.BackgroundOperation)
             {
                 ReadTelemetry = readTelemetry,
             };
@@ -584,11 +587,9 @@ public sealed class WorkspaceIndexProvider
             if (_projectionCache is not null && workspaceId is not null)
             {
                 var cacheKey = WorkspaceReadProjectionKey.ForSymbol(workspaceId, readSession.Snapshot);
-                return _projectionCache.GetOrAddSymbolIndex(
-                    cacheKey,
-                    () => MeasureFamilyLookup(
-                        _loadSessionSymbolSearch(readSession),
-                        SymbolLookupBackend.SessionProjection));
+                return MeasureFamilyLookup(
+                    _projectionCache.GetOrAddSymbolIndex(cacheKey, () => _loadSessionSymbolSearch(readSession)),
+                    SymbolLookupBackend.SessionProjection);
             }
 
             CacheKey completeKey = KeyFor(workspaceId, readSession.Snapshot);
@@ -622,11 +623,9 @@ public sealed class WorkspaceIndexProvider
         if (_projectionCache is not null && workspaceId is not null)
         {
             var cacheKey = WorkspaceReadProjectionKey.ForSymbol(workspaceId, readSession.Snapshot);
-            return _projectionCache.GetOrAddSymbolIndex(
-                cacheKey,
-                () => MeasureFamilyLookup(
-                    _loadSessionSymbolSearch(readSession),
-                    SymbolLookupBackend.SessionProjection));
+            return MeasureFamilyLookup(
+                _projectionCache.GetOrAddSymbolIndex(cacheKey, () => _loadSessionSymbolSearch(readSession)),
+                SymbolLookupBackend.SessionProjection);
         }
 
         CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
@@ -703,6 +702,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -749,7 +750,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IsCurrent: false,
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                BackgroundOperation: state.BackgroundOperation);
         }
         catch
         {
@@ -769,6 +771,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -794,7 +798,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
                 IsCurrent: false,
-                IndexLevel: readSession.Snapshot.IndexLevel)
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                BackgroundOperation: state.BackgroundOperation)
             {
                 ReadTelemetry = readTelemetry,
             };
@@ -815,6 +820,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -829,7 +836,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                BackgroundOperation: state.BackgroundOperation);
         }
         catch
         {
@@ -879,6 +887,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
         CachedContentSearch cached = familyStore
@@ -895,7 +905,8 @@ public sealed class WorkspaceIndexProvider
             familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
-            row.DisplayId);
+            row.DisplayId,
+                BackgroundOperation: state.BackgroundOperation);
     }
 
     private WorkspaceTextContentSearchContext ResolveCurrentTextContentSearch()
@@ -940,6 +951,8 @@ public sealed class WorkspaceIndexProvider
 
         long sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         ObserveTextContentIndexResolve(TextContentIndexResolveFamily.ReadSessionOpen, sessionStartedAt);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
@@ -964,7 +977,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
             row.DisplayId,
-            IsCurrent: false);
+            IsCurrent: false,
+                BackgroundOperation: state.BackgroundOperation);
     }
 
     private WorkspaceRegionSearchContext ResolveCurrentRegionSearch()
@@ -1013,6 +1027,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        refreshResult = WorkspaceFreshnessView.ForServedSnapshot(
+            refreshResult, readSession.Snapshot, reused: state.BackgroundOperation is not null);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -1036,7 +1052,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult, state.BackgroundOperation),
                 row.DisplayId,
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                BackgroundOperation: state.BackgroundOperation);
         }
         catch
         {
@@ -1243,6 +1260,7 @@ public sealed class WorkspaceIndexProvider
 
     private void EvictWorkspaceEntries(string workspaceId)
     {
+        _projectionCache?.EvictWorkspace(workspaceId);
         lock (_cacheGate)
         {
             RemoveWorkspaceKeysUnderLock(_cache, workspaceId);

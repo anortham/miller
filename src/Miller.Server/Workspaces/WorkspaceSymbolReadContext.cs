@@ -21,7 +21,8 @@ public sealed record WorkspaceSymbolReadContext(
     string? WarningText,
     string? DisplayId = null,
     bool IsCurrent = true,
-    string IndexLevel = IndexLevels.FullMetadataValue) : IDisposable
+    string IndexLevel = IndexLevels.FullMetadataValue,
+    BackgroundRefreshOperationSnapshot? BackgroundOperation = null) : IDisposable
 {
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 

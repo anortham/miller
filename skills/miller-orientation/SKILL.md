@@ -3,7 +3,7 @@ name: miller-orientation
 description: Use when starting a Miller task, choosing a Miller tool, or choosing a Miller search mode.
 user-invocable: true
 argument-hint: "<what you want to find or do>"
-allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit, mcp__miller__tests
+allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit, mcp__miller__tests, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__trace, mcp__plugin_miller_miller__impact, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__patterns, mcp__plugin_miller_miller__content, mcp__plugin_miller_miller__edit, mcp__plugin_miller_miller__tests
 ---
 
 # Miller Orientation

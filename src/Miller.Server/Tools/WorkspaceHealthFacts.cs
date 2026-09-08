@@ -88,7 +88,28 @@ public sealed record WorkspaceHealthFacts(
         var warnings = new List<HealthWarning>();
         var recommended = new List<string>();
 
-        // 1. Availability / corruption
+        CtDiskAccountingSnapshot? effectiveCtDisk = ctDisk ?? statusFacts.CtDisk;
+        if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
+            warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
+        if (statusFacts.IndexFresh == false)
+            warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "search_sidecar",
+            statusFacts.SearchSidecar?.State,
+            statusFacts.SearchSidecar?.Error);
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "content_corpus",
+            statusFacts.ContentCorpus?.State,
+            statusFacts.ContentCorpus?.Error);
+        AddVectorWarnings(warnings, recommended, statusFacts.Vectors, statusFacts.IsLeader);
+        AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
+
+        AddLeaderWarnings(warnings, recommended, statusFacts, leader);
+
         if (statusFacts.Store?.Wal is { NeedsWarning: true } wal)
         {
             string storeBytes = wal.StoreBytes?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
@@ -131,7 +152,6 @@ public sealed record WorkspaceHealthFacts(
             }
         }
 
-        CtDiskAccountingSnapshot? effectiveCtDisk = ctDisk ?? statusFacts.CtDisk;
         if (effectiveCtDisk is { OverBudget: true })
         {
             warnings.Add(new HealthWarning(
@@ -141,29 +161,7 @@ public sealed record WorkspaceHealthFacts(
             recommended.Add("run tests maintenance or prune older build generation roots under .miller/ct-*");
         }
 
-        if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
-            warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
-        if (statusFacts.IndexFresh == false)
-            warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
-        AddSidecarWarning(
-            warnings,
-            recommended,
-            "search_sidecar",
-            statusFacts.SearchSidecar?.State,
-            statusFacts.SearchSidecar?.Error);
-        AddSidecarWarning(
-            warnings,
-            recommended,
-            "content_corpus",
-            statusFacts.ContentCorpus?.State,
-            statusFacts.ContentCorpus?.Error);
-        AddVectorWarnings(warnings, recommended, statusFacts.Vectors, statusFacts.IsLeader);
-        AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
 
-        // 2. Leader / version
-        AddLeaderWarnings(warnings, recommended, statusFacts, leader);
-
-        // 3. Capability summaries & telemetry
         long openCapabilityGaps = extraction.CapabilityGaps.Rows
                 .Where(static row => string.Equals(row.Status, "open", StringComparison.Ordinal))
             .Sum(static row => row.Count);

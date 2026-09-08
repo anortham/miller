@@ -3,7 +3,7 @@ name: miller-metrics-audit
 description: Use when an agent needs deterministic local churn, clone, or complexity facts from Miller without adding MCP tool surface.
 user-invocable: true
 argument-hint: "<workspace selector, commit range, or metric kind>"
-allowed-tools: Bash, mcp__miller__workspace
+allowed-tools: Bash, mcp__miller__workspace, mcp__plugin_miller_miller__workspace
 ---
 
 # Miller Metrics Audit

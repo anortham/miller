@@ -949,7 +949,8 @@ public sealed class InspectTool
         IndexedSymbol sym,
         int limit,
         string? continuation,
-        out int resultCount)
+        out int resultCount,
+        int? pageLimit = null)
     {
         var allChildren = index.FindChildren(sym.SymbolId);
         if (allChildren.Count == 0)
@@ -984,7 +985,7 @@ public sealed class InspectTool
                 "Inspect members continuation offset is outside the current result population."));
         }
 
-        List<IndexedSymbol> page = ordered.Skip(offset).Take(limit).ToList();
+        List<IndexedSymbol> page = ordered.Skip(offset).Take(pageLimit ?? limit).ToList();
         int nextOffset = checked(offset + page.Count);
         string? nextContinuation = nextOffset < ordered.Count
             ? ToolOutputBudget.EncodePopulationCursor(
@@ -1014,7 +1015,10 @@ public sealed class InspectTool
             }
         }
 
-        return sb.ToString().TrimEnd('\n');
+        string output = sb.ToString().TrimEnd('\n');
+        if (page.Count > 1 && Encoding.UTF8.GetByteCount(output) > ToolOutputBudget.InspectMcpMaxBytes - 512)
+            return RenderSymbolMembersCompact(index, workspaceId, sym, limit, continuation, out resultCount, page.Count / 2);
+        return output;
     }
 
     private static string RenderSymbolMembersJson(
@@ -1023,7 +1027,8 @@ public sealed class InspectTool
         IndexedSymbol sym,
         int limit,
         string? continuation,
-        out int resultCount)
+        out int resultCount,
+        int? pageLimit = null)
     {
         var allChildren = index.FindChildren(sym.SymbolId);
         List<IndexedSymbol> ordered = allChildren
@@ -1048,7 +1053,7 @@ public sealed class InspectTool
                 "Inspect members continuation offset is outside the current result population."));
         }
 
-        List<IndexedSymbol> page = ordered.Skip(offset).Take(limit).ToList();
+        List<IndexedSymbol> page = ordered.Skip(offset).Take(pageLimit ?? limit).ToList();
         int nextOffset = checked(offset + page.Count);
         string? nextContinuation = nextOffset < ordered.Count
             ? ToolOutputBudget.EncodePopulationCursor(
@@ -1085,7 +1090,10 @@ public sealed class InspectTool
 
             w.WriteEndObject();
         }
-        return Utf8(buffer);
+        string output = Utf8(buffer);
+        if (page.Count > 1 && Encoding.UTF8.GetByteCount(output) > ToolOutputBudget.InspectMcpMaxBytes - 512)
+            return RenderSymbolMembersJson(index, workspaceId, sym, limit, continuation, out resultCount, page.Count / 2);
+        return output;
     }
 
     // ---------- symbol ----------

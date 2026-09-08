@@ -99,6 +99,60 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         }
     }
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ConfiguredCommand))
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath,
+                request.Framework ?? "unknown", request.WorkspaceRoot, [], request.Scope,
+                UnavailableReason: "This provider has no mapped custom-command contract; generating a default command would discard the configured override.");
+        if (request.ExcludeTraits is { Count: > 0 })
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath,
+                request.Framework ?? "qml", request.WorkspaceRoot, [], request.Scope,
+                UnavailableReason: "QML providers have no mapped trait-exclusion contract; a default command would discard configured exclusions.");
+        string projectDirectory = Path.GetDirectoryName(request.ProjectPath) ?? request.WorkspaceRoot;
+        string buildDirectory = Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests", Guid.NewGuid().ToString("N"));
+        var metadata = request.ProjectMetadata is null
+            ? new Dictionary<string, object?>()
+            : new Dictionary<string, object?>(request.ProjectMetadata);
+        metadata.TryAdd("configure_root", projectDirectory);
+        bool qmake = metadata.GetValueOrDefault("backend")?.ToString() == QtQuickTestBackendIds.Qmake
+            || Path.GetExtension(request.ProjectPath).Equals(".pro", StringComparison.OrdinalIgnoreCase);
+        string? platform = Environment.GetEnvironmentVariable("QT_QPA_PLATFORM");
+        IReadOnlyDictionary<string, string?> qtEnvironment = QtQuickTestTooling.WithDefaultQtPlatform(
+            string.IsNullOrWhiteSpace(platform) ? null : new Dictionary<string, string?> { ["QT_QPA_PLATFORM"] = platform });
+        var steps = new List<TestRunStep>();
+        bool exact = request.IsExact && !string.IsNullOrWhiteSpace(request.TestSelector);
+        if (qmake)
+        {
+            steps.Add(OperatingSystem.IsWindows()
+                ? new TestRunStep("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+                    $"New-Item -ItemType Directory -Force -Path {TestRunStep.QuoteArgument(buildDirectory, true)} | Out-Null"], projectDirectory, "prepare")
+                : new TestRunStep("mkdir", ["-p", "--", buildDirectory], projectDirectory, "prepare"));
+            steps.Add(new TestRunStep("qmake", QmakeQuickTestTooling.BuildConfigureArguments(request.ProjectPath, buildDirectory), buildDirectory, "configure"));
+            steps.Add(new TestRunStep("make", QmakeQuickTestTooling.BuildBuildArguments(), buildDirectory, "build"));
+            steps.Add(new TestRunStep("make", ["check"], buildDirectory, Environment: qtEnvironment));
+            exact = false;
+        }
+        else
+        {
+            string? configuration = metadata.GetValueOrDefault("configuration")?.ToString()
+                ?? (OperatingSystem.IsWindows() ? "Release" : null);
+            string configureRoot = metadata["configure_root"]?.ToString() ?? projectDirectory;
+            steps.Add(new TestRunStep("cmake", QtQuickTestTooling.BuildCMakeConfigureArguments(configureRoot, buildDirectory, configuration), configureRoot, "configure"));
+            steps.Add(new TestRunStep("cmake", QtQuickTestTooling.BuildCMakeBuildArguments(buildDirectory, configuration), configureRoot, "build"));
+            steps.Add(new TestRunStep("ctest", QtQuickTestTooling.BuildCTestRunArguments(buildDirectory,
+                Path.Combine(buildDirectory, "results.xml"), exact ? [request.TestSelector!] : [], !exact, configuration), buildDirectory, Environment: qtEnvironment));
+        }
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, "qt-quick-test", projectDirectory,
+            steps, exact ? TestSelectorScope.SingleTest : TestSelectorScope.ProjectSuite,
+            exact ? request.TestSelector : null,
+            Prerequisite: qmake ? "Qt qmake and make installed; runs the project's check target" : "CMake 3.21+ and the project's Qt SDK installed",
+            ExcludeTraits: request.ExcludeTraits, IsExact: exact,
+            UnavailableReason: !exact && request.TestSelector is not null
+                ? "Source names do not identify a CTest or qmake target; recipe runs the project suite."
+                : null);
+    }
+
     public static string TestCaseId(ContinuousTestWorkspace workspace, string testName)
     {
         ArgumentNullException.ThrowIfNull(workspace);

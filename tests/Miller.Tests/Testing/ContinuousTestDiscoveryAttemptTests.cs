@@ -38,6 +38,64 @@ public sealed class ContinuousTestDiscoveryAttemptTests : IDisposable
     }
 
     [Fact]
+    public async Task Discovery_capture_isolates_concurrent_attempts_and_restores_outer_scope()
+    {
+        using var outer = new CtDiscoveryCapture();
+        var command = new TestProcessCommand("outer", [], _workspaceRoot);
+        CtDiscoveryCapture.Starting(command);
+        Task[] children = Enumerable.Range(0, 2).Select(async i =>
+        {
+            using var inner = new CtDiscoveryCapture();
+            CtDiscoveryCapture.Starting(new TestProcessCommand($"child-{i}", [], _workspaceRoot));
+            await Task.Yield();
+            CtDiscoveryCapture.Finished(new TestProcessResult(i, $"output-{i}", $"error-{i}"));
+            Assert.Equal($"child-{i}", inner.Command?.FileName);
+            Assert.Equal(i, inner.Result?.ExitCode);
+        }).ToArray();
+        await Task.WhenAll(children);
+        CtDiscoveryCapture.Finished(new TestProcessResult(7, "outer output", "outer error"));
+
+        Assert.Equal(command, outer.Command);
+        Assert.Equal(7, outer.Result?.ExitCode);
+    }
+
+    [Fact]
+    public void Discovery_artifact_bounds_unicode_output_by_utf8_bytes()
+    {
+        var ledger = new CtDiscoveryLedger();
+        var attempt = new CtDiscoveryAttempt("unicode", _workspaceId, Path.Combine(_workspaceRoot, "Test.csproj"),
+            "dotnet", "test", "gen", 1, CtDiscoveryStage.Execution, CtDiscoveryOutcome.Failed,
+            DateTimeOffset.UtcNow, "failed", "detail", null, StandardOutput: string.Concat(Enumerable.Repeat("😀", 20_000)));
+        ledger.RecordAttempt(_workspaceRoot, attempt);
+        string path = ledger.GetLatestAttempt(_workspaceRoot, attempt.ProjectPath)!.ArtifactPath;
+        string output = CtDiscoveryLedger.LoadAttempt(path)!.StandardOutput!;
+
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(output) <= 32 * 1024);
+        Assert.EndsWith("…", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("�", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shared_discovery_ledger_keeps_workspace_projects_separate_and_preserves_id_on_clear()
+    {
+        var ledger = new CtDiscoveryLedger();
+        string secondRoot = Path.Combine(_workspaceRoot, "second");
+        string firstProject = Path.Combine(_workspaceRoot, "First.csproj");
+        string secondProject = Path.Combine(secondRoot, "Second.csproj");
+        var first = new CtDiscoveryAttempt("first", _workspaceId, firstProject, "dotnet", "test",
+            "gen", 1, CtDiscoveryStage.Execution, CtDiscoveryOutcome.Failed, DateTimeOffset.UtcNow,
+            "failed", "detail", null);
+        ledger.RecordAttempt(_workspaceRoot, first);
+        ledger.RecordAttempt(secondRoot, first with { AttemptId = "second", WorkspaceId = "second-ws", ProjectPath = secondProject });
+
+        CtDiscoveryWorkspaceLedger second = Assert.IsType<CtDiscoveryWorkspaceLedger>(CtDiscoveryLedger.LoadLedger(secondRoot));
+        Assert.Equal([secondProject], second.Projects.Keys);
+        ledger.ClearAttempt(secondRoot, secondProject);
+        Assert.Equal("second-ws", CtDiscoveryLedger.LoadLedger(secondRoot)?.WorkspaceId);
+        Assert.Single(CtDiscoveryLedger.LoadLedger(_workspaceRoot)!.Projects);
+    }
+
+    [Fact]
     public void DiscoveryAttempt_ArtifactIsPersisted_AndBoundedTo32KB()
     {
         var ledger = new CtDiscoveryLedger();
@@ -476,6 +534,11 @@ public sealed class ContinuousTestDiscoveryAttemptTests : IDisposable
         Assert.Equal(CtDiscoveryOutcome.Failed, attempt1.Outcome);
         Assert.Equal(10, attempt1.Revision);
         Assert.True(File.Exists(attempt1.ArtifactPath));
+        CtDiscoveryAttempt recorded = Assert.IsType<CtDiscoveryAttempt>(CtDiscoveryLedger.LoadAttempt(attempt1.ArtifactPath));
+        Assert.Equal(23, recorded.ExitCode);
+        Assert.Equal("fake-compiler", recorded.Command?.FileName);
+        Assert.Equal("build output\nsecond line", recorded.StandardOutput);
+        Assert.Equal("build error\nerror detail", recorded.StandardError);
 
         // 2. Second Auto-Run at SAME revision 10: Must NOT probe again!
         queue.Enqueue(CreateChange(ws, "10", 9, 10));
@@ -575,6 +638,8 @@ public sealed class ContinuousTestDiscoveryAttemptTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             DiscoverCallCount++;
+            CtDiscoveryCapture.Starting(new TestProcessCommand("fake-compiler", ["build"], workspace.WorkspaceRoot));
+            CtDiscoveryCapture.Finished(new TestProcessResult(23, "build output\nsecond line", "build error\nerror detail"));
             throw new InvalidOperationException("Toolchain crashed during discovery probe");
         }
 

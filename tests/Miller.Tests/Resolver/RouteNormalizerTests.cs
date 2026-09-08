@@ -285,7 +285,6 @@ public sealed class RouteNormalizerTests
     [Fact]
     public void MultiSegmentRouteTemplate_WithTrailingLiteralSuffix_MatchesClientAndEndpoint()
     {
-        // Template with positional/indexed placeholders and trailing literal suffix "/cancel"
         var clientTemplate = RouteNormalizer.FromClientCall("axios.post", "/api/projects/{0}/builds/{1}/cancel");
         var razorInterpolated = RouteNormalizer.FromClientCall("axios.post", "/api/projects/@project.Id/builds/@build.Id/cancel");
         var endpoint = RouteNormalizer.FromEndpoint(
@@ -296,24 +295,22 @@ public sealed class RouteNormalizerTests
             methodName: "CancelBuild");
 
         Assert.Equal("api/projects/{}/builds/{}/cancel", clientTemplate.Route);
-        Assert.Equal("api/projects/{}/builds/{}/cancel", razorInterpolated.Route);
+        Assert.Equal("api/projects/@project.id/builds/@build.id/cancel", razorInterpolated.Route);
         Assert.Equal("api/projects/{}/builds/{}/cancel", endpoint.Route);
         Assert.Equal(clientTemplate.Route, endpoint.Route);
-        Assert.Equal(razorInterpolated.Route, endpoint.Route);
+        Assert.NotEqual(razorInterpolated.Route, endpoint.Route);
     }
 
     [Fact]
-    public void RazorInterpolation_PreservesDistinctTrailingLiteralSuffixes()
+    public void LiteralAtSigns_AreNotInterpretedAsRazorSyntax()
     {
-        // Razor routes with @Esc(id) must preserve their distinct trailing action suffixes (/start, /enable, /run)
-        // rather than truncating at the @ and collapsing into /tests/.
         var start = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/start");
         var enable = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/enable");
         var run = RouteNormalizer.FromClientCall("fetch", "/tests/@Esc(id)/run");
 
-        Assert.Equal("tests/{}/start", start.Route);
-        Assert.Equal("tests/{}/enable", enable.Route);
-        Assert.Equal("tests/{}/run", run.Route);
+        Assert.Equal("tests/@esc(id)/start", start.Route);
+        Assert.Equal("tests/@esc(id)/enable", enable.Route);
+        Assert.Equal("tests/@esc(id)/run", run.Route);
 
         Assert.NotEqual(start.Route, enable.Route);
         Assert.NotEqual(start.Route, run.Route);
@@ -331,10 +328,9 @@ public sealed class RouteNormalizerTests
         Assert.Equal(complexRoute, norm.RawRoute);
         Assert.Equal("GET", norm.Verb);
 
-        // Razor property chaining and expression with extension
         string razorChained = "/api/workspaces/@workspace.Project.Id/logs/@(logName).txt";
         var normRazor = RouteNormalizer.NormalizeRoute(razorChained, "GET");
-        Assert.Equal("api/workspaces/{}/logs/{}.txt", normRazor.Route);
+        Assert.Equal("api/workspaces/@workspace.project.id/logs/@(logname).txt", normRazor.Route);
 
         // Next.js catch-all and optional catch-all with extension
         string nextCatchAll = "/docs/[...slug]/section/[[...sub]]/export.pdf";

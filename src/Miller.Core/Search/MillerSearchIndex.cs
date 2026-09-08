@@ -34,6 +34,10 @@ public sealed class MillerSearchIndex
     /// <summary>Total number of indexed documents.</summary>
     public int DocumentCount => _documents.Count;
 
+    /// <summary>Estimated retained bytes for postings, term strings, document rows, and lookup arrays.</summary>
+    public long EstimatedRetainedBytes => 256L + 160L * _documents.Count +
+        _postings.Sum(entry => 96L + 2L * entry.Key.Length + 16L * entry.Value.Length);
+
     /// <summary>Number of distinct terms in the index.</summary>
     public int TermCount => _postings.Count;
 

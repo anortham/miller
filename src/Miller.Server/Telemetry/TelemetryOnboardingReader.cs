@@ -20,7 +20,12 @@ public sealed record TelemetryOnboardingFacts(
     int SuccessfulFlowsTotal = 0,
     int TargetHashesTotal = 0,
     int CommonMissesTotal = 0,
-    int FrictionTotal = 0)
+    int FrictionTotal = 0,
+    TelemetryObservationWindow? CurrentWindow = null,
+    TelemetryObservationWindow? HistoricalWindow = null,
+    IReadOnlyList<TelemetryFlow>? HistoricalSuccessfulFlows = null,
+    int HistoricalSuccessfulFlowsTotal = 0,
+    long HistoricalTotalCalls = 0)
 {
     public static TelemetryOnboardingFacts Unavailable(string state, string? error = null) => new(
         Available: false,
@@ -34,6 +39,12 @@ public sealed record TelemetryOnboardingFacts(
         CommonMisses: [],
         Friction: [],
         Error: error);
+}
+
+public sealed record TelemetryObservationWindow(int Days, DateTimeOffset StartUtc, DateTimeOffset EndUtc)
+{
+    public string StartTimestamp => StartUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+    public string EndTimestamp => EndUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
 }
 
 public sealed record TelemetryToolMix(
@@ -98,13 +109,21 @@ public static class TelemetryOnboardingReader
             using SqliteTransaction transaction = connection.BeginTransaction();
             DateTimeOffset now = anchor ?? (timeProvider ?? TimeProvider.System).GetUtcNow();
             int boundedDays = Math.Max(1, windowDays);
-            string cutoff = now.AddDays(-boundedDays).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
-
+            var cutoff = new TelemetryObservationWindow(boundedDays, now.AddDays(-boundedDays), now);
+            var historicalWindow = new TelemetryObservationWindow(30, now.AddDays(-30), now);
+            int boundedLimit = Math.Clamp(limit, 1, 100);
+            WindowSummary history = ReadWindowSummary(connection, transaction, workspaceId, historicalWindow);
+            BoundedRows<TelemetryFlow> historicalFlows = ReadFlows(connection, transaction, workspaceId, historicalWindow, boundedLimit);
             WindowSummary window = ReadWindowSummary(connection, transaction, workspaceId, cutoff);
             if (window.TotalCalls == 0)
-                return EmptyAvailable("sparse");
-
-            int boundedLimit = Math.Clamp(limit, 1, 100);
+                return EmptyAvailable("sparse") with
+                {
+                    CurrentWindow = cutoff,
+                    HistoricalWindow = historicalWindow,
+                    HistoricalSuccessfulFlows = historicalFlows.Rows,
+                    HistoricalSuccessfulFlowsTotal = historicalFlows.Total,
+                    HistoricalTotalCalls = history.TotalCalls,
+                };
             BoundedRows<TelemetryToolMix> toolMix =
                 ReadToolMix(connection, transaction, workspaceId, cutoff, boundedLimit);
             BoundedRows<TelemetryFlow> flows =
@@ -132,7 +151,12 @@ public static class TelemetryOnboardingReader
                 SuccessfulFlowsTotal: flows.Total,
                 TargetHashesTotal: targets.Total,
                 CommonMissesTotal: misses.Total,
-                FrictionTotal: friction.Total);
+                FrictionTotal: friction.Total,
+                CurrentWindow: cutoff,
+                HistoricalWindow: historicalWindow,
+                HistoricalSuccessfulFlows: historicalFlows.Rows,
+                HistoricalSuccessfulFlowsTotal: historicalFlows.Total,
+                HistoricalTotalCalls: history.TotalCalls);
         }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -190,7 +214,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff)
+        TelemetryObservationWindow cutoff)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -198,10 +222,11 @@ public static class TelemetryOnboardingReader
             SELECT COUNT(*), MIN(ts), MAX(ts)
             FROM tool_telemetry
             WHERE workspace_id IS $ws
-              AND ($cutoff = '' OR ts >= $cutoff);
+              AND ts >= $cutoff AND ts <= $anchor;
             """;
         command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$cutoff", cutoff);
+        command.Parameters.AddWithValue("$cutoff", cutoff.StartTimestamp);
+        command.Parameters.AddWithValue("$anchor", cutoff.EndTimestamp);
 
         using SqliteDataReader reader = command.ExecuteReader();
         if (!reader.Read())
@@ -216,7 +241,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit)
     {
         using SqliteCommand command = ScopedCommand(
@@ -232,7 +257,7 @@ public static class TelemetryOnboardingReader
                        bytes_returned, COALESCE(est_tokens, 0) AS est_tokens
                 FROM tool_telemetry
                 WHERE workspace_id IS $ws
-                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND ts >= $cutoff AND ts <= $anchor
             ),
             ranked AS (
                 SELECT *,
@@ -293,7 +318,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit)
     {
         using SqliteCommand command = ScopedCommand(
@@ -307,7 +332,7 @@ public static class TelemetryOnboardingReader
                 SELECT id, ts, tool, op, outcome
                 FROM tool_telemetry
                 WHERE workspace_id IS $ws
-                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND ts >= $cutoff AND ts <= $anchor
             ),
             paired AS (
                 SELECT ts, tool, op, outcome,
@@ -354,7 +379,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit)
     {
         using SqliteCommand command = ScopedCommand(
@@ -368,7 +393,7 @@ public static class TelemetryOnboardingReader
                 SELECT target_hash, COUNT(*) AS calls
                 FROM tool_telemetry
                 WHERE workspace_id IS $ws
-                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND ts >= $cutoff AND ts <= $anchor
                   AND target_hash IS NOT NULL
                   AND TRIM(target_hash) <> ''
                 GROUP BY target_hash
@@ -394,7 +419,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit)
     {
         using SqliteCommand command = ScopedCommand(
@@ -426,7 +451,7 @@ public static class TelemetryOnboardingReader
                            outcome) AS TEXT) AS reason
                 FROM tool_telemetry
                 WHERE workspace_id IS $ws
-                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND ts >= $cutoff AND ts <= $anchor
                   AND outcome IN ('empty', 'error')
             ),
             grouped AS (
@@ -459,7 +484,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit)
     {
         using SqliteCommand command = ScopedCommand(
@@ -474,7 +499,7 @@ public static class TelemetryOnboardingReader
                        bytes_returned, COALESCE(est_tokens, 0) AS est_tokens
                 FROM tool_telemetry
                 WHERE workspace_id IS $ws
-                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND ts >= $cutoff AND ts <= $anchor
             ),
             ranked AS (
                 SELECT *,
@@ -532,7 +557,7 @@ public static class TelemetryOnboardingReader
         SqliteConnection connection,
         SqliteTransaction transaction,
         string? workspaceId,
-        string cutoff,
+        TelemetryObservationWindow cutoff,
         int limit,
         string sql)
     {
@@ -540,7 +565,8 @@ public static class TelemetryOnboardingReader
         command.Transaction = transaction;
         command.CommandText = sql;
         command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$cutoff", cutoff);
+        command.Parameters.AddWithValue("$cutoff", cutoff.StartTimestamp);
+        command.Parameters.AddWithValue("$anchor", cutoff.EndTimestamp);
         command.Parameters.AddWithValue("$limit", limit);
         return command;
     }

@@ -1,6 +1,8 @@
 # CT agent usefulness implementation plan
 
-> **For agentic workers:** Use `razorback:subagent-driven-development` for independent tasks, or `razorback:executing-plans` for serial execution. This document is a task-level plan. Implementation is not authorized by the validation request.
+**Status — 2026-09-08:** Source implementation, corrective dogfood work and native provider checks are recorded in the [CT verification ledger](../findings/2026-09-08-agent-usefulness-dogfood.md#continuous-testing). Provider scopes, skipped tests and outstanding integration checks remain explicit there; Windows and release completion are not claimed. The checklist below preserves the original acceptance criteria; use the ledger for current verified and outstanding status.
+
+> **For agentic workers:** Use `razorback:subagent-driven-development` for independent tasks, or `razorback:executing-plans` for serial execution. This document is a task-level plan. Implementation proceeded in the later user-directed dogfood session; this plan is not release approval.
 
 **Goal:** Make CT's first run diagnosable, preserve request identity through waiting, avoid work whose result is already unusable, and return usable runner instructions when CT is off.
 
@@ -107,6 +109,8 @@ Classify selecting separately from idle and child execution. A stale phase-progr
 Retain the generated request ID in `CtRunResult` even without an ACK. Add proposed request lifecycle facts for submitted, acknowledged, selecting/queued, running, completed, rejected and cancelled. Correlate each command with its requested workspace, lease identity and all project runs it caused. Completion includes a proved no-work result; it cannot require observing a short-lived executing snapshot.
 
 Have `TestsCore.Run` and `WaitForDaemonToSettle` poll that command lifecycle through the full caller wait budget, which includes ACK time. A short ACK timeout may return pending for `wait=false`; it must not cause a duplicate foreground run. For old daemon protocols, return bounded unknown/pending rather than falsely claiming a request completed. Preserve daemon-stopped, lease-lost and timeout outcomes.
+
+**Dogfood clarification, 2026-09-08:** a live MCP call with `wait_seconds=1` and a stopped daemon entered the synchronous foreground fallback and reached the 300-second MCP transport timeout. That path had no command lifecycle and could not honor the caller's wait budget. MCP `wait=true` now returns the existing `daemon_stopped` outcome before reading facts, discovering projects or executing tests. Compact output gives a workspace-scoped start hint; JSON remains advice-free. CLI and MCP `wait=false` keep the foreground one-shot contract. The focused tool/wait/CLI gate passed 156 cases after the regression failed on the old behavior.
 
 - [ ] Unacked work retains its command ID and receives useful pending status and a status hint.
 - [ ] An unrelated project or worktree run completing never satisfies the requested command.

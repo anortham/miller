@@ -503,9 +503,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             if (route.Length == 0)
                 continue;
 
-            var display = RouteDisplay(route);
+            var uncertainty = call.TemplateUncertain ? call.TemplateUncertainty ?? "partial" : null;
+            var display = RouteDisplay(route) + (uncertainty is null ? string.Empty : $" [{uncertainty}]");
             var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, display);
-            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, display, call.FilePath, call.Line));
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, display, call.FilePath, call.Line,
+                ObservationRoute: RouteDisplay(route), ObservationUncertainty: uncertainty));
         }
 
         foreach (var endpoint in structuralEndpoints)
@@ -648,7 +650,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             Language: reference.Fact.Language,
             ContainingSymbolId: reference.ContainingSymbolId,
             Span: new SourceSpan(reference.Fact.Span.StartByte, reference.Fact.Span.EndByte));
-        return new TsClientCall(literal, IsTest: false, reference.FilePath, reference.Line);
+        return new TsClientCall(literal, IsTest: false, reference.FilePath, reference.Line, TemplateUncertain: reference.TemplateUncertain, TemplateUncertainty: reference.TemplateUncertainty);
     }
 
     private static string StructuralCarrier(string patternId, string? verb)

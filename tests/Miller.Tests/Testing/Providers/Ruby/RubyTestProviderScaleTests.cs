@@ -25,6 +25,34 @@ public sealed class RubyTestProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_executes_literal_example_with_configured_runner()
+    {
+        CtProviderTestSupport.RequireRuby();
+        CtProviderTestSupport.RequireRspec();
+        File.WriteAllText(Path.Combine(_root, "Gemfile"), "source 'https://rubygems.org'\ngem 'rspec'\n");
+        Directory.CreateDirectory(Path.Combine(_root, "spec"));
+        File.WriteAllText(Path.Combine(_root, "spec", "literal_spec.rb"), """
+            RSpec.describe 'Selector' do
+              it('status: [ready]') { expect(true).to eq(true) }
+              it('status: ready') { raise 'unrelated example must not run' }
+            end
+            """);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(
+            new ContinuousTestRunRecipeRequest("ruby-recipe", _root, Path.Combine(_root, "Gemfile"),
+                "rspec", "status: [ready]", ConfiguredCommand: "rspec --format progress"));
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
+
+        TestProcessResult result = await new TestProcessRunner().RunAsync(
+            OperatingSystem.IsWindows()
+                ? new TestProcessCommand("powershell", ["-NoProfile", "-Command", recipe.PrimaryCommand], _root)
+                : new TestProcessCommand("sh", ["-c", recipe.PrimaryCommand], _root),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("1 example, 0 failures", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Rspec_smoke_discovers_and_runs_one_passing_and_one_failing_example()
     {
         CtProviderTestSupport.RequireRuby();

@@ -13,7 +13,8 @@ public sealed record CtRunResult(
     CtRunExecution Execution,
     CtDaemonCommandAck? Ack,
     string? Reason,
-    string? CommandId = null);
+    string? CommandId = null,
+    CtDaemonLeaseIdentity? LeaseIdentity = null);
 
 public sealed record CtDaemonStopResult(CtDaemonStopStatus Status, string? Reason);
 
@@ -35,7 +36,8 @@ public static class CtCommandChannel
         string? reason,
         CtFreshnessKey? freshness,
         string? commandId = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        CtDaemonLeaseIdentity? leaseIdentity = null)
     {
         string id = string.IsNullOrWhiteSpace(commandId)
             ? Guid.NewGuid().ToString("N")
@@ -45,7 +47,8 @@ public static class CtCommandChannel
             kind,
             (time ?? TimeProvider.System).GetUtcNow(),
             reason,
-            freshness);
+            freshness,
+            LeaseIdentity: leaseIdentity);
         CtDaemonJson.WriteAtomic(
             CtDaemonProtocol.CommandRequestPath(workspaceRoot, id),
             request,
@@ -98,16 +101,17 @@ public static class CtCommandChannel
         TimeSpan? ackTimeout = null,
         Func<ProcessStartInfo, Process?>? startProcess = null)
     {
-        if (CtDaemonLease.TryReadLive(workspaceRoot) is null)
+        CtDaemonLeaseRecord? lease = CtDaemonLease.TryReadLive(workspaceRoot);
+        if (lease is null)
         {
             _ = startProcess;
             return new CtRunResult(CtRunExecution.ForegroundOneShot, null, "no daemon");
         }
 
         CtDaemonCommandRequest request = WriteRequest(
-            workspaceRoot, CtDaemonCommandKind.Run, reason, freshness);
+            workspaceRoot, CtDaemonCommandKind.Run, reason, freshness, leaseIdentity: lease.Identity);
         CtDaemonCommandAck? ack = WaitForAck(workspaceRoot, request.CommandId, ackTimeout ?? DefaultAckTimeout);
-        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId);
+        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null, request.CommandId, lease.Identity);
     }
 
     public static CtDaemonStopResult Stop(

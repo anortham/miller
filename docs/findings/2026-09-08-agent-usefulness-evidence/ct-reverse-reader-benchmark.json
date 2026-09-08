@@ -1,0 +1,218 @@
+[
+  {
+    "mode": "family",
+    "seeds": 128,
+    "identifiers": 640,
+    "baseline": "same resolver using the old Both direction; fixture and cache loading excluded",
+    "samples": [
+      {
+        "direction": "Both",
+        "sample": 1,
+        "milliseconds": 26.2428,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 2,
+        "milliseconds": 25.057,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 3,
+        "milliseconds": 27.9006,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 4,
+        "milliseconds": 24.37,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 5,
+        "milliseconds": 24.0949,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 1,
+        "milliseconds": 22.4464,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 2,
+        "milliseconds": 24.6944,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 3,
+        "milliseconds": 22.3389,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 4,
+        "milliseconds": 22.1264,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 5,
+        "milliseconds": 21.6547,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      }
+    ]
+  },
+  {
+    "mode": "legacy",
+    "seeds": 128,
+    "identifiers": 640,
+    "baseline": "same resolver using the old Both direction; fixture and cache loading excluded",
+    "samples": [
+      {
+        "direction": "Both",
+        "sample": 1,
+        "milliseconds": 17.0526,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 2,
+        "milliseconds": 17.227,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 3,
+        "milliseconds": 17.493,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 4,
+        "milliseconds": 17.262,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Both",
+        "sample": 5,
+        "milliseconds": 17.0171,
+        "ForwardPasses": 1,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 5,
+        "IdentifierDetailRows": 640,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 1,
+        "milliseconds": 15.0987,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 2,
+        "milliseconds": 15.2607,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 3,
+        "milliseconds": 17.6073,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 4,
+        "milliseconds": 15.0706,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      },
+      {
+        "direction": "Reverse",
+        "sample": 5,
+        "milliseconds": 15.0387,
+        "ForwardPasses": 0,
+        "ReversePasses": 1,
+        "IdentifierDetailCommands": 4,
+        "IdentifierDetailRows": 512,
+        "inbound_edges": 128
+      }
+    ]
+  }
+]

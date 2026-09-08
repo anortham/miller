@@ -9,13 +9,84 @@ internal static class RubyTestTooling
     internal const string Framework = "rspec";
     internal const string ProjectFileName = "Gemfile";
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        var workspace = new ContinuousTestWorkspace(request.WorkspaceId, request.WorkspaceRoot,
+            request.ProjectPath, Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests"),
+            Framework: request.Framework, Command: request.ConfiguredCommand);
+        string root = ProjectRoot(workspace);
+        string framework = request.Framework == "minitest" ? "minitest" : Framework;
+        if (framework == "minitest")
+        {
+            if (request.ExcludeTraits is { Count: > 0 })
+                return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                    [], TestSelectorScope.ProjectSuite,
+                    UnavailableReason: "Minitest does not provide a portable trait exclusion selector.");
+            IReadOnlyList<string> command = string.IsNullOrWhiteSpace(request.ConfiguredCommand)
+                ? ["rake", "test"]
+                : SplitCommand(request.ConfiguredCommand);
+            if (command.Count == 0)
+                return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                    [], request.Scope, UnavailableReason: "Ruby test command must name an executable.");
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                [new TestRunStep(command[0], command.Skip(1).ToArray(), root)], TestSelectorScope.ProjectSuite,
+                request.TestSelector, Prerequisite: "Ruby, Rake, and the project gems installed",
+                UnavailableReason: request.TestSelector is null ? null : "Recipe runs the Minitest project suite; no native case identity was supplied.");
+        }
+
+        var arguments = new List<string>();
+        bool exact = false;
+        TestSelectorScope scope = TestSelectorScope.ProjectSuite;
+        if (request.TestSelector is { Length: > 0 } selector)
+        {
+            if (TryDecodeCaseId(selector, out RubyTestCaseIdentity identity))
+            {
+                if (identity.WorkspaceId != request.WorkspaceId ||
+                    !string.Equals(Path.GetFullPath(identity.ProjectPath), Path.GetFullPath(request.ProjectPath),
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                        [], request.Scope, request.TestSelector,
+                        UnavailableReason: "Native test identity belongs to a different workspace or project.");
+                arguments.Add(identity.Selector ?? identity.ExampleId);
+                exact = true;
+                scope = TestSelectorScope.SingleTest;
+            }
+            else if (request.IsExact)
+            {
+                arguments.Add(selector);
+                exact = true;
+                scope = request.Scope;
+            }
+            else
+            {
+                arguments.AddRange(["--example", selector]);
+                scope = TestSelectorScope.MatchingTests;
+            }
+        }
+        if (!exact && request.TestFilePath is { Length: > 0 } file)
+        {
+            arguments.Add(Path.GetRelativePath(root,
+                Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file))).Replace('\\', '/'));
+            if (request.TestSelector is null)
+                scope = TestSelectorScope.TestFile;
+        }
+        foreach (string trait in request.ExcludeTraits ?? [])
+            arguments.AddRange(["--tag", "~" + trait.Replace('=', ':')]);
+        TestProcessCommand invocation = BuildCommand(workspace, arguments);
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+            [new TestRunStep(invocation.FileName, invocation.Arguments, invocation.WorkingDirectory,
+                Environment: invocation.Environment)], scope, request.TestSelector,
+            Prerequisite: "Ruby and project RSpec dependencies installed",
+            ExcludeTraits: request.ExcludeTraits, IsExact: exact);
+    }
+
     internal static TestProcessCommand BuildDiscoveryCommand(
         ContinuousTestWorkspace workspace,
         CtGenerationPaths paths)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(paths);
-        return BuildCommand(workspace, paths, ["--dry-run", "--format", "json"]);
+        return BuildCommand(workspace, ["--dry-run", "--format", "json"]);
     }
 
     internal static TestProcessCommand BuildRunCommand(
@@ -33,7 +104,7 @@ internal static class RubyTestTooling
         var arguments = new List<string> { "--format", "json", "--out", Path.GetFullPath(artifactPath) };
         if (!wholeSuite)
             arguments.AddRange(selectors);
-        return BuildCommand(workspace, paths, arguments);
+        return BuildCommand(workspace, arguments);
     }
 
     internal static string ProjectRoot(ContinuousTestWorkspace workspace)
@@ -170,7 +241,6 @@ internal static class RubyTestTooling
 
     private static TestProcessCommand BuildCommand(
         ContinuousTestWorkspace workspace,
-        CtGenerationPaths paths,
         IReadOnlyList<string> rspecArguments)
     {
         string projectRoot = ProjectRoot(workspace);

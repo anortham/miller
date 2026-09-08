@@ -17,4 +17,5 @@ public sealed record WorkspaceContentSearchContext(
     bool? IndexFresh,
     string FreshnessStatus,
     string? WarningText,
-    string? DisplayId = null);
+    string? DisplayId = null,
+    BackgroundRefreshOperationSnapshot? BackgroundOperation = null);

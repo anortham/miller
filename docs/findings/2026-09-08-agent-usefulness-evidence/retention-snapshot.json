@@ -1,0 +1,156 @@
+{
+  "snapshot": {
+    "source": "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f",
+    "destination": "/home/murphy/.cache/miller-dogfood/miller-retention-observation-_6jwcq4f/store",
+    "started": 1788839404.8237247,
+    "completed": 1788839427.5344944,
+    "generation": "gen-001",
+    "scope": "Coordinator and current store database read snapshots plus immutable bases. Sidecars and transient files excluded; their capacity measurements are not live-family totals."
+  },
+  "report": {
+    "report_schema_version": 1,
+    "action": "inspect",
+    "mode": "plan",
+    "run_id": null,
+    "family_id": "a271f2bd-7368-4da6-b5aa-24ffad69fb1f",
+    "source_generation": "gen-001",
+    "destination_generation": null,
+    "selected_generation": null,
+    "disposition": "planned",
+    "plan_fingerprint": "sha256:ee9e0fa78ab47b098ecf21a218fb0d3501e1a0ddc62eb48bfa924f57d7a75207",
+    "fingerprints": {
+      "store_root": "sha256:0641d80692268598df8b6ef7f9ef6db253ae5be86bdf64f51766842208046d34",
+      "coordinator_root": "sha256:8fdf27773b3cbf95d138affebafab54975f7c4d53fe29c8514097d9d0f95481c"
+    },
+    "counts": {
+      "versions": 15070,
+      "purge_eligible_versions": 4165,
+      "eligible_manifests": 1980,
+      "pressure_only_manifests": 0,
+      "demotion_versions": 100,
+      "protected_bases": 0,
+      "eligible_bases": 0,
+      "protected_deltas": 0,
+      "eligible_deltas": 0,
+      "protected_pins": 0,
+      "expired_pins": 0,
+      "protected_requests": 6886,
+      "protected_scratch": 0,
+      "protected_cursors": 2,
+      "protected_generations": 1,
+      "protected_failed_paths": 0,
+      "demoted_l3": 0,
+      "demoted_l2": 0,
+      "purged_versions": 0,
+      "removed_manifests": 0,
+      "removed_deltas": 0,
+      "removed_bases": 0,
+      "removed_base_files": 0,
+      "removed_pins": 0,
+      "removed_scratch_files": 0,
+      "archived_requests": 0,
+      "pruned_request_rows": 0,
+      "pruned_log_rows": 0,
+      "copied_file_versions": 0,
+      "copied_rows": 0,
+      "copied_base_files": 0,
+      "removed_generations": 0,
+      "retired_views": 0,
+      "retired_manifests": 0,
+      "retired_manifest_entries": 0
+    },
+    "retention": {
+      "protected_current_bytes": 83125514,
+      "retained_logical_bytes": 337912884,
+      "eligible_bytes": 151373973,
+      "target_bytes": 99750616,
+      "ceiling_bytes": 103906892,
+      "pressure": true,
+      "physical_current_bytes": 16428675072,
+      "physical_bytes_before_gc": 16428675072,
+      "physical_bytes_after_gc": 0,
+      "physical_baseline_bytes": 10298273792,
+      "physical_target_bytes": 12357928550,
+      "physical_ceiling_bytes": 12872842240,
+      "physical_target_breached": true,
+      "physical_ceiling_breached": true,
+      "physical_breach_limit": 3,
+      "physical_breach_streak": 0,
+      "compaction_required": false
+    },
+    "readers": {
+      "protected_reader_count": 1,
+      "definitively_dead_reader_count": 67,
+      "retained_unknown_reader_count": 0,
+      "removed_reader_count": 0,
+      "reader_warnings": [],
+      "omitted_warning_count": 0
+    },
+    "capacity": {
+      "measured_bytes": 16428675072,
+      "free_bytes": 1621795160064,
+      "store_page_bytes": 16428675072,
+      "store_freelist_bytes": 0,
+      "store_wal_bytes": 0,
+      "base_bytes": 0,
+      "scratch_bytes": 0,
+      "staged_generation_bytes": 16428707840,
+      "demotion_wal_headroom_bytes": 1706119,
+      "gc_required_bytes": 18483335,
+      "promotion_required_bytes": 16713920512,
+      "gc_fits": true,
+      "promotion_fits": true
+    },
+    "integrity_checks": [
+      "store_roots_validated",
+      "coordinator_roots_validated"
+    ],
+    "escalation": null,
+    "recovery_actions": [],
+    "last_version_cursor": null,
+    "consumer_id": null,
+    "consumer_sequence": null,
+    "failure_class": "none",
+    "error": null
+  },
+  "logical_scope": "Current generation and coordinator; empty bases/spool/scratch were verified from source. Miller sidecars excluded and measured separately at 4052462889 apparent bytes. Retained logical bytes (337912884) equal SUM(file_versions.content_bytes) for 15070 source versions; these and eligible_bytes are source-content accounting, not serialized fact storage or predicted reclaimed disk bytes. physical_current_bytes measures SQLite page storage separately.",
+  "live_inspection": {
+    "start_utc": 1788838806.0146573,
+    "elapsed_ms": 15437,
+    "returncode": 1,
+    "before": {
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/gen-001/store.db": {
+        "size": 16364392448,
+        "allocated": 16364388352
+      },
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/gen-001/store.db-wal": {
+        "size": 0,
+        "allocated": 0
+      },
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/coord.db": {
+        "size": 97357824,
+        "allocated": 97357824
+      }
+    },
+    "after": {
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/gen-001/store.db": {
+        "size": 16364392448,
+        "allocated": 16364388352
+      },
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/gen-001/store.db-wal": {
+        "size": 0,
+        "allocated": 0
+      },
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/coord.db": {
+        "size": 97357824,
+        "allocated": 97357824
+      },
+      "/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f/coord.db-wal": {
+        "size": 0,
+        "allocated": 0
+      }
+    },
+    "stdout": "{\"report_schema_version\":1,\"action\":\"inspect\",\"mode\":\"plan\",\"run_id\":null,\"family_id\":\"a271f2bd-7368-4da6-b5aa-24ffad69fb1f\",\"source_generation\":\"gen-001\",\"destination_generation\":null,\"selected_generation\":null,\"disposition\":\"failed\",\"plan_fingerprint\":\"\",\"fingerprints\":{\"store_root\":\"\",\"coordinator_root\":\"\"},\"counts\":{\"versions\":0,\"purge_eligible_versions\":0,\"eligible_manifests\":0,\"pressure_only_manifests\":0,\"demotion_versions\":0,\"protected_bases\":0,\"eligible_bases\":0,\"protected_deltas\":0,\"eligible_deltas\":0,\"protected_pins\":0,\"expired_pins\":0,\"protected_requests\":0,\"protected_scratch\":0,\"protected_cursors\":0,\"protected_generations\":0,\"protected_failed_paths\":0,\"demoted_l3\":0,\"demoted_l2\":0,\"purged_versions\":0,\"removed_manifests\":0,\"removed_deltas\":0,\"removed_bases\":0,\"removed_base_files\":0,\"removed_pins\":0,\"removed_scratch_files\":0,\"archived_requests\":0,\"pruned_request_rows\":0,\"pruned_log_rows\":0,\"copied_file_versions\":0,\"copied_rows\":0,\"copied_base_files\":0,\"removed_generations\":0,\"retired_views\":0,\"retired_manifests\":0,\"retired_manifest_entries\":0},\"retention\":{\"protected_current_bytes\":0,\"retained_logical_bytes\":0,\"eligible_bytes\":0,\"target_bytes\":0,\"ceiling_bytes\":0,\"pressure\":false,\"physical_current_bytes\":0,\"physical_bytes_before_gc\":0,\"physical_bytes_after_gc\":0,\"physical_baseline_bytes\":0,\"physical_target_bytes\":0,\"physical_ceiling_bytes\":0,\"physical_target_breached\":false,\"physical_ceiling_breached\":false,\"physical_breach_limit\":0,\"physical_breach_streak\":0,\"compaction_required\":false},\"capacity\":{\"measured_bytes\":0,\"free_bytes\":0,\"store_page_bytes\":0,\"store_freelist_bytes\":0,\"store_wal_bytes\":0,\"base_bytes\":0,\"scratch_bytes\":0,\"staged_generation_bytes\":0,\"demotion_wal_headroom_bytes\":0,\"gc_required_bytes\":0,\"promotion_required_bytes\":0,\"gc_fits\":false,\"promotion_fits\":false},\"integrity_checks\":[],\"escalation\":null,\"recovery_actions\":[],\"last_version_cursor\":null,\"consumer_id\":null,\"consumer_sequence\":null,\"failure_class\":\"stale_plan\",\"error\":{\"class\":\"stale_plan\",\"code\":\"maintenance_inspection_raced\",\"message\":\"coord.db changed during maintenance inspection\"}}\n",
+    "stderr": ""
+  }
+}

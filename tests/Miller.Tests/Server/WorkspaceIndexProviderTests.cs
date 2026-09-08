@@ -1840,6 +1840,31 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     /// projection answers, and the record must say so rather than borrowing the sidecar's name.
     /// </summary>
     [Fact]
+    public void ResolveSymbolRead_SharedProjectionKeepsMeasurementWrappersPerRequest()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("projection-isolation");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var snapshot = StoreSnapshot(root, "manifest-a");
+        using var cache = new WorkspaceReadProjectionCache();
+        int loads = 0;
+        WorkspaceIndexProvider CreateProvider() => NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"), registry,
+            sidecar: SymbolSearchSidecar.Disabled,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            loadSessionSymbolSearch: _ => { loads++; return SymbolSearchProjectionLoader.Load(target.DbPath); },
+            projectionCache: cache);
+        using var first = CreateProvider().ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        using var second = CreateProvider().ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        Assert.Equal(1, loads);
+        Assert.NotSame(first.Index, second.Index);
+    }
+
+    [Fact]
     public void ResolveSymbolRead_FamilyStoreSidecarOptOut_RecordsTheSessionProjectionAsTheLookupBackend()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -3397,7 +3422,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     public void Resolve_RegisteredWorkspace_RefreshesBeforeLoadingWhenRequested()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
-        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var target = DbWithSymbol("target-ws", revision: 2, "TargetType");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("target-refresh");
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
@@ -3518,7 +3543,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal("unconfirmed_lock_busy", context.FreshnessStatus);
-        Assert.False(context.IndexFresh);
+        Assert.Null(context.IndexFresh);
         Assert.Equal("busy but readable", context.WarningText);
         Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
     }
@@ -3543,8 +3568,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
-        Assert.Equal("loaded_existing", context.FreshnessStatus);
-        Assert.False(context.IndexFresh);
+        Assert.Equal("unconfirmed", context.FreshnessStatus);
+        Assert.Null(context.IndexFresh);
         Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
     }
 
@@ -3677,7 +3702,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(3, context.Revision);
 
         string? banner = ReadToolWorkspaceRouting.CompactBanner(context, "target-ws", json: false);
-        Assert.Equal("workspace: target-111111111111\nfreshness: refresh_pending\nrevision: 3", banner);
+        Assert.Equal("workspace: target-111111111111\nfreshness: unconfirmed\nrevision: 3\nbackground: queued", banner);
     }
 
     [Fact]
@@ -3822,10 +3847,42 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RegisteredBackground_DoesNotReuseCompletionAfterArtifactReplacement()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        ReplaceArtifactId(target.DbPath, "original-artifact");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-replacement");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+        var scheduled = new List<Action>();
+        var gate = new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => 1000);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath,
+                Revision: 3, Scanned: true, ArtifactId: "original-artifact"),
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate);
+
+        provider.ResolveArtifact("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Single(scheduled)();
+        ReplaceArtifactId(target.DbPath, "replacement-artifact");
+
+        using WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", WorkspaceRefreshMode.Background);
+        Assert.Null(context.IndexFresh);
+        Assert.NotEqual("unchanged", context.FreshnessStatus);
+    }
+
+    [Fact]
     public void Resolve_RegisteredBackground_DuringCooldownAfterFinishedRefresh_DoesNotForceRefreshPending()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        ReplaceArtifactId(target.DbPath, "confirmed-artifact");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("target-background-cooldown-pending");
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
@@ -3839,21 +3896,18 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             refresh: workspaceId => new WorkspaceRefreshResult(
-                WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true),
+                WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true, ArtifactId: "confirmed-artifact"),
             scheduleBackgroundRefresh: scheduled.Add,
             backgroundRefreshGate: gate);
 
-        // First call: schedules background refresh, state is Queued
         using (WorkspaceReadContext ctx1 = provider.Resolve("target-ws", WorkspaceRefreshMode.Background))
         {
             Assert.Equal("refresh_pending", ctx1.FreshnessStatus);
         }
 
-        // Run the scheduled refresh to completion
         Assert.Single(scheduled);
         scheduled[0]();
 
-        // Second call during cooldown: refresh is already finished (Unchanged), so it should not be refresh_pending
         using (WorkspaceReadContext ctx2 = provider.Resolve("target-ws", WorkspaceRefreshMode.Background))
         {
             Assert.NotEqual("refresh_pending", ctx2.FreshnessStatus);
@@ -4128,7 +4182,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         SupplementalEdgeCache? supplementalEdgesCache = null,
         Action<Action>? scheduleBackgroundRefresh = null,
         Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
-        BackgroundRefreshGate? backgroundRefreshGate = null) =>
+        BackgroundRefreshGate? backgroundRefreshGate = null,
+        WorkspaceReadProjectionCache? projectionCache = null) =>
         new(
             holder,
             workspace,
@@ -4157,7 +4212,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             // legacy read-session seam, so readability is the legacy artifact's existence.
             scheduleBackgroundRefresh: scheduleBackgroundRefresh,
             hasReadableIndex: hasReadableIndex ?? (row => File.Exists(row.IndexDbPath)),
-            backgroundRefreshGate: backgroundRefreshGate);
+            backgroundRefreshGate: backgroundRefreshGate,
+            projectionCache: projectionCache);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

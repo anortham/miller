@@ -10,6 +10,65 @@ internal static class PhpTestTooling
     internal const string PhpUnitFramework = "phpunit";
     internal const string PestFramework = "pest";
 
+    internal static ContinuousTestRunRecipe BuildDirectRunRecipe(ContinuousTestRunRecipeRequest request)
+    {
+        var workspace = new ContinuousTestWorkspace(request.WorkspaceId, request.WorkspaceRoot,
+            request.ProjectPath, Path.Combine(request.WorkspaceRoot, ".miller", "manual-tests"),
+            Command: request.ConfiguredCommand);
+        string root = ProjectRoot(workspace);
+        string framework = request.Framework is PhpUnitFramework or PestFramework
+            ? request.Framework
+            : DetectFramework(request.ProjectPath) ?? PhpUnitFramework;
+        string runner;
+        IReadOnlyList<string> prefix;
+        try
+        {
+            (runner, prefix) = CommandPrefix(workspace, framework);
+        }
+        catch (ContinuousTestProviderException exception)
+        {
+            return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                [], request.Scope, UnavailableReason: exception.Message);
+        }
+
+        var arguments = prefix.ToList();
+        bool exact = false;
+        TestSelectorScope scope = TestSelectorScope.ProjectSuite;
+        if (request.TestSelector is { Length: > 0 } selector)
+        {
+            if (TryDecodeCaseId(selector, out PhpTestCaseIdentity identity))
+            {
+                if (identity.WorkspaceId != request.WorkspaceId ||
+                    !string.Equals(Path.GetFullPath(identity.ProjectPath), Path.GetFullPath(request.ProjectPath),
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+                        [], request.Scope, request.TestSelector,
+                        UnavailableReason: "Native test identity belongs to a different workspace or project.");
+                selector = identity.Selector;
+                exact = true;
+            }
+            else
+            {
+                exact = request.IsExact;
+            }
+            arguments.AddRange(["--filter", exact ? BuildFilter([selector]) : RegexEscape(selector)]);
+            scope = exact ? TestSelectorScope.SingleTest : TestSelectorScope.MatchingTests;
+        }
+        if (request.TestFilePath is { Length: > 0 } file)
+        {
+            arguments.Add(Path.GetRelativePath(root,
+                Path.GetFullPath(Path.Combine(request.WorkspaceRoot, file))).Replace('\\', '/'));
+            if (request.TestSelector is null)
+                scope = TestSelectorScope.TestFile;
+        }
+        if (request.ExcludeTraits is { Count: > 0 })
+            arguments.AddRange(["--exclude-group", string.Join(',', request.ExcludeTraits)]);
+        return new ContinuousTestRunRecipe(request.WorkspaceId, request.ProjectPath, framework, root,
+            [new TestRunStep(runner, arguments, root)], scope, request.TestSelector,
+            Prerequisite: "PHP and project Composer dependencies installed",
+            ExcludeTraits: request.ExcludeTraits, IsExact: exact);
+    }
+
     internal static string? DetectFramework(string projectPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
@@ -90,6 +149,17 @@ internal static class PhpTestTooling
     internal static bool IsPhpProjectFile(string path) =>
         string.Equals(Path.GetFileName(path), ProjectFileName, StringComparison.OrdinalIgnoreCase);
 
+    internal static (string Executable, IReadOnlyList<string> Arguments) CommandPrefix(
+        ContinuousTestWorkspace workspace, string framework)
+    {
+        if (string.IsNullOrWhiteSpace(workspace.Command))
+            return (RunnerPath(workspace, framework), []);
+        IReadOnlyList<string> tokens = NodeCommandLine.SplitCommand(workspace.Command);
+        if (tokens.Count == 0)
+            throw new ContinuousTestProviderException("PHP test command must name an executable.");
+        return (tokens[0], tokens.Skip(1).ToArray());
+    }
+
     internal static string RunnerPath(ContinuousTestWorkspace workspace, string framework)
     {
         string root = ProjectRoot(workspace);
@@ -161,7 +231,7 @@ internal static class PhpTestTooling
     internal static string NormalizeClassName(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        string normalized = value.Trim();
+        string normalized = value.Trim().Replace('.', '\\');
         while (normalized.Contains("\\\\", StringComparison.Ordinal))
             normalized = normalized.Replace("\\\\", "\\", StringComparison.Ordinal);
         return normalized;
@@ -205,9 +275,10 @@ internal static class PhpTestTooling
         IReadOnlyList<string> arguments)
     {
         string root = ProjectRoot(workspace);
+        (string executable, IReadOnlyList<string> prefix) = CommandPrefix(workspace, framework);
         return new TestProcessCommand(
-            RunnerPath(workspace, framework),
-            arguments.ToArray(),
+            executable,
+            prefix.Concat(arguments).ToArray(),
             root,
             WorkspaceEnvironment(workspace, paths));
     }

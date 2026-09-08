@@ -491,8 +491,10 @@ public sealed class CrossWorkspaceRefreshService
             WorkspaceRefreshStatus status = report.IsNoChange
                 ? WorkspaceRefreshStatus.Unchanged
                 : WorkspaceRefreshStatus.Refreshed;
+            WorkspaceFreshnessProbe? completedProbe = useStore ? TryReadStoreProbe(row) : null;
             string? artifactId = report.Artifact?.ArtifactId
-                ?? TryReadArtifactId(row, useStore)
+                ?? completedProbe?.StoreInstanceId
+                ?? (useStore ? null : TryReadArtifactId(row, useStore: false))
                 ?? artifactIdBeforeScan;
             return new WorkspaceRefreshResult(
                 status,
@@ -505,7 +507,8 @@ public sealed class CrossWorkspaceRefreshService
                 ScanDuration: scanClock.Elapsed,
                 TotalDuration: total.Elapsed,
                 ArtifactId: artifactId,
-                Sidecars: sidecars);
+                Sidecars: sidecars,
+                IndexGenerationIdentity: completedProbe?.IndexGenerationIdentity);
         }
         catch (Exception ex)
         {

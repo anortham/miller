@@ -92,6 +92,8 @@ public sealed record StoreWorkspaceFacts(
     public static StoreWorkspaceFacts Unavailable(FamilyStoreReadException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
+        if (exception.IsReaderAdmissionBusy)
+            return Unavailable("unavailable", "reader_admission_busy", exception.Message);
         string failure = exception.Failure switch
         {
             FamilyStoreReadFailure.BindingNotReady => "binding_not_ready",
@@ -2422,6 +2424,9 @@ public static class WorkspaceRender
             .Append("  ").Append(facts.StatusFacts.Root).Append('\n');
         sb.Append("telemetry: ").Append(facts.Telemetry.State)
             .Append("  calls ").Append(facts.Telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture));
+        if (facts.Telemetry.CurrentWindow is { } currentWindow)
+            sb.Append("  current ").Append(currentWindow.Days.ToString(CultureInfo.InvariantCulture))
+                .Append("d  evaluated ").Append(currentWindow.EndTimestamp);
         if (facts.Telemetry.WindowStartTs is not null && facts.Telemetry.WindowEndTs is not null)
             sb.Append("  window ").Append(facts.Telemetry.WindowStartTs).Append("..").Append(facts.Telemetry.WindowEndTs);
         if (!facts.Telemetry.Available && !string.IsNullOrWhiteSpace(facts.Telemetry.Error))
@@ -2448,6 +2453,20 @@ public static class WorkspaceRender
             foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(rowLimit))
                 sb.Append("- ").Append(flow.From).Append(" -> ").Append(flow.To)
                     .Append(" (").Append(flow.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+        }
+
+        if (facts.Telemetry.HistoricalWindow is { } historyWindow)
+        {
+            sb.Append("historical successful flows (").Append(historyWindow.Days.ToString(CultureInfo.InvariantCulture))
+                .Append("d): ").Append(historyWindow.StartTimestamp).Append("..").Append(historyWindow.EndTimestamp)
+                .Append("  calls ").Append(facts.Telemetry.HistoricalTotalCalls.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            IReadOnlyList<TelemetryFlow> history = facts.Telemetry.HistoricalSuccessfulFlows ?? [];
+            foreach (TelemetryFlow flow in history.Take(rowLimit))
+                sb.Append("- ").Append(flow.From).Append(" -> ").Append(flow.To)
+                    .Append(" (").Append(flow.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+            int omitted = Math.Max(0, ExactTotal(facts.Telemetry.HistoricalSuccessfulFlowsTotal, history.Count) - Math.Min(history.Count, rowLimit));
+            if (omitted > 0)
+                sb.Append("historical flows omitted: ").Append(omitted.ToString(CultureInfo.InvariantCulture)).Append('\n');
         }
 
         if (facts.HotTargets.Count > 0)
@@ -2562,6 +2581,9 @@ public static class WorkspaceRender
             w.WriteBoolean("available", facts.Telemetry.Available);
             w.WriteString("state", facts.Telemetry.State);
             w.WriteNumber("total_calls", facts.Telemetry.TotalCalls);
+            WriteObservationWindow(w, "current_window", facts.Telemetry.CurrentWindow);
+            WriteObservationWindow(w, "historical_window", facts.Telemetry.HistoricalWindow);
+            w.WriteNumber("historical_total_calls", facts.Telemetry.HistoricalTotalCalls);
             if (facts.Telemetry.WindowStartTs is null) w.WriteNull("window_start_ts");
             else w.WriteString("window_start_ts", facts.Telemetry.WindowStartTs);
             if (facts.Telemetry.WindowEndTs is null) w.WriteNull("window_end_ts");
@@ -2587,6 +2609,11 @@ public static class WorkspaceRender
                 ExactTotal(facts.Telemetry.ToolMixTotal, facts.Telemetry.ToolMix.Count),
                 toolMix.Length);
             WriteFlowsJson(w, successfulFlows);
+            IReadOnlyList<TelemetryFlow> history = facts.Telemetry.HistoricalSuccessfulFlows ?? [];
+            TelemetryFlow[] historicalFlows = history.Take(rowLimit).ToArray();
+            WriteFlowsJson(w, historicalFlows, "historical_successful_flows");
+            WriteCountMetadata(w, "historical_successful_flows",
+                ExactTotal(facts.Telemetry.HistoricalSuccessfulFlowsTotal, history.Count), historicalFlows.Length);
             WriteCountMetadata(
                 w,
                 "successful_flows",
@@ -2674,9 +2701,24 @@ public static class WorkspaceRender
         w.WriteEndArray();
     }
 
-    private static void WriteFlowsJson(Utf8JsonWriter w, IReadOnlyList<TelemetryFlow> flows)
+    private static void WriteObservationWindow(Utf8JsonWriter writer, string name, TelemetryObservationWindow? window)
     {
-        w.WritePropertyName("successful_flows");
+        writer.WritePropertyName(name);
+        if (window is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartObject();
+        writer.WriteNumber("days", window.Days);
+        writer.WriteString("start_utc", window.StartUtc);
+        writer.WriteString("end_utc", window.EndUtc);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteFlowsJson(Utf8JsonWriter w, IReadOnlyList<TelemetryFlow> flows, string name = "successful_flows")
+    {
+        w.WritePropertyName(name);
         w.WriteStartArray();
         foreach (TelemetryFlow flow in flows)
         {

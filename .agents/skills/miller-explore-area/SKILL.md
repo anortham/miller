@@ -3,7 +3,7 @@ name: miller-explore-area
 description: Use when orienting on an unfamiliar code area with Miller, explaining a module, finding entry points, or gathering context before a change.
 user-invocable: true
 argument-hint: "<area, concept, module, file, or task>"
-allowed-tools: mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__workspace
+allowed-tools: mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__workspace, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__trace, mcp__plugin_miller_miller__workspace
 ---
 
 # Miller Explore Area
@@ -21,8 +21,8 @@ in the `miller-orientation` skill.
 
 ## Workflow
 
-1. If the workspace may be stale, run `workspace(operation="status")`; use `workspace(operation="refresh")` when needed.
-   When you are starting fresh in an already-indexed repo, run `workspace(operation="onboarding")` first — it
+1. If the workspace may be stale, run `workspace(workspace_id="<id>", operation="status")`; use `workspace(workspace_id="<id>", operation="refresh")` when needed.
+   When you are starting fresh in an already-indexed repo, run `workspace(workspace_id="<id>", operation="onboarding")` first — it
    summarizes local telemetry into starter guidance for this repo.
 2. For unfamiliar task-shaped work, start with:
 

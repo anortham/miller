@@ -1,6 +1,7 @@
 using Miller.Core.Graph;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Workspaces;
 using Xunit;
 
@@ -26,9 +27,75 @@ public sealed class WorkspaceReadProjectionCacheTests
     }
 
     [Fact]
+    public void EstimatedBudget_EvictsLeastRecentlyUsedProjection()
+    {
+        using var cache = new WorkspaceReadProjectionCache(maxEstimatedBytes: 1500);
+        var first = new WorkspaceReadProjectionKey("first", "g", "v", 1, "symbol");
+        var second = first with { WorkspaceId = "second" };
+        cache.GetOrAddSymbolIndex(first, () => new DummySymbolIndex("first"));
+        cache.GetOrAddSymbolIndex(second, () => new DummySymbolIndex("second"));
+        Assert.Equal(1, cache.Count);
+        Assert.InRange(cache.EstimatedRetainedBytes, 1, 1500);
+        bool reloaded = false;
+        cache.GetOrAddSymbolIndex(first, () => { reloaded = true; return new DummySymbolIndex("again"); });
+        Assert.True(reloaded);
+    }
+
+    [Fact]
+    public void IdleTimer_ReleasesProjectionWithoutAnotherRead()
+    {
+        var clock = new ProjectionClock();
+        using var cache = new WorkspaceReadProjectionCache(clock);
+        var key = new WorkspaceReadProjectionKey("ws", "g", "v", 1, "symbol");
+        cache.GetOrAddSymbolIndex(key, () => new DummySymbolIndex("value"));
+        Assert.Equal(1, cache.Count);
+        clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal(0, cache.Count);
+        Assert.Equal(0, cache.EstimatedRetainedBytes);
+    }
+
+    private sealed class ProjectionClock : TimeProvider
+    {
+        private DateTimeOffset _now = DateTimeOffset.UtcNow;
+        private Action? _tick;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            _tick = () => callback(state);
+            return new ProjectionTimer();
+        }
+        public void Advance(TimeSpan elapsed) { _now += elapsed; _tick?.Invoke(); }
+        private sealed class ProjectionTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() { }
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    [Theory]
+    [InlineData("family")]
+    [InlineData("manifest")]
+    [InlineData("level")]
+    public void ProjectionKey_ChangesWithEverySnapshotIdentityComponent(string change)
+    {
+        var snapshot = new WorkspaceReadSnapshot("/workspace", "ws", "family-a", "view",
+            new WorkspaceFreshnessToken("family-a", 7, ManifestHash: "hash-a"),
+            "full", WorkspaceReadMode.FamilyStore, GenerationName: "gen-001");
+        var changed = change switch
+        {
+            "family" => snapshot with { ArtifactOrStoreId = "family-b" },
+            "manifest" => snapshot with { Freshness = snapshot.Freshness with { ManifestHash = "hash-b" } },
+            _ => snapshot with { IndexLevel = "symbols" }
+        };
+        Assert.NotEqual(WorkspaceReadProjectionKey.ForSymbol("ws", snapshot), WorkspaceReadProjectionKey.ForSymbol("ws", changed));
+        Assert.NotEqual(WorkspaceReadProjectionKey.ForBridge("ws", snapshot), WorkspaceReadProjectionKey.ForBridge("ws", changed));
+    }
+
+    [Fact]
     public async Task SameRevisionConcurrentReaders_ShareOneImmutableConstruction()
     {
-        var cache = new WorkspaceReadProjectionCache();
+        using var cache = new WorkspaceReadProjectionCache();
         var key = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "symbol");
         int loadCount = 0;
 
@@ -55,7 +122,7 @@ public sealed class WorkspaceReadProjectionCacheTests
     [Fact]
     public void RevisionAdvance_RebuildsAndEvictsSuperseded()
     {
-        var cache = new WorkspaceReadProjectionCache();
+        using var cache = new WorkspaceReadProjectionCache();
         var keyRev1 = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "symbol");
         var keyRev2 = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 2, "symbol");
 
@@ -64,7 +131,6 @@ public sealed class WorkspaceReadProjectionCacheTests
         Assert.Equal("rev1", ((DummySymbolIndex)index1).Name);
 
         var index2 = cache.GetOrAddSymbolIndex(keyRev2, () => new DummySymbolIndex("rev2"));
-        // Old revision for ws1 was superseded and evicted
         Assert.Equal(1, cache.Count);
         Assert.Equal("rev2", ((DummySymbolIndex)index2).Name);
         Assert.NotSame(index1, index2);
@@ -73,7 +139,7 @@ public sealed class WorkspaceReadProjectionCacheTests
     [Fact]
     public void GenerationChange_RebuildsAndEvictsSuperseded()
     {
-        var cache = new WorkspaceReadProjectionCache();
+        using var cache = new WorkspaceReadProjectionCache();
         var keyGen1 = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "symbol");
         var keyGen2 = new WorkspaceReadProjectionKey("ws1", "gen2", "view1", 1, "symbol");
 
@@ -89,7 +155,7 @@ public sealed class WorkspaceReadProjectionCacheTests
     [Fact]
     public void FailedLoad_PurgesImmediatelyAndAllowsRetry()
     {
-        var cache = new WorkspaceReadProjectionCache();
+        using var cache = new WorkspaceReadProjectionCache();
         var key = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "symbol");
         bool shouldFail = true;
 
@@ -103,10 +169,8 @@ public sealed class WorkspaceReadProjectionCacheTests
             });
         });
 
-        // Failed load must not remain cached
         Assert.Equal(0, cache.Count);
 
-        // Next call should succeed and not re-throw the cached exception
         shouldFail = false;
         var index = cache.GetOrAddSymbolIndex(key, () => new DummySymbolIndex("success"));
         Assert.Equal(1, cache.Count);
@@ -116,7 +180,7 @@ public sealed class WorkspaceReadProjectionCacheTests
     [Fact]
     public void EvictWorkspace_RemovesAllEntriesForThatWorkspace()
     {
-        var cache = new WorkspaceReadProjectionCache();
+        using var cache = new WorkspaceReadProjectionCache();
         var keyWs1Sym = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "symbol");
         var keyWs1Bridge = new WorkspaceReadProjectionKey("ws1", "gen1", "view1", 1, "bridge");
         var keyWs2Sym = new WorkspaceReadProjectionKey("ws2", "gen1", "view1", 1, "symbol");

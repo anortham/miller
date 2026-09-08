@@ -8,7 +8,7 @@ namespace Miller.Tests.Server;
 
 public sealed class InspectMembersTests
 {
-    private static (InspectTool Tool, ISymbolLookupIndex Index, IndexedSymbol Parent, List<IndexedSymbol> Children) CreateClassWithMembers(int memberCount)
+    private static (InspectTool Tool, ISymbolLookupIndex Index, IndexedSymbol Parent, List<IndexedSymbol> Children) CreateClassWithMembers(int memberCount, bool longSignatures = false)
     {
         var parent = new IndexedSymbol(
             0, "p0000000000000000000000000000001", "MyService", "public class MyService", "class", "csharp", "src/MyService.cs", 1, 500, null, false);
@@ -24,6 +24,8 @@ public sealed class InspectMembersTests
             };
             string kind = (i % 2) == 0 ? "method" : "field";
             string sig = kind == "method" ? $"{vis} void DoWork{i}()" : $"{vis} int _field{i}";
+            if (longSignatures)
+                sig += new string('界', 200);
             children.Add(new IndexedSymbol(
                 i + 1,
                 $"m0000000000000000000000000000{i:D4}",
@@ -108,6 +110,40 @@ public sealed class InspectMembersTests
         using var doc2 = JsonDocument.Parse(page2);
         Assert.Equal(20, doc2.RootElement.GetProperty("members_returned_count").GetInt32());
         Assert.Equal(20, doc2.RootElement.GetProperty("page_offset").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("compact")]
+    [InlineData("json")]
+    public void Inspect_ViewMembers_LongSignaturesPageWithinBudgetWithoutLosingMembers(string format)
+    {
+        var (tool, _, parent, _) = CreateClassWithMembers(116, longSignatures: true);
+        var names = new List<string>();
+        string? continuation = null;
+        do
+        {
+            string output = tool.Inspect(parent.Name, view: "members", limit: 100,
+                format: format, continuation: continuation);
+            Assert.DoesNotContain("output_metadata_too_large", output);
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.InspectMcpMaxBytes);
+            if (format == "json")
+            {
+                using var document = JsonDocument.Parse(output);
+                names.AddRange(document.RootElement.GetProperty("members").EnumerateArray()
+                    .Select(member => member.GetProperty("name").GetString()!));
+                continuation = document.RootElement.GetProperty("continuation").GetString();
+            }
+            else
+            {
+                names.AddRange(System.Text.RegularExpressions.Regex.Matches(output, @"(?:DoWork|_field)\d+")
+                    .Select(match => match.Value).Distinct());
+                var token = System.Text.RegularExpressions.Regex.Match(output, "continuation=\"([^\"]+)\"");
+                continuation = token.Success ? token.Groups[1].Value : null;
+            }
+        }
+        while (continuation is not null);
+        Assert.Equal(116, names.Count);
+        Assert.Equal(116, names.Distinct().Count());
     }
 
     [Fact]

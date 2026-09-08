@@ -26,6 +26,9 @@ public sealed class MillerFactSource : IMillerFactSource
 
     public CtFreshnessKey Freshness => new(Current.IndexIdentity, Current.Revision);
 
+    public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames) =>
+        _inner.NativeClassCandidates(classNames);
+
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         _inner.SymbolsForChangedFiles(changedPaths);
 
@@ -55,10 +58,15 @@ public sealed class ReopeningMillerFactSource : IMillerFactSource
         _open = open;
     }
 
+    internal IMillerFactSource OpenSnapshot() => _open();
+
     public CtIndexCursor Current => With(static facts => facts.Current);
 
     public CtFreshnessKey Freshness =>
         With(static facts => new CtFreshnessKey(facts.Current.IndexIdentity, facts.Current.Revision));
+
+    public CtNativeSymbolCandidates NativeClassCandidates(IReadOnlyList<string> classNames) =>
+        With(facts => facts.NativeClassCandidates(classNames));
 
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         With(facts => facts.SymbolsForChangedFiles(changedPaths));

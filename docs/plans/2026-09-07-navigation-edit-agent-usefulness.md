@@ -1,6 +1,8 @@
 # Navigation and editing usefulness implementation plan
 
-> For agentic workers: use `razorback:subagent-driven-development` when delegation is available; otherwise use `razorback:executing-plans`. This document authorizes no implementation or release.
+**Status — 2026-09-08:** Source implementation and corrective dogfood work are recorded in the [navigation evidence ledger](../findings/2026-09-08-navigation-agent-usefulness-dogfood.md). Producer facts and branch gates are verified in the producer checkout; release and Miller pin adoption remain separate approval boundaries. Source-built facts are not claimed to be installed in the session MCP server. The checklist below preserves the original acceptance criteria; use the ledger for current verified and outstanding status.
+
+> For agentic workers: use `razorback:subagent-driven-development` when delegation is available; otherwise use `razorback:executing-plans`. These are the original planning instructions; implementation proceeded in the later user-directed session. Release remains a separate approval.
 
 **Goal:** Make reference, impact, inspect, and edit workflows complete, bounded, and honest about uncertainty.
 

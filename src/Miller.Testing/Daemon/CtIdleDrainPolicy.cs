@@ -84,7 +84,15 @@ public sealed class CtIdleDrainPolicy
         if (observation.LastActivityAt is { } activity && observation.Now - activity < _quietPeriod)
         {
             DateTimeOffset nextEligible = activity + _quietPeriod;
-            return new CtIdleDrainDecision(false, "waiting_quiet", nextEligible);
+            int? remainingCooldown = null;
+            if (observation.LastDrainAt is { } lastDrain && lastDrain + Cooldown > observation.Now)
+            {
+                DateTimeOffset cooldownDeadline = lastDrain + Cooldown;
+                if (cooldownDeadline > nextEligible)
+                    nextEligible = cooldownDeadline;
+                remainingCooldown = (int)Math.Ceiling((cooldownDeadline - observation.Now).TotalSeconds);
+            }
+            return new CtIdleDrainDecision(false, "waiting_quiet", nextEligible, remainingCooldown);
         }
 
         if (observation.LastDrainAt is { } drained && observation.Now - drained < Cooldown)

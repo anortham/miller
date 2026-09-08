@@ -21,7 +21,7 @@ Use compact output by default. Request format=json only when you need machine-re
 - content — import before reading; external text/docs/logs.
 - context — unfamiliar areas: token-budgeted entry points.
 - edit — indexed rewrite + preview; apply=true to write.
-- impact — affected symbols/tests; default view shows test impact.
+- impact — affected symbols/tests; no target uses the git diff.
 - inspect — named file/symbol: signatures, hierarchy, relations.
 - patterns — extracted routes/config/docs across languages.
 - search — ranked symbol/source/docs/marker/text; auto may use semantics, lexical does zero vector work.

@@ -25,6 +25,39 @@ public sealed class PhpTestProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_executes_exact_native_case_and_excludes_similar_name()
+    {
+        CtProviderTestSupport.RequirePhp();
+        string phpunit = CtProviderTestSupport.RequirePhpUnit();
+        WriteComposer();
+        WritePhpUnitRunner(phpunit);
+        string file = Path.Combine(_root, "CalculatorTest.php");
+        File.WriteAllText(file, """
+            <?php
+            namespace Tests\Unit;
+            use PHPUnit\Framework\TestCase;
+            final class CalculatorTest extends TestCase
+            {
+                public function testAdd(): void { self::assertSame(2, 1 + 1); }
+                public function testAddition(): void { self::fail('unrelated test must not run'); }
+            }
+            """);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(
+            new ContinuousTestRunRecipeRequest("php-recipe", _root, Path.Combine(_root, "composer.json"),
+                "phpunit", @"Tests\Unit\CalculatorTest::testAdd", file,
+                TestSelectorScope.SingleTest, IsExact: true));
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
+        TestRunStep step = Assert.Single(recipe.Steps);
+
+        TestProcessResult result = await new TestProcessRunner().RunAsync(
+            new TestProcessCommand(step.Executable, step.Arguments, step.WorkingDirectory, step.Environment),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("OK (1 test, 1 assertion)", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Phpunit_smoke_discovers_and_runs_two_examples()
     {
         CtProviderTestSupport.RequirePhp();
@@ -73,9 +106,14 @@ public sealed class PhpTestProviderScaleTests : IDisposable
         Assert.True(File.Exists(result.ResultArtifactPath!));
     }
 
-    private void WriteComposer() =>
+    private void WriteComposer()
+    {
         File.WriteAllText(Path.Combine(_root, "composer.json"),
             "{\"require-dev\":{\"phpunit/phpunit\":\"^10\"}}");
+        Directory.CreateDirectory(Path.Combine(_root, "tests"));
+        File.WriteAllText(Path.Combine(_root, "phpunit.xml"),
+            "<phpunit><testsuites><testsuite name=\"tests\"><directory>tests</directory></testsuite></testsuites></phpunit>");
+    }
 
     private void WritePhpUnitRunner(string source)
     {

@@ -19,6 +19,25 @@ public sealed class PythonProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_executes_pytest_node_id_and_excludes_failing_neighbor()
+    {
+        string python = CtProviderTestSupport.RequirePython();
+        await EnsurePytestAsync(_dir, python, TestContext.Current.CancellationToken);
+        string project = Path.Combine(_dir, "pyproject.toml");
+        string file = Path.Combine(_dir, "test_literal.py");
+        File.WriteAllText(project, "");
+        File.WriteAllText(file, "def test_target():\n    assert True\ndef test_target_other():\n    assert False\n");
+        var recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest("ws", _dir, project,
+            "pytest", "test_literal.py::test_target", file, TestSelectorScope.SingleTest, IsExact: true));
+        foreach (TestRunStep step in recipe.Steps)
+        {
+            TestProcessResult result = await new TestProcessRunner().RunAsync(new TestProcessCommand(step.Executable,
+                step.Arguments, step.WorkingDirectory, step.Environment), TestContext.Current.CancellationToken);
+            Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        }
+    }
+
+    [Fact]
     public async Task Python_smoke_executes_a_tiny_pytest_fixture_and_parses_results()
     {
         var python = CtProviderTestSupport.RequirePython();

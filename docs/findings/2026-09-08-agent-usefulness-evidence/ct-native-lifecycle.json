@@ -1,0 +1,970 @@
+{
+  "calls.json": [
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "open",
+        "path": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.03728216502349824,
+      "facts": {
+        "operation": "open",
+        "status": "refreshing"
+      }
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "open",
+        "path": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.001978304993826896,
+      "facts": {
+        "operation": "open",
+        "status": "ready"
+      }
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "refresh",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 2.0129870760138147,
+      "facts": {
+        "operation": "refresh",
+        "status": "lock_busy"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.13364264403935522,
+      "facts": {
+        "verdict": "red",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "stopped",
+          "reason": "stopped",
+          "running": false,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "miller_version": null,
+          "version_match": "none",
+          "version_mismatch": false,
+          "version_reason": "no live daemon",
+          "loop_stalled": false,
+          "loop_stall_seconds": null
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 0,
+        "selected_count": 3
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "refresh",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.04242242802865803,
+      "facts": {
+        "operation": "refresh",
+        "status": "unchanged"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.04738031601300463,
+      "facts": {
+        "verdict": "red",
+        "enabled": true,
+        "projects_discovered": true,
+        "daemon": {
+          "state": "stopped",
+          "reason": "stopped",
+          "running": false,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "miller_version": null,
+          "version_match": "none",
+          "version_mismatch": false,
+          "version_reason": "no live daemon",
+          "loop_stalled": false,
+          "loop_stall_seconds": null
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:d874f9ab-bb48-4ae3-8337-cf00cc179a3e:gen-001",
+          "revision": 35
+        },
+        "stale_count": 0,
+        "selected_count": 3
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "enable",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.008613814949057996,
+      "facts": {
+        "operation": "enable"
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "start",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.3853771699941717,
+      "facts": {
+        "status": "started",
+        "reason": "started"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.01942443399457261,
+      "facts": {
+        "verdict": "red",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "idle",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "idle_drain": {
+            "eligible": false,
+            "reason": "no_stale_cases",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 0,
+        "selected_count": 3
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.027624951966572553,
+      "facts": {
+        "verdict": "red",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "adopted by /tmp/miller-ct-live-83km_bfd/repo",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "idle_drain": {
+            "eligible": false,
+            "reason": "no_stale_cases",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:d874f9ab-bb48-4ae3-8337-cf00cc179a3e:gen-001",
+          "revision": 35
+        },
+        "stale_count": 0,
+        "selected_count": 3
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "stop",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.087439532042481,
+      "facts": {
+        "status": "stopped",
+        "reason": "stopped"
+      }
+    }
+  ],
+  "lifecycle-calls.json": [
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "open",
+        "path": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.047348956984933466,
+      "facts": {
+        "operation": "open",
+        "status": "refreshing"
+      }
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "open",
+        "path": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.0025532349827699363,
+      "facts": {
+        "operation": "open",
+        "status": "ready"
+      }
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "refresh",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 2.750449065992143,
+      "facts": {
+        "operation": "refresh",
+        "status": "lock_busy"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.5149155039689504,
+      "facts": {
+        "verdict": "unknown",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "stopped",
+          "reason": "stopped",
+          "running": false,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "miller_version": null,
+          "version_match": "none",
+          "version_mismatch": false,
+          "version_reason": "no live daemon",
+          "loop_stalled": false,
+          "loop_stall_seconds": null
+        },
+        "selected": null,
+        "stale_count": 0,
+        "selected_count": 2
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "workspace",
+      "args": {
+        "operation": "refresh",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 1.962815857026726,
+      "facts": {
+        "operation": "refresh",
+        "status": "refreshed"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.27675458503654227,
+      "facts": {
+        "verdict": "unknown",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "stopped",
+          "reason": "stopped",
+          "running": false,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "miller_version": null,
+          "version_match": "none",
+          "version_mismatch": false,
+          "version_reason": "no live daemon",
+          "loop_stalled": false,
+          "loop_stall_seconds": null
+        },
+        "selected": null,
+        "stale_count": 0,
+        "selected_count": 2
+      },
+      "projects": []
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "enable",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.039105458999983966,
+      "facts": {
+        "operation": "enable"
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "start",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.55264759802958,
+      "facts": {
+        "status": "started",
+        "reason": "started"
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.050179281970486045,
+      "facts": {
+        "verdict": "partial",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "idle",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "selecting",
+          "run": null,
+          "selection": {
+            "workspace_id": "db184bd21c2ba3f6d3001f523ac4fae7e7ad7e4587aeca82130fb2714a59aa53",
+            "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+            "phase": "starting",
+            "started_at_utc": "2026-09-08T04:13:03.1017445+00:00",
+            "progress_timestamp_utc": "2026-09-08T04:13:03.1017445+00:00",
+            "items_processed": 0,
+            "freshness": {
+              "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+              "revision": 35
+            }
+          },
+          "idle_drain": {
+            "eligible": false,
+            "reason": "pending_work",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 2,
+        "selected_count": 2
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.03360698098549619,
+      "facts": {
+        "verdict": "partial",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "executing",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "executing",
+          "run": null,
+          "selection": {
+            "workspace_id": "db184bd21c2ba3f6d3001f523ac4fae7e7ad7e4587aeca82130fb2714a59aa53",
+            "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+            "phase": "completed",
+            "started_at_utc": "2026-09-08T04:13:03.3841996+00:00",
+            "progress_timestamp_utc": "2026-09-08T04:13:03.3885450+00:00",
+            "items_processed": 2,
+            "freshness": {
+              "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+              "revision": 35
+            }
+          },
+          "idle_drain": {
+            "eligible": false,
+            "reason": "pending_work",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 2,
+        "selected_count": 2
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.022972923004999757,
+      "facts": {
+        "verdict": "partial",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "executing",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "executing",
+          "run": null,
+          "selection": {
+            "workspace_id": "db184bd21c2ba3f6d3001f523ac4fae7e7ad7e4587aeca82130fb2714a59aa53",
+            "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+            "phase": "completed",
+            "started_at_utc": "2026-09-08T04:13:03.3841996+00:00",
+            "progress_timestamp_utc": "2026-09-08T04:13:03.3885450+00:00",
+            "items_processed": 2,
+            "freshness": {
+              "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+              "revision": 35
+            }
+          },
+          "idle_drain": {
+            "eligible": false,
+            "reason": "pending_work",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 2,
+        "selected_count": 2
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.02637827501166612,
+      "facts": {
+        "verdict": "partial",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "executing",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "executing",
+          "run": null,
+          "selection": {
+            "workspace_id": "db184bd21c2ba3f6d3001f523ac4fae7e7ad7e4587aeca82130fb2714a59aa53",
+            "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+            "phase": "completed",
+            "started_at_utc": "2026-09-08T04:13:03.3841996+00:00",
+            "progress_timestamp_utc": "2026-09-08T04:13:03.3885450+00:00",
+            "items_processed": 2,
+            "freshness": {
+              "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+              "revision": 35
+            }
+          },
+          "idle_drain": {
+            "eligible": false,
+            "reason": "pending_work",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 0
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        },
+        "stale_count": 2,
+        "selected_count": 2
+      },
+      "projects": [
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Broken/Broken.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        },
+        {
+          "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+          "framework": "xunit",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "run",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "wait": true,
+        "wait_seconds": 120,
+        "format": "json"
+      },
+      "elapsed_seconds": 30.706961906980723,
+      "facts": {
+        "execution": "daemon",
+        "verdict": "red",
+        "reason": "run",
+        "wait": {
+          "wait_complete": true,
+          "state": "completed",
+          "elapsed_seconds": 30.653891,
+          "timeout_seconds": 120,
+          "command_id": "d823e2f0a2dd47929c0335124ca21842",
+          "run_id": "ct-run:8d3c06b73b57484db9fbbc30dc02fe9a"
+        },
+        "command": {
+          "command_id": "d823e2f0a2dd47929c0335124ca21842",
+          "state": "completed",
+          "reason": "completed",
+          "updated_at_utc": "2026-09-08T04:13:33.3824274+00:00",
+          "workspace_root": "/tmp/miller-ct-live-83km_bfd/repo",
+          "lease_identity": {
+            "pid": 388781,
+            "process_start_time_utc": "2026-09-08T04:13:02.4863824+00:00"
+          },
+          "project_runs": [
+            {
+              "project_path": "/tmp/miller-ct-live-83km_bfd/repo/Passing/Passing.csproj",
+              "run_id": "ct-run:d4263216118a4534ad51bb24202c004f"
+            },
+            {
+              "project_path": "/tmp/miller-ct-live-83km_bfd/repo/SecondPassing/SecondPassing.csproj",
+              "run_id": "ct-run:8d3c06b73b57484db9fbbc30dc02fe9a"
+            }
+          ]
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:6bbc2f19-710a-4a7a-bcf9-eabe42221694:gen-001",
+          "revision": 35
+        }
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "failures",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.005795609962660819,
+      "facts": {
+        "total": 1
+      },
+      "failure_count": 1
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "status",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.025575424020644277,
+      "facts": {
+        "verdict": "red",
+        "enabled": true,
+        "projects_discovered": false,
+        "daemon": {
+          "state": "running",
+          "reason": "adopted by /tmp/miller-ct-live-83km_bfd/repo",
+          "running": true,
+          "paused": false,
+          "auto_runs_paused": false,
+          "pause_reason": null,
+          "activity": "idle",
+          "run": null,
+          "idle_drain": {
+            "eligible": false,
+            "reason": "pending_work",
+            "next_eligible_at_utc": null,
+            "remaining_cooldown_seconds": null
+          },
+          "miller_version": "1.28.1+4a21c9baa529",
+          "version_match": "same",
+          "version_mismatch": false,
+          "version_reason": "the daemon runs this build (1.28.1+4a21c9baa529)",
+          "loop_stalled": false,
+          "loop_stall_seconds": 5
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:d874f9ab-bb48-4ae3-8337-cf00cc179a3e:gen-001",
+          "revision": 35
+        },
+        "stale_count": 0,
+        "selected_count": 2
+      },
+      "projects": []
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "run",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "wait": true,
+        "wait_seconds": 120,
+        "format": "json"
+      },
+      "elapsed_seconds": 17.817496729956474,
+      "facts": {
+        "execution": "daemon",
+        "verdict": "red",
+        "reason": "run",
+        "wait": {
+          "wait_complete": true,
+          "state": "completed",
+          "elapsed_seconds": 17.7791618,
+          "timeout_seconds": 120,
+          "command_id": "74611ff39cfc4cffa9e457363bdd168a",
+          "run_id": "ct-run:3238ef1f1b4b4de6ab7e81fdb6a67b4b"
+        },
+        "command": {
+          "command_id": "74611ff39cfc4cffa9e457363bdd168a",
+          "state": "completed",
+          "reason": "completed",
+          "updated_at_utc": "2026-09-08T04:13:51.2489354+00:00",
+          "workspace_root": "/tmp/miller-ct-live-83km_bfd/worktree",
+          "lease_identity": {
+            "pid": 388781,
+            "process_start_time_utc": "2026-09-08T04:13:02.4863824+00:00"
+          },
+          "project_runs": [
+            {
+              "project_path": "/tmp/miller-ct-live-83km_bfd/worktree/SecondPassing/SecondPassing.csproj",
+              "run_id": "ct-run:3238ef1f1b4b4de6ab7e81fdb6a67b4b"
+            }
+          ]
+        },
+        "selected": {
+          "index_identity": "ctgen1:store:7310aff5-9b15-4c52-ac4a-8eb326aa1b6e:d874f9ab-bb48-4ae3-8337-cf00cc179a3e:gen-001",
+          "revision": 35
+        }
+      }
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "failures",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/worktree",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.00186770100845024,
+      "facts": {
+        "total": 1
+      },
+      "failure_count": 1
+    },
+    {
+      "tool": "tests",
+      "args": {
+        "operation": "stop",
+        "workspace_id": "/tmp/miller-ct-live-83km_bfd/repo",
+        "format": "json"
+      },
+      "elapsed_seconds": 0.25264224695274606,
+      "facts": {
+        "status": "stopped",
+        "reason": "stopped"
+      }
+    }
+  ]
+}

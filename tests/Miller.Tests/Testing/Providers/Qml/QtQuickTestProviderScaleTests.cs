@@ -28,6 +28,37 @@ public sealed class QtQuickTestProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_recipe_builds_a_new_tree_and_runs_only_the_exact_ctest_target()
+    {
+        string cmake = CtProviderTestSupport.RequireCMake();
+        string ctest = CtProviderTestSupport.RequireCTest();
+        string root = Path.Combine(_dir, "direct recipe");
+        Directory.CreateDirectory(root);
+        string project = Path.Combine(root, "CMakeLists.txt");
+        File.WriteAllText(project, """
+            cmake_minimum_required(VERSION 3.21)
+            project(DirectRecipe NONE)
+            enable_testing()
+            add_test(NAME "selected[1]" COMMAND "${CMAKE_COMMAND}" -E true)
+            add_test(NAME "unrelated" COMMAND "${CMAKE_COMMAND}" -E false)
+            """);
+        ContinuousTestRunRecipe recipe = ContinuousTestRecipeBuilder.Build(new ContinuousTestRunRecipeRequest(
+            "recipe-ws", root, project, "qml", TestSelector: "selected[1]", IsExact: true));
+        Assert.False(Directory.Exists(Path.Combine(root, ".miller")));
+        var runner = new TestProcessRunner();
+        foreach (TestRunStep step in recipe.Steps)
+        {
+            string executable = step.Executable == "cmake" ? cmake : ctest;
+            TestProcessResult result = await runner.RunAsync(new TestProcessCommand(executable,
+                step.Arguments, step.WorkingDirectory), TestContext.Current.CancellationToken);
+            Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+        }
+        string report = Path.Combine(recipe.Steps[^1].WorkingDirectory, "results.xml");
+        Assert.Equal(["selected[1]"], System.Xml.Linq.XDocument.Load(report)
+            .Descendants("testcase").Select(element => (string?)element.Attribute("name")));
+    }
+
+    [Fact]
     public async Task Exact_test_name_regex_runs_selected_plain_ctest_targets()
     {
         string cmake = CtProviderTestSupport.RequireCMake();

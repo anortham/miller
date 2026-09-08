@@ -1,9 +1,35 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Workspaces;
 
 internal static class WorkspaceFreshnessView
 {
+    internal static WorkspaceRefreshResult? ForServedSnapshot(
+        WorkspaceRefreshResult? result, WorkspaceReadSnapshot snapshot, bool reused)
+    {
+        if (result is null || result.Status is not (WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged))
+            return result;
+
+        long servedRevision = snapshot.Freshness.StoreLogSequence ?? snapshot.Freshness.Revision;
+        if (result.Revision is { } revision && revision != servedRevision)
+            return null;
+
+        bool hasIdentity = snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ? !string.IsNullOrWhiteSpace(result.IndexGenerationIdentity)
+            : !string.IsNullOrWhiteSpace(result.ArtifactId);
+        if (!reused && !hasIdentity)
+            return result;
+        if (result.Revision != servedRevision)
+            return null;
+
+        bool sameGeneration = snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ? string.Equals(result.IndexGenerationIdentity, snapshot.IndexGenerationIdentity, StringComparison.Ordinal)
+            : !string.IsNullOrWhiteSpace(result.ArtifactId) &&
+              string.Equals(result.ArtifactId, snapshot.ArtifactOrStoreId, StringComparison.Ordinal);
+        return sameGeneration ? result : null;
+    }
+
     /// <summary>
     /// The freshness word for a read that served the PINNED view and left a refresh running behind it: nothing is
     /// confirmed, nothing failed, and the next call is expected to see newer data.
@@ -34,13 +60,14 @@ internal static class WorkspaceFreshnessView
         {
             WorkspaceRefreshStatus.Refreshed => true,
             WorkspaceRefreshStatus.Unchanged => true,
-            WorkspaceRefreshStatus.LockBusy => false,
+            WorkspaceRefreshStatus.LockBusy or WorkspaceRefreshStatus.Queued => null,
             WorkspaceRefreshStatus.MissingRoot => false,
             WorkspaceRefreshStatus.MissingIndex => false,
             WorkspaceRefreshStatus.Failed => false,
             null => row.State switch
             {
-                WorkspaceRegistryState.Current or WorkspaceRegistryState.Ready => null,
+                WorkspaceRegistryState.Current or WorkspaceRegistryState.Ready or
+                    WorkspaceRegistryState.LoadedExisting or WorkspaceRegistryState.Refreshing => null,
                 _ => false,
             },
             _ => false,
@@ -50,9 +77,15 @@ internal static class WorkspaceFreshnessView
         refreshResult?.Status switch
         {
             WorkspaceRefreshStatus.LockBusy => "unconfirmed_lock_busy",
-            null => row.StateText,
+            WorkspaceRefreshStatus.Queued => "unconfirmed_queued",
+            null => EvidenceStatusFor(IndexFreshFor(null, row), row.StateText),
             _ => refreshResult.StatusText,
         };
+
+    internal static string EvidenceStatusFor(bool? indexFresh, string status) =>
+        indexFresh is null && status.ToLowerInvariant() is "ready" or "current" or "loaded_existing" or "refreshing"
+            ? "unconfirmed"
+            : status;
 
     public static string? WarningTextFor(WorkspaceRefreshResult? refreshResult) =>
         WarningTextFor(refreshResult, operationSnapshot: null);

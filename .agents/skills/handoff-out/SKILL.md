@@ -3,7 +3,7 @@ name: handoff-out
 description: Use when preparing to move active Miller-backed work to another harness, model, or session and the receiving agent needs a self-contained resume packet.
 user-invocable: true
 argument-hint: "<target harness/model> [goal, next action, session notes, token budget]"
-allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, Bash
+allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, Bash, mcp__plugin_miller_miller__workspace, mcp__plugin_miller_miller__impact, mcp__plugin_miller_miller__context, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__inspect, mcp__plugin_miller_miller__trace
 ---
 
 # Handoff Out
@@ -36,7 +36,7 @@ workspace(workspace_id="<id>", operation="status", format="json")
 workspace(workspace_id="<id>", operation="health")
 ```
 
-If `health` reports stale, missing, or corrupt sidecars, run `workspace(operation="refresh")` before collecting packet evidence. From JSON status, record `index.built_revision` and `index.latest_revision` as `index_built_revision` and `index_latest_revision`; do not invent a generic revision field.
+If `health` reports stale, missing, or corrupt sidecars, run `workspace(workspace_id="<id>", operation="refresh")` before collecting packet evidence. From JSON status, record `index.built_revision` and `index.latest_revision` as `index_built_revision` and `index_latest_revision`; do not invent a generic revision field.
 
 2. Capture local git facts with shell/git:
 
