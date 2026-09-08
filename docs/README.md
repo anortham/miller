@@ -9,6 +9,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [v1.28.0 release notes](release-notes/v1.28.0.md) - historical release notes for shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
 - [julie-extract 2.41.1 adoption](findings/2026-09-08-julie-extract-2.41.1-adoption.md) - public four-platform hashes, epoch-10 compatibility, native facts and Miller pin verification.
 - [Agent usefulness dogfood validation](findings/2026-09-08-agent-usefulness-dogfood.md) - task-by-task evidence, repaired defects, producer adoption and remaining host-runtime qualification.
+- [julie-extract 2.41.1 live store recovery](findings/2026-09-08-julie-extract-2.41.1-live-recovery.md) - committed-report race, persistent SQLite corruption, truthful maintenance diagnostics, corrected SQLite runtime, archived evidence and fresh-family rebuild.
 - [Agent usefulness review of 1.28.1](findings/2026-09-07-agent-usefulness-review.md) - an AI coding agent's review of guidance channels, session hooks, CT first contact, per-tool accuracy and token cost, a Miller-versus-raw A/B, and ranked fixes.
 - [v1.28.0 release verification](findings/2026-09-06-v1.28.0-release-verification.md) - dogfood repairs, Linux and Windows gates, cursor-cost measurements, and package verification status.
 - [v1.28.0 performance review](findings/2026-09-06-v1.28.0-performance-review.md) - same-index CLI comparison, live MCP timings, reader-registration overhead, and cache/sidecar measurements.
