@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -433,7 +434,11 @@ public sealed class IndexerServiceScanTests : IDisposable
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
         ScanGovernor? scanGovernor = null,
-        TimeSpan? scanGovernorWait = null)
+        TimeSpan? scanGovernorWait = null,
+        Func<string, string, IncrementalReconcileDrainResult>? drainIncrementalReconcileRequests = null,
+        Action<string, IncrementalReconcileRequest, IncrementalReconcileOutcome,
+            long?, string?, string?, string?>? writeIncrementalReconcileCompletion = null,
+        Func<WorkspaceContext, WorkspaceFreshnessProbe>? probeWorkspaceFreshness = null)
     {
         string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -449,6 +454,9 @@ public sealed class IndexerServiceScanTests : IDisposable
             attachFileWatchers: false,
             drainFullScanRequests: drainFullScanRequests,
             drainFileConvergeRequests: drainFileConvergeRequests,
+            drainIncrementalReconcileRequests: drainIncrementalReconcileRequests,
+            writeIncrementalReconcileCompletion: writeIncrementalReconcileCompletion,
+            probeWorkspaceFreshness: probeWorkspaceFreshness,
             scanGovernor: scanGovernor,
             scanGovernorWait: scanGovernorWait);
     }
@@ -688,6 +696,133 @@ public sealed class IndexerServiceScanTests : IDisposable
 
         Assert.True(processed);
         Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void ProcessIncrementalReconcileRequests_ScansOneBatchAndPublishesExactWitnessForEveryNonce()
+    {
+        var requests = new[]
+        {
+            new IncrementalReconcileRequest("request-1", "target-ws", 11, "generation-a", DateTimeOffset.UtcNow, 1, "request-1", "claim-1"),
+            new IncrementalReconcileRequest("request-2", "target-ws", 11, "generation-a", DateTimeOffset.UtcNow, 2, "request-2", "claim-2"),
+        };
+        var completions = new List<(IncrementalReconcileRequest Request, IncrementalReconcileOutcome Outcome,
+            long? Revision, string? ArtifactId, string? Generation, string? Error)>();
+        var service = NewService(
+            drainIncrementalReconcileRequests: (_, workspaceId) =>
+            {
+                Assert.Equal("target-ws", workspaceId);
+                return new IncrementalReconcileDrainResult(requests, 0, 0, 0);
+            },
+            writeIncrementalReconcileCompletion: (_, request, outcome, revision, artifactId, generation, error) =>
+                completions.Add((request, outcome, revision, artifactId, generation, error)),
+            probeWorkspaceFreshness: _ => new WorkspaceFreshnessProbe(
+                12, "store-1", "view-a", 2, "manifest-b", IndexGenerationIdentity: "generation-b"));
+        var ops = new RecordingScanOps { Revision = 12 };
+        service.PublishOpsForTest(ops);
+        WorkspaceContext workspace = WorkspaceContext.Create("/repo", "/tools", "/home") with
+        {
+            WorkspaceId = "target-ws",
+            CanonicalRoot = "/repo",
+            CanonicalExtractDbPath = "/repo/.miller/symbols.db",
+        };
+
+        bool processed = service.ProcessIncrementalReconcileRequestsForTest("/repo/.miller", workspace);
+
+        Assert.True(processed);
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.Equal(new[] { "request-1", "request-2" }, completions.Select(item => item.Request.RequestId));
+        Assert.All(completions, item =>
+        {
+            Assert.Equal(IncrementalReconcileOutcome.Scanned, item.Outcome);
+            Assert.Equal(12, item.Revision);
+            Assert.Equal("a", item.ArtifactId);
+            Assert.Equal("generation-b", item.Generation);
+            Assert.Null(item.Error);
+        });
+    }
+
+    [Fact]
+    public void ProcessIncrementalReconcileRequests_WitnessMismatchPublishesFailedCompletion()
+    {
+        var request = new IncrementalReconcileRequest(
+            "request-1", "target-ws", 11, "generation-a", DateTimeOffset.UtcNow, 1, "request-1", "claim-1");
+        IncrementalReconcileOutcome? completion = null;
+        string? completionError = null;
+        var service = NewService(
+            drainIncrementalReconcileRequests: (_, _) => new IncrementalReconcileDrainResult([request], 0, 0, 0),
+            writeIncrementalReconcileCompletion: (_, _, outcome, _, _, _, error) =>
+                (completion, completionError) = (outcome, error),
+            probeWorkspaceFreshness: _ => new WorkspaceFreshnessProbe(
+                11, "store-1", "view-a", 1, "manifest-a", IndexGenerationIdentity: "generation-a"));
+        var ops = new RecordingScanOps { Revision = 12 };
+        service.PublishOpsForTest(ops);
+        WorkspaceContext workspace = WorkspaceContext.Create("/repo", "/tools", "/home") with
+        {
+            WorkspaceId = "target-ws",
+            CanonicalRoot = "/repo",
+            CanonicalExtractDbPath = "/repo/.miller/symbols.db",
+        };
+
+        bool processed = service.ProcessIncrementalReconcileRequestsForTest("/repo/.miller", workspace);
+
+        Assert.False(processed);
+        Assert.Equal(IncrementalReconcileOutcome.Failed, completion);
+        Assert.Contains("matching generation/revision witness", completionError);
+    }
+
+    [Fact]
+    public void ProcessIncrementalReconcileRequests_FailedScanPublishesFailedCompletion()
+    {
+        var request = new IncrementalReconcileRequest(
+            "request-1", "target-ws", 11, "generation-a", DateTimeOffset.UtcNow, 1, "request-1", "claim-1");
+        IncrementalReconcileOutcome? completion = null;
+        var service = NewService(
+            drainIncrementalReconcileRequests: (_, _) => new IncrementalReconcileDrainResult([request], 0, 0, 0),
+            writeIncrementalReconcileCompletion: (_, _, outcome, _, _, _, _) => completion = outcome,
+            probeWorkspaceFreshness: _ => throw new InvalidOperationException("failed scan has no witness"));
+        service.PublishOpsForTest(new RecordingScanOps { ThrowOnScan = new IOException("extract failed") });
+        WorkspaceContext workspace = WorkspaceContext.Create("/repo", "/tools", "/home") with
+        {
+            WorkspaceId = "target-ws",
+            CanonicalRoot = "/repo",
+            CanonicalExtractDbPath = "/repo/.miller/symbols.db",
+        };
+
+        bool processed = service.ProcessIncrementalReconcileRequestsForTest("/repo/.miller", workspace);
+
+        Assert.False(processed);
+        Assert.Equal(IncrementalReconcileOutcome.Failed, completion);
+    }
+
+    [Fact]
+    public void ProcessIncrementalReconcileRequests_BusyAdmissionPublishesQueuedCompletion()
+    {
+        string home = CreateTempHome();
+        var request = new IncrementalReconcileRequest(
+            "request-1", "target-ws", 11, "generation-a", DateTimeOffset.UtcNow, 1, "request-1", "claim-1");
+        IncrementalReconcileOutcome? completion = null;
+        var service = NewService(
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainIncrementalReconcileRequests: (_, _) => new IncrementalReconcileDrainResult([request], 0, 0, 0),
+            writeIncrementalReconcileCompletion: (_, _, outcome, _, _, _, _) => completion = outcome);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        WorkspaceContext workspace = WorkspaceContext.Create("/repo", "/tools", "/home") with
+        {
+            WorkspaceId = "target-ws",
+            CanonicalRoot = "/repo",
+            CanonicalExtractDbPath = "/repo/.miller/symbols.db",
+        };
+
+        bool processed;
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            processed = service.ProcessIncrementalReconcileRequestsForTest("/repo/.miller", workspace);
+
+        Assert.False(processed);
+        Assert.Equal(IncrementalReconcileOutcome.Queued, completion);
+        Assert.Empty(ops.ScanForce);
     }
 
     [Fact]

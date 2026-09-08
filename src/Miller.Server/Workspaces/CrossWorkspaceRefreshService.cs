@@ -37,6 +37,17 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string?> _readArtifactId;
     private readonly Func<string, string, string?, WorkspaceFreshnessProbe> _readStoreProbe;
     private readonly Action<string, string, long> _requestFullScan;
+    private readonly Func<string, string, long, string?, IncrementalReconcileRequestReceipt>
+        _requestIncrementalReconcile;
+    private readonly Func<IncrementalReconcileRequestReceipt, string, IncrementalReconcileCompletion?>
+        _readIncrementalReconcileCompletion;
+    private sealed record PendingIncrementalReconcile(
+        IncrementalReconcileRequestReceipt Receipt,
+        DateTimeOffset RequestedAtUtc);
+
+    private readonly Dictionary<string, PendingIncrementalReconcile> _pendingIncrementalReconciles =
+        new(StringComparer.Ordinal);
+    private readonly object _pendingIncrementalReconcileGate = new();
     private readonly TimeSpan _lockBusyWait;
     private readonly TimeSpan _fullScanRequestWait;
     private readonly TimeSpan _lockBusyPollInterval;
@@ -81,13 +92,13 @@ public sealed class CrossWorkspaceRefreshService
             () => DateTimeOffset.UtcNow,
             sidecar,
             contentSidecar,
-            LeaderScanRequestQueue.RequestFullScan,
-            DefaultFullScanRequestWait,
+            requestFullScan: LeaderScanRequestQueue.RequestFullScan,
+            fullScanRequestWait: DefaultFullScanRequestWait,
             // The production D2 gate for every one-shot writer (CLI refresh/full/open, MCP cross-workspace
             // refresh, dashboard): probe the bundled binary, read the artifact's recorded binary_version, and
             // let the shared eligibility matrix decide. Evaluated only after the lock is acquired, so the
             // lock-busy enqueue-to-leader path is never affected.
-            dbPath =>
+            eligibilityGate: dbPath =>
             {
                 bool allowDowngrade =
                     Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1";
@@ -118,6 +129,8 @@ public sealed class CrossWorkspaceRefreshService
             governor: governor,
             storeClient: new JulieStoreClient(runner.BinaryPath),
             storeEnabled: storeEnabled,
+            requestIncrementalReconcile: LeaderScanRequestQueue.RequestIncrementalReconcile,
+            readIncrementalReconcileCompletion: LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion,
             phaseSink: new LoggingIndexerPhaseSink(logger ?? NullLogger<CrossWorkspaceRefreshService>.Instance))
     {
     }
@@ -134,6 +147,9 @@ public sealed class CrossWorkspaceRefreshService
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar? contentSidecar = null,
         Action<string, string, long>? requestFullScan = null,
+        Func<string, string, long, string?, IncrementalReconcileRequestReceipt>? requestIncrementalReconcile = null,
+        Func<IncrementalReconcileRequestReceipt, string, IncrementalReconcileCompletion?>?
+            readIncrementalReconcileCompletion = null,
         TimeSpan? fullScanRequestWait = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
         Func<string, string?>? readArtifactId = null,
@@ -172,6 +188,10 @@ public sealed class CrossWorkspaceRefreshService
             ?? ((dbPath, root, workspaceId) =>
                 WorkspaceReadSessionFactory.Probe(dbPath, root, workspaceId, storeEnabled: true));
         _requestFullScan = requestFullScan ?? LeaderScanRequestQueue.RequestFullScan;
+        _requestIncrementalReconcile = requestIncrementalReconcile
+            ?? LeaderScanRequestQueue.RequestIncrementalReconcile;
+        _readIncrementalReconcileCompletion = readIncrementalReconcileCompletion
+            ?? LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion;
         _lockBusyWait = lockBusyWait;
         _fullScanRequestWait = fullScanRequestWait ?? DefaultFullScanRequestWait;
         _lockBusyPollInterval = lockBusyPollInterval;
@@ -233,7 +253,8 @@ public sealed class CrossWorkspaceRefreshService
         string workspaceId,
         bool force = false,
         ScanAdmissionBudget? scanAdmission = null,
-        bool bypassBackoff = false)
+        bool bypassBackoff = false,
+        bool requireNewReconcile = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         if (scanAdmission is { Wait: var requested } && requested < TimeSpan.Zero)
@@ -284,7 +305,7 @@ public sealed class CrossWorkspaceRefreshService
 
         using IDisposable? lease = _acquireLock(millerDir);
         if (lease is null)
-            return WaitForExternalRevision(row, force, millerDir, total, useStore);
+            return WaitForExternalRevision(row, force, millerDir, total, useStore, requireNewReconcile);
 
         string? rollbackWarning = null;
         bool sourceRebuildRequired = false;
@@ -751,15 +772,22 @@ public sealed class CrossWorkspaceRefreshService
     }
 
     private WorkspaceRefreshResult WaitForExternalRevision(
-        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total, bool useStore)
+        WorkspaceRegistryRow row,
+        bool force,
+        string millerDir,
+        Stopwatch total,
+        bool useStore,
+        bool requireNewReconcile)
     {
         long baseline = row.LastRevision ?? 0;
         // The artifact identity BEFORE the leader acts: a full rebuild PROMOTES a fresh file whose revision
         // counter restarts, so `latest > baseline` alone can never confirm it — a CHANGED artifact_id does
         // (2026-06-11 Eros field report #2). Null (an unreadable/legacy artifact) degrades to revision-only.
         string? baselineArtifactId = TryReadFreshnessIdentity(row, useStore);
+        string? baselineGeneration = TryReadIndexGenerationIdentity(row, useStore);
         long? lastReadableRevision = row.LastRevision;
         string? requestWarning = null;
+        IncrementalReconcileRequestReceipt? incrementalReceipt = null;
 
         if (force)
         {
@@ -774,6 +802,40 @@ public sealed class CrossWorkspaceRefreshService
                     $"full-scan request: {ex.Message}";
             }
         }
+        else
+        {
+            try
+            {
+                lock (_pendingIncrementalReconcileGate)
+                {
+                    PendingIncrementalReconcile? pending =
+                        _pendingIncrementalReconciles.GetValueOrDefault(row.WorkspaceId);
+                    if (pending is not null
+                        && _utcNow() - pending.RequestedAtUtc >= LeaderScanRequestQueue.RequestTtl)
+                    {
+                        _pendingIncrementalReconciles.Remove(row.WorkspaceId);
+                        pending = null;
+                    }
+
+                    if (requireNewReconcile || pending is null)
+                    {
+                        incrementalReceipt = _requestIncrementalReconcile(
+                            millerDir, row.WorkspaceId, baseline, baselineGeneration);
+                        _pendingIncrementalReconciles[row.WorkspaceId] = new(
+                            incrementalReceipt,
+                            _utcNow());
+                    }
+                    else
+                        incrementalReceipt = pending!.Receipt;
+                }
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                requestWarning = "Target workspace indexer lock is busy, and Miller could not write a leader " +
+                    $"incremental-reconcile request: {ex.Message}";
+            }
+        }
 
         TimeSpan wait = force ? _fullScanRequestWait : _lockBusyWait;
         DateTimeOffset deadline = _utcNow() + wait;
@@ -781,7 +843,78 @@ public sealed class CrossWorkspaceRefreshService
         bool unconfirmedForceAdvance = false;
         while (_utcNow() < deadline)
         {
-            if (TryReadLatestRevision(row, useStore, out long latest))
+            if (!force && incrementalReceipt is not null)
+            {
+                IncrementalReconcileCompletion? completion = null;
+                try
+                {
+                    completion = _readIncrementalReconcileCompletion(incrementalReceipt, row.WorkspaceId);
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                    requestWarning = $"The leader reconcile completion could not be read: {ex.Message}";
+                }
+
+                if (completion is not null)
+                {
+                    if (completion.Outcome == IncrementalReconcileOutcome.Scanned
+                        && completion.Revision is { } completedRevision
+                        && !string.IsNullOrWhiteSpace(completion.IndexGenerationIdentity))
+                    {
+                        if (!TryReadCurrentWitness(
+                            row, useStore, out long currentRevision, out string? currentGeneration))
+                        {
+                            _sleep(_lockBusyPollInterval);
+                            continue;
+                        }
+
+                        if (currentRevision == completedRevision
+                            && string.Equals(
+                                currentGeneration,
+                                completion.IndexGenerationIdentity,
+                                StringComparison.Ordinal))
+                        {
+                            RemovePendingIncrementalReconcile(row.WorkspaceId, incrementalReceipt);
+                            _registry.MarkScanned(row.WorkspaceId, completedRevision, _utcNow());
+                            bool unchanged = completedRevision == baseline
+                                && string.Equals(baselineGeneration, currentGeneration, StringComparison.Ordinal);
+                            return new WorkspaceRefreshResult(
+                                unchanged ? WorkspaceRefreshStatus.Unchanged : WorkspaceRefreshStatus.Refreshed,
+                                row.WorkspaceId,
+                                row.CanonicalRoot,
+                                row.IndexDbPath,
+                                completedRevision,
+                                Scanned: false,
+                                TotalDuration: total.Elapsed,
+                                ArtifactId: completion.ArtifactId,
+                                IndexGenerationIdentity: currentGeneration);
+                        }
+                    }
+
+                    if (completion.Outcome != IncrementalReconcileOutcome.Scanned)
+                    {
+                        if (completion.Outcome is
+                            IncrementalReconcileOutcome.Queued or IncrementalReconcileOutcome.NotLeader)
+                        {
+                            _sleep(_lockBusyPollInterval);
+                            continue;
+                        }
+
+                        RemovePendingIncrementalReconcile(row.WorkspaceId, incrementalReceipt);
+                        requestWarning = completion.Error ??
+                            $"The leader reconcile finished with {completion.Outcome.ToString().ToLowerInvariant()}.";
+                        break;
+                    }
+
+                    RemovePendingIncrementalReconcile(row.WorkspaceId, incrementalReceipt);
+                    requestWarning = "The leader reconcile completion did not match the currently served " +
+                        "generation/revision witness.";
+                    break;
+                }
+            }
+
+            if (force && TryReadLatestRevision(row, useStore, out long latest))
             {
                 lastReadableRevision = latest;
                 bool artifactReplaced = baselineArtifactId is not null
@@ -843,7 +976,7 @@ public sealed class CrossWorkspaceRefreshService
 
         bool isLeaderAlive = Hosting.LeaderIdentityFile.TryRead(millerDir) is { } leader
             && Hosting.LeaderIdentityFile.IsProcessAlive(leader);
-        bool queued = force && requestWarning is null && isLeaderAlive && !unconfirmedForceAdvance;
+        bool queued = requestWarning is null && isLeaderAlive && (force ? !unconfirmedForceAdvance : incrementalReceipt is not null);
 
         return new WorkspaceRefreshResult(
             queued ? WorkspaceRefreshStatus.Queued : WorkspaceRefreshStatus.LockBusy,
@@ -855,6 +988,20 @@ public sealed class CrossWorkspaceRefreshService
             WarningText: warning,
             TotalDuration: total.Elapsed,
             ArtifactId: TryReadArtifactId(row, useStore));
+    }
+
+    private void RemovePendingIncrementalReconcile(
+        string workspaceId,
+        IncrementalReconcileRequestReceipt receipt)
+    {
+        lock (_pendingIncrementalReconcileGate)
+        {
+            if (_pendingIncrementalReconciles.TryGetValue(workspaceId, out var pending)
+                && string.Equals(pending.Receipt.RequestId, receipt.RequestId, StringComparison.Ordinal))
+            {
+                _pendingIncrementalReconciles.Remove(workspaceId);
+            }
+        }
     }
 
     /// <summary>
@@ -929,6 +1076,44 @@ public sealed class CrossWorkspaceRefreshService
         return probe is null
             ? null
             : probe.StoreInstanceId + "|" + probe.ManifestHash;
+    }
+
+    private string? TryReadIndexGenerationIdentity(WorkspaceRegistryRow row, bool useStore)
+    {
+        if (!useStore)
+            return TryReadArtifactId(row, useStore: false);
+        return TryReadStoreProbe(row)?.IndexGenerationIdentity;
+    }
+
+    private bool TryReadCurrentWitness(
+        WorkspaceRegistryRow row,
+        bool useStore,
+        out long revision,
+        out string? indexGenerationIdentity)
+    {
+        if (useStore)
+        {
+            WorkspaceFreshnessProbe? probe = TryReadStoreProbe(row);
+            if (probe is null)
+            {
+                revision = 0;
+                indexGenerationIdentity = null;
+                return false;
+            }
+
+            revision = probe.Revision;
+            indexGenerationIdentity = probe.IndexGenerationIdentity;
+            return true;
+        }
+
+        if (!TryReadLatestRevision(row, useStore: false, out revision))
+        {
+            indexGenerationIdentity = null;
+            return false;
+        }
+
+        indexGenerationIdentity = TryReadArtifactId(row, useStore: false);
+        return !string.IsNullOrWhiteSpace(indexGenerationIdentity);
     }
 
     private long ReadLatestRevision(WorkspaceRegistryRow row, bool useStore)

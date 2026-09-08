@@ -86,7 +86,8 @@ public sealed class WorkspaceOpenPrimeService : BackgroundService
                     WorkspaceRefreshResult result = refresh.Refresh(
                         workspaceId,
                         force: false,
-                        bypassBackoff: true);
+                        bypassBackoff: true,
+                        requireNewReconcile: true);
                     ReconcileTerminalResult(registry, result);
                     _logger.LogInformation(
                         "Background workspace open prime finished for {WorkspaceId} with {Status}.",

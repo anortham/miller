@@ -147,6 +147,10 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<WorkspaceContext, string?> _readIndexLevel;
     private readonly Func<string, FullScanDrainResult> _drainFullScanRequests;
     private readonly Func<string, FileConvergeDrainResult> _drainFileConvergeRequests;
+    private readonly Func<string, string, IncrementalReconcileDrainResult> _drainIncrementalReconcileRequests;
+    private readonly Action<string, IncrementalReconcileRequest,
+        IncrementalReconcileOutcome, long?, string?, string?, string?> _writeIncrementalReconcileCompletion;
+    private readonly Func<WorkspaceContext, WorkspaceFreshnessProbe> _probeWorkspaceFreshness;
 
     // --- version-aware leadership (D2–D4): every input is an injected func so the orchestration is pure-testable.
     // Decisions live in LeadershipEligibility / YieldCooldown; this class only wires them into the claim loop,
@@ -267,6 +271,8 @@ public sealed class IndexerService : BackgroundService
             attachFileWatchers: true,
             drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests,
             drainFileConvergeRequests: LeaderScanRequestQueue.DrainFileConvergeRequests,
+            drainIncrementalReconcileRequests: LeaderScanRequestQueue.DrainIncrementalReconcileRequests,
+            writeIncrementalReconcileCompletion: LeaderScanRequestQueue.WriteIncrementalReconcileCompletion,
             drainLeaderHandoffRequests: LeaderScanRequestQueue.DrainLeaderHandoffRequests,
             // The watcher's extension gate: julie's own claimed set, fetched once per process, null on any
             // failure (gate nothing). Production-only — the internal test ctor defaults to no gate so no
@@ -293,6 +299,10 @@ public sealed class IndexerService : BackgroundService
         bool attachFileWatchers = true,
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
+        Func<string, string, IncrementalReconcileDrainResult>? drainIncrementalReconcileRequests = null,
+        Action<string, IncrementalReconcileRequest, IncrementalReconcileOutcome,
+            long?, string?, string?, string?>? writeIncrementalReconcileCompletion = null,
+        Func<WorkspaceContext, WorkspaceFreshnessProbe>? probeWorkspaceFreshness = null,
         Func<string, YieldDrainResult>? drainYieldRequests = null,
         Func<string, LeaderHandoffDrainResult>? drainLeaderHandoffRequests = null,
         Func<string?>? ownExtractorVersion = null,
@@ -332,6 +342,11 @@ public sealed class IndexerService : BackgroundService
         _readIndexLevel = readIndexLevel ?? ReadIndexLevel;
         _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
         _drainFileConvergeRequests = drainFileConvergeRequests ?? LeaderScanRequestQueue.DrainFileConvergeRequests;
+        _drainIncrementalReconcileRequests = drainIncrementalReconcileRequests
+            ?? LeaderScanRequestQueue.DrainIncrementalReconcileRequests;
+        _writeIncrementalReconcileCompletion = writeIncrementalReconcileCompletion
+            ?? LeaderScanRequestQueue.WriteIncrementalReconcileCompletion;
+        _probeWorkspaceFreshness = probeWorkspaceFreshness ?? ProbeWorkspaceFreshness;
         _leaderRetryInterval = leaderRetryInterval;
         _searchSidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
@@ -377,6 +392,14 @@ public sealed class IndexerService : BackgroundService
         _governorWait = scanGovernorWait ?? DefaultScanAdmissionWait;
         _opsGateWait = opsGateWait ?? DefaultOpsGateWait;
     }
+
+    private static WorkspaceFreshnessProbe ProbeWorkspaceFreshness(WorkspaceContext workspace) =>
+        WorkspaceReadSessionFactory.Probe(
+            workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
+            workspace.CanonicalRoot ?? workspace.WorkspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: null,
+            readerClientFactory: workspace.ReaderProducerFactory);
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
     public bool IsLeader => _lease is not null;
@@ -776,6 +799,7 @@ public sealed class IndexerService : BackgroundService
         }
 
         TryProcessLeaderFullScanRequests(millerDir);
+        TryProcessIncrementalReconcileRequests(millerDir, workspace);
         TryProcessFileConvergeRequests(millerDir);
 
         // Scan admission is taken OUTSIDE _opsGate (and outside IndexerCore's own gate), because waiting for it
@@ -1361,6 +1385,110 @@ public sealed class IndexerService : BackgroundService
         }
     }
 
+    private bool TryProcessIncrementalReconcileRequests(string millerDir, WorkspaceContext workspace)
+    {
+        IncrementalReconcileDrainResult batch;
+        try
+        {
+            batch = _drainIncrementalReconcileRequests(millerDir, workspace.WorkspaceId ?? string.Empty);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Incremental-reconcile request drain failed; will retry on a later tick.");
+            return false;
+        }
+
+        LogRequestDrainStats("incremental-reconcile", batch.ExpiredDiscarded, batch.ClaimSkipped);
+        if (batch.Requests.Count == 0)
+            return false;
+
+        ScanOutcome scan;
+        try
+        {
+            scan = TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: false);
+        }
+        catch (Exception ex)
+        {
+            foreach (IncrementalReconcileRequest request in batch.Requests)
+            {
+                try
+                {
+                    _writeIncrementalReconcileCompletion(
+                        millerDir,
+                        request,
+                        IncrementalReconcileOutcome.Failed,
+                        null,
+                        null,
+                        null,
+                        ex.Message);
+                }
+                catch (Exception writeException) when (
+                    writeException is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    _logger.LogWarning(writeException,
+                        "Could not publish completion for incremental-reconcile request {RequestId}.",
+                        request.RequestId);
+                }
+            }
+
+            return false;
+        }
+        IncrementalReconcileOutcome result = scan.Result switch
+        {
+            ScanOutcome.Kind.Scanned => IncrementalReconcileOutcome.Scanned,
+            ScanOutcome.Kind.Queued => IncrementalReconcileOutcome.Queued,
+            ScanOutcome.Kind.Failed => IncrementalReconcileOutcome.Failed,
+            ScanOutcome.Kind.Downgraded => IncrementalReconcileOutcome.Downgraded,
+            ScanOutcome.Kind.NotLeader => IncrementalReconcileOutcome.NotLeader,
+            _ => throw new ArgumentOutOfRangeException(nameof(scan), scan.Result, "Unknown scan outcome."),
+        };
+        long? revision = null;
+        string? artifactId = null;
+        string? generation = null;
+        string? error = scan.HolderDescription ?? scan.DowngradeReason;
+
+        if (scan.Result == ScanOutcome.Kind.Scanned)
+        {
+            try
+            {
+                WorkspaceFreshnessProbe probe = _probeWorkspaceFreshness(workspace);
+                if (scan.Report?.Revision != probe.Revision || string.IsNullOrWhiteSpace(probe.IndexGenerationIdentity))
+                {
+                    result = IncrementalReconcileOutcome.Failed;
+                    error = "The completed reconcile did not publish a matching generation/revision witness.";
+                }
+                else
+                {
+                    revision = probe.Revision;
+                    artifactId = scan.Report.Artifact?.ArtifactId ?? probe.StoreInstanceId;
+                    generation = probe.IndexGenerationIdentity;
+                }
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or InvalidOperationException or SqliteException)
+            {
+                result = IncrementalReconcileOutcome.Failed;
+                error = $"The completed reconcile freshness witness could not be read: {ex.Message}";
+            }
+        }
+
+        foreach (IncrementalReconcileRequest request in batch.Requests)
+        {
+            try
+            {
+                _writeIncrementalReconcileCompletion(
+                    millerDir, request, result, revision, artifactId, generation, error);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                _logger.LogWarning(ex,
+                    "Could not publish completion for incremental-reconcile request {RequestId}.", request.RequestId);
+            }
+        }
+
+        return scan.Result == ScanOutcome.Kind.Scanned && result == IncrementalReconcileOutcome.Scanned;
+    }
+
     // Callers MUST already hold machine-wide scan admission (TryAcquireScanAdmission), acquired outside
     // _opsGate, and MUST hand it in as `admission`: it is released here the moment the extract subprocess
     // returns, before the sidecar convergence below. `decision` is the scan-failure policy's verdict for this
@@ -1844,6 +1972,9 @@ public sealed class IndexerService : BackgroundService
     /// </summary>
     internal bool ProcessLeaderFullScanRequestsForTest(string millerDir) =>
         TryProcessLeaderFullScanRequests(millerDir);
+
+    internal bool ProcessIncrementalReconcileRequestsForTest(string millerDir, WorkspaceContext workspace) =>
+        TryProcessIncrementalReconcileRequests(millerDir, workspace);
 
     /// <summary>
     /// Test seam: drain single-file converge request files and enqueue them into the core's coalescing queue

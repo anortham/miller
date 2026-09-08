@@ -1251,7 +1251,8 @@ public sealed class WorkspaceTool
             target.WorkspaceId,
             force,
             ScanAdmissionBudget.Of(IndexerService.DefaultScanAdmissionWait),
-            bypassBackoff: true);
+            bypassBackoff: true,
+            requireNewReconcile: true);
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
         string? artifactId = refresh.ArtifactId;

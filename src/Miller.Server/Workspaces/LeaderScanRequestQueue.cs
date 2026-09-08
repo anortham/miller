@@ -51,6 +51,51 @@ internal sealed record YieldDrainResult(
 
 internal sealed record LeaderHandoffRequestReceipt(string RequestId, string RequestPath);
 
+internal enum IncrementalReconcileOutcome
+{
+    Scanned,
+    Queued,
+    Failed,
+    Downgraded,
+    NotLeader,
+}
+
+internal sealed record IncrementalReconcileRequestReceipt(
+    string RequestId,
+    string RequestPath,
+    string CompletionPath);
+
+internal sealed record IncrementalReconcileRequest(
+    string RequestId,
+    string WorkspaceId,
+    long BaselineRevision,
+    string? BaselineIndexGenerationIdentity,
+    DateTimeOffset RequestedAtUtc,
+    int RequesterPid,
+    string RequestPath,
+    string ClaimedPath);
+
+internal sealed record IncrementalReconcileCompletion(
+    string RequestId,
+    string WorkspaceId,
+    IncrementalReconcileOutcome Outcome,
+    long? Revision,
+    string? ArtifactId,
+    string? IndexGenerationIdentity,
+    string? Error,
+    DateTimeOffset CompletedAtUtc,
+    int LeaderPid);
+
+internal sealed record IncrementalReconcileDrainResult(
+    IReadOnlyList<IncrementalReconcileRequest> Requests,
+    int ExpiredDiscarded,
+    int ClaimSkipped,
+    int InvalidDiscarded)
+{
+    public static IncrementalReconcileDrainResult Empty { get; } =
+        new([], ExpiredDiscarded: 0, ClaimSkipped: 0, InvalidDiscarded: 0);
+}
+
 internal sealed record LeaderHandoffDrainResult(
     bool Requested,
     int RequesterPid,
@@ -73,13 +118,18 @@ internal static partial class LeaderScanRequestQueue
     private const string OperationFileConverge = "file_converge";
     private const string OperationYield = "yield";
     private const string OperationLeaderHandoff = "leader_handoff";
+    private const string OperationIncrementalReconcile = "incremental_reconcile";
+    private const string OperationIncrementalReconcileCompletion = "incremental_reconcile_completion";
     private const string RequestDirectoryName = "requests";
     private const string FullScanSuffix = ".full-scan.json";
     private const string FileConvergeSuffix = ".file-converge.json";
     private const string YieldSuffix = ".yield.json";
     private const string LeaderHandoffSuffix = ".leader-handoff.json";
+    private const string IncrementalReconcileSuffix = ".incremental-reconcile.json";
+    private const string IncrementalReconcileCompletionSuffix = ".incremental-reconcile.result.json";
     private const string ClaimedSuffix = ".claimed";
     private const string StampFormat = "yyyyMMddHHmmssfffffff";
+    private const int IncrementalReconcileBatchLimit = 64;
 
     /// <summary>
     /// How long an unserviced request (or a leftover claimed file) may sit before the drain discards it without
@@ -88,6 +138,276 @@ internal static partial class LeaderScanRequestQueue
     /// poll gave up within seconds) and a forever-growing requests dir would surprise-scan a future leader.
     /// </summary>
     internal static readonly TimeSpan RequestTtl = TimeSpan.FromMinutes(10);
+
+    public static IncrementalReconcileRequestReceipt RequestIncrementalReconcile(
+        string millerDir,
+        string workspaceId,
+        long baselineRevision,
+        string? baselineIndexGenerationIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (baselineRevision < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(baselineRevision), baselineRevision, "Baseline revision must be non-negative.");
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        Directory.CreateDirectory(requestDir);
+        SweepExpiredFiles(
+            requestDir,
+            "*" + IncrementalReconcileCompletionSuffix,
+            DateTimeOffset.UtcNow,
+            IncrementalReconcileBatchLimit);
+
+        string requestId = Guid.NewGuid().ToString("N");
+        string stamp = DateTimeOffset.UtcNow.ToString(StampFormat, CultureInfo.InvariantCulture);
+        string requestPath = Path.Combine(
+            requestDir,
+            $"{stamp}-{Environment.ProcessId}-{requestId}{IncrementalReconcileSuffix}");
+        string completionPath = IncrementalReconcileCompletionPath(requestDir, requestId);
+        string tempPath = requestPath + ".tmp";
+        var request = new IncrementalReconcileRequestFile(
+            SchemaVersion,
+            OperationIncrementalReconcile,
+            requestId,
+            workspaceId,
+            baselineRevision,
+            baselineIndexGenerationIdentity,
+            DateTimeOffset.UtcNow,
+            Environment.ProcessId);
+
+        try
+        {
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(request, LeaderScanRequestJsonContext.Default.IncrementalReconcileRequestFile));
+            File.Move(tempPath, requestPath);
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+
+        return new IncrementalReconcileRequestReceipt(requestId, requestPath, completionPath);
+    }
+
+    public static IncrementalReconcileDrainResult DrainIncrementalReconcileRequests(
+        string millerDir,
+        string workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        if (!Directory.Exists(requestDir))
+            return IncrementalReconcileDrainResult.Empty;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        int expired = SweepExpiredClaims(requestDir, IncrementalReconcileSuffix, now);
+        SweepExpiredFiles(
+            requestDir,
+            "*" + IncrementalReconcileCompletionSuffix,
+            now,
+            IncrementalReconcileBatchLimit);
+        int skipped = 0;
+        int invalid = 0;
+        var requests = new List<IncrementalReconcileRequest>();
+        string[] batch = Directory
+            .EnumerateFiles(requestDir, "*" + IncrementalReconcileSuffix)
+            .Order(StringComparer.Ordinal)
+            .Take(IncrementalReconcileBatchLimit)
+            .ToArray();
+        foreach (string path in batch)
+        {
+            if (IsExpired(path, now))
+            {
+                TryDelete(path);
+                expired++;
+                continue;
+            }
+            if (!TryClaim(path, out string claimedPath))
+            {
+                skipped++;
+                continue;
+            }
+            if (claimedPath.Length == 0)
+                continue;
+
+            try
+            {
+                string json = File.ReadAllText(claimedPath);
+                IncrementalReconcileRequestFile? request = JsonSerializer.Deserialize(
+                    json,
+                    LeaderScanRequestJsonContext.Default.IncrementalReconcileRequestFile);
+                if (request is not
+                    {
+                        SchemaVersion: SchemaVersion,
+                        Operation: OperationIncrementalReconcile,
+                        RequestId.Length: > 0,
+                        WorkspaceId: var requestWorkspaceId,
+                        BaselineRevision: >= 0,
+                    }
+                    || !Guid.TryParseExact(request.RequestId, "N", out _)
+                    || !string.Equals(requestWorkspaceId, workspaceId, StringComparison.Ordinal))
+                {
+                    invalid++;
+                    continue;
+                }
+                requests.Add(new IncrementalReconcileRequest(
+                    request.RequestId,
+                    request.WorkspaceId,
+                    request.BaselineRevision,
+                    request.BaselineIndexGenerationIdentity,
+                    request.RequestedAtUtc,
+                    request.RequesterPid,
+                    path,
+                    claimedPath));
+                claimedPath = string.Empty;
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+                invalid++;
+            }
+            finally
+            {
+                if (claimedPath.Length > 0)
+                    TryDelete(claimedPath);
+            }
+        }
+
+        return new IncrementalReconcileDrainResult(requests, expired, skipped, invalid);
+    }
+
+    public static void WriteIncrementalReconcileCompletion(
+        string millerDir,
+        IncrementalReconcileRequest request,
+        IncrementalReconcileOutcome outcome,
+        long? revision,
+        string? artifactId,
+        string? indexGenerationIdentity,
+        string? error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkspaceId);
+        if (!Guid.TryParseExact(request.RequestId, "N", out _))
+            throw new ArgumentException("Request id must be a 32-character GUID.", nameof(request));
+        if (!Enum.IsDefined(outcome))
+            throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown reconcile outcome.");
+        if (outcome == IncrementalReconcileOutcome.Scanned
+            && (revision is null or < 0
+                || string.IsNullOrWhiteSpace(indexGenerationIdentity) && string.IsNullOrWhiteSpace(artifactId)))
+        {
+            throw new ArgumentException(
+                "A scanned completion requires a non-negative revision and generation or artifact identity.",
+                nameof(revision));
+        }
+        if (string.IsNullOrWhiteSpace(request.RequestPath)
+            || string.IsNullOrWhiteSpace(request.ClaimedPath))
+        {
+            throw new ArgumentException("Request paths are required.", nameof(request));
+        }
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        Directory.CreateDirectory(requestDir);
+        string completionPath = IncrementalReconcileCompletionPath(requestDir, request.RequestId);
+        string tempPath = completionPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        var completion = new IncrementalReconcileCompletionFile(
+            SchemaVersion,
+            OperationIncrementalReconcileCompletion,
+            request.RequestId,
+            request.WorkspaceId,
+            outcome,
+            revision,
+            artifactId,
+            indexGenerationIdentity,
+            error,
+            DateTimeOffset.UtcNow,
+            Environment.ProcessId);
+        try
+        {
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(
+                    completion,
+                    LeaderScanRequestJsonContext.Default.IncrementalReconcileCompletionFile));
+            File.Move(tempPath, completionPath, overwrite: true);
+            if (outcome is IncrementalReconcileOutcome.Queued or IncrementalReconcileOutcome.NotLeader)
+                RequeueClaim(request);
+            else
+                TryDelete(request.ClaimedPath);
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    private static void RequeueClaim(IncrementalReconcileRequest request)
+    {
+        try
+        {
+            if (File.Exists(request.ClaimedPath) && !File.Exists(request.RequestPath))
+                File.Move(request.ClaimedPath, request.RequestPath);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    public static IncrementalReconcileCompletion? TryReadIncrementalReconcileCompletion(
+        IncrementalReconcileRequestReceipt receipt,
+        string workspaceId)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (!File.Exists(receipt.CompletionPath))
+            return null;
+        if (IsExpired(receipt.CompletionPath, DateTimeOffset.UtcNow))
+        {
+            TryDelete(receipt.CompletionPath);
+            return null;
+        }
+
+        try
+        {
+            string json = File.ReadAllText(receipt.CompletionPath);
+            IncrementalReconcileCompletionFile? completion = JsonSerializer.Deserialize(
+                json,
+                LeaderScanRequestJsonContext.Default.IncrementalReconcileCompletionFile);
+            if (completion is not
+                {
+                    SchemaVersion: SchemaVersion,
+                    Operation: OperationIncrementalReconcileCompletion,
+                }
+                || !string.Equals(completion.RequestId, receipt.RequestId, StringComparison.Ordinal)
+                || !string.Equals(completion.WorkspaceId, workspaceId, StringComparison.Ordinal)
+                || !Enum.IsDefined(completion.Outcome)
+                || completion.Outcome == IncrementalReconcileOutcome.Scanned
+                    && (completion.Revision is null or < 0
+                        || string.IsNullOrWhiteSpace(completion.IndexGenerationIdentity)
+                            && string.IsNullOrWhiteSpace(completion.ArtifactId)))
+            {
+                TryDelete(receipt.CompletionPath);
+                return null;
+            }
+
+            return new IncrementalReconcileCompletion(
+                completion.RequestId,
+                completion.WorkspaceId,
+                completion.Outcome,
+                completion.Revision,
+                completion.ArtifactId,
+                completion.IndexGenerationIdentity,
+                completion.Error,
+                completion.CompletedAtUtc,
+                completion.LeaderPid);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            TryDelete(receipt.CompletionPath);
+            return null;
+        }
+    }
 
     public static void RequestFullScan(string millerDir, string workspaceId, long baselineRevision)
     {
@@ -560,6 +880,23 @@ internal static partial class LeaderScanRequestQueue
         return swept;
     }
 
+    private static int SweepExpiredFiles(
+        string directory,
+        string pattern,
+        DateTimeOffset now,
+        int limit)
+    {
+        int swept = 0;
+        foreach (string path in Directory.EnumerateFiles(directory, pattern).Take(limit))
+        {
+            if (!IsExpired(path, now))
+                continue;
+            TryDelete(path);
+            swept++;
+        }
+        return swept;
+    }
+
     // A request's age comes from the leading UTC stamp in its file name (which survives the claim rename);
     // a foreign/unstampable name falls back to the file's last-write time, and an unreadable age reads as
     // fresh (the claim + JSON guards still bound what it can cost).
@@ -589,11 +926,37 @@ internal static partial class LeaderScanRequestQueue
     private static string RequestDirectoryFor(string millerDir) =>
         Path.Combine(Path.GetFullPath(millerDir), RequestDirectoryName);
 
+    private static string IncrementalReconcileCompletionPath(string requestDir, string requestId) =>
+        Path.Combine(requestDir, requestId + IncrementalReconcileCompletionSuffix);
+
     private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
+
+    private sealed record IncrementalReconcileRequestFile(
+        int SchemaVersion,
+        string Operation,
+        string RequestId,
+        string WorkspaceId,
+        long BaselineRevision,
+        string? BaselineIndexGenerationIdentity,
+        DateTimeOffset RequestedAtUtc,
+        int RequesterPid);
+
+    private sealed record IncrementalReconcileCompletionFile(
+        int SchemaVersion,
+        string Operation,
+        string RequestId,
+        string WorkspaceId,
+        IncrementalReconcileOutcome Outcome,
+        long? Revision,
+        string? ArtifactId,
+        string? IndexGenerationIdentity,
+        string? Error,
+        DateTimeOffset CompletedAtUtc,
+        int LeaderPid);
 
     private sealed record FullScanRequest(
         int SchemaVersion,
@@ -635,5 +998,7 @@ internal static partial class LeaderScanRequestQueue
     [JsonSerializable(typeof(FileConvergeRequest))]
     [JsonSerializable(typeof(YieldRequest))]
     [JsonSerializable(typeof(LeaderHandoffRequest))]
+    [JsonSerializable(typeof(IncrementalReconcileRequestFile))]
+    [JsonSerializable(typeof(IncrementalReconcileCompletionFile))]
     private sealed partial class LeaderScanRequestJsonContext : JsonSerializerContext;
 }

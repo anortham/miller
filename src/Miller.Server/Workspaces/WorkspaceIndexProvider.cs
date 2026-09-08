@@ -21,6 +21,7 @@ public sealed class WorkspaceIndexProvider
     private readonly IndexBootstrapService? _primary;
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, WorkspaceRefreshResult> _refresh;
+    private readonly Func<string, WorkspaceRefreshResult> _blockingRefresh;
     private Func<WorkspaceRegistryRow, bool> _canUseResidentRefresh = static _ => false;
     private Func<WorkspaceRegistryRow, WorkspaceRefreshResult?> _residentRefresh = static _ => null;
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
@@ -92,7 +93,8 @@ public sealed class WorkspaceIndexProvider
                 readerClientFactory ?? currentWorkspace?.ReaderProducerFactory),
             backgroundRefreshGate: backgroundRefreshGate,
             primary: primary,
-            projectionCache: projectionCache)
+            projectionCache: projectionCache,
+            blockingRefresh: BlockingRefresh(refreshService))
     {
     }
 
@@ -122,7 +124,8 @@ public sealed class WorkspaceIndexProvider
         Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
         BackgroundRefreshGate? backgroundRefreshGate = null,
         IndexBootstrapService? primary = null,
-        WorkspaceReadProjectionCache? projectionCache = null)
+        WorkspaceReadProjectionCache? projectionCache = null,
+        Func<string, WorkspaceRefreshResult>? blockingRefresh = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(refresh);
@@ -138,6 +141,7 @@ public sealed class WorkspaceIndexProvider
         _primary = primary;
         _registry = registry;
         _refresh = refresh;
+        _blockingRefresh = blockingRefresh ?? refresh;
         _loadIndex = loadIndex;
         _loadSymbolSearch = loadSymbolSearch;
         _loadContentSearch = loadContentSearch;
@@ -1084,6 +1088,13 @@ public sealed class WorkspaceIndexProvider
         return workspaceId => refreshService.Refresh(workspaceId);
     }
 
+    internal static Func<string, WorkspaceRefreshResult> BlockingRefresh(
+        CrossWorkspaceRefreshService refreshService)
+    {
+        ArgumentNullException.ThrowIfNull(refreshService);
+        return workspaceId => refreshService.Refresh(workspaceId, requireNewReconcile: true);
+    }
+
     private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, WorkspaceRefreshMode refresh)
     {
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId, WorkspaceSelectorIntent.Read);
@@ -1109,7 +1120,7 @@ public sealed class WorkspaceIndexProvider
         {
             long revisionBeforeRefresh = row.LastRevision ?? 0;
             TelemetryContext.Current?.SetWaitReason("workspace_refresh");
-            refreshResult = RefreshRegisteredWorkspace(row);
+            refreshResult = RefreshRegisteredWorkspace(row, requireNewReconcile: true);
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingIndex)
@@ -1174,7 +1185,7 @@ public sealed class WorkspaceIndexProvider
                 _backgroundRefreshGate.RecordRunning(workspaceId);
                 try
                 {
-                    WorkspaceRefreshResult result = RefreshRegisteredWorkspace(row);
+                    WorkspaceRefreshResult result = RefreshRegisteredWorkspace(row, requireNewReconcile: false);
 
                     if (result.Status == WorkspaceRefreshStatus.Failed)
                     {
@@ -1219,7 +1230,9 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceRefreshResult RefreshRegisteredWorkspace(WorkspaceRegistryRow row)
+    private WorkspaceRefreshResult RefreshRegisteredWorkspace(
+        WorkspaceRegistryRow row,
+        bool requireNewReconcile)
     {
         WorkspaceContext? current = _currentWorkspace
             ?? (_primary?.IsBound == true ? _primary.Workspace : null);
@@ -1232,7 +1245,7 @@ public sealed class WorkspaceIndexProvider
             return resident;
         }
 
-        return _refresh(row.WorkspaceId);
+        return requireNewReconcile ? _blockingRefresh(row.WorkspaceId) : _refresh(row.WorkspaceId);
     }
 
     internal void ConfigureResidentRefresh(

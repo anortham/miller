@@ -3412,7 +3412,8 @@ public static class CliDispatch
         }
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
-        WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force, bypassBackoff: true);
+        WorkspaceRefreshResult result = refresh.Refresh(
+            row.WorkspaceId, force, bypassBackoff: true, requireNewReconcile: true);
 
         bool currentWorkspace = WorkspaceSafety.IsLiveWorkspace(
             row.CanonicalRoot,
@@ -3659,7 +3660,8 @@ public static class CliDispatch
             lineage: IndexBootstrapService.CaptureLineage(canonicalRoot));
 
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
-        WorkspaceRefreshResult result = refresh.Refresh(id, force: full, bypassBackoff: true);
+        WorkspaceRefreshResult result = refresh.Refresh(
+            id, force: full, bypassBackoff: true, requireNewReconcile: true);
         ReconcileOpenedRegistryRow(registry, id, dbPath, isNewRow: priorRow is null, result);
 
         // Rendered via the Action view (NOT WorkspaceRender.Open, whose "primed / not a live switch" copy is

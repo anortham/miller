@@ -652,7 +652,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
-        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Equal(WorkspaceRefreshStatus.Queued, result.Status);
         Assert.Contains(currentPid.ToString(), result.WarningText, StringComparison.Ordinal);
         Assert.Contains("9.9.9-test", result.WarningText, StringComparison.Ordinal);
         Assert.Contains("alive", result.WarningText, StringComparison.OrdinalIgnoreCase);
@@ -916,11 +916,13 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_LockBusy_PollsForAVisibleRevisionChangeWithoutScanning()
+    public void Refresh_LockBusy_DoesNotTreatAnUncorrelatedRevisionAdvanceAsReconcileProof()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("busy-change");
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
         registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
         registry.MarkScanned("target-ws", revision: 7);
         int scanCount = 0;
@@ -939,11 +941,256 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
-        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
         Assert.False(result.Scanned);
-        Assert.Equal(8, result.Revision);
+        Assert.Equal(7, result.Revision);
         Assert.Equal(0, scanCount);
+        Assert.Equal(7, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_AcceptsOnlyCorrelatedCompletionMatchingTheServedWitness()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-correlated-completion");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var clock = new FakeClock();
+        var receipt = new IncrementalReconcileRequestReceipt("request-1", "request", "completion");
+        int completionReads = 0;
+        int requests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            clock: clock,
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) => new WorkspaceFreshnessProbe(
+                8, "store-1", "view-a", 2, "manifest-b", IndexGenerationIdentity: "generation-b"),
+            requestIncrementalReconcile: (_, workspaceId, baseline, generation) =>
+            {
+                requests++;
+                Assert.Equal("target-ws", workspaceId);
+                Assert.Equal(7, baseline);
+                Assert.Equal("generation-b", generation);
+                return receipt;
+            },
+            readIncrementalReconcileCompletion: (actual, workspaceId) =>
+            {
+                Assert.Equal(receipt, actual);
+                Assert.Equal("target-ws", workspaceId);
+                return ++completionReads < 2
+                    ? null
+                    : new IncrementalReconcileCompletion(
+                        receipt.RequestId,
+                        workspaceId,
+                        IncrementalReconcileOutcome.Scanned,
+                        8,
+                        "store-1",
+                        "generation-b",
+                        null,
+                        DateTimeOffset.UtcNow,
+                        42);
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.Equal(8, result.Revision);
+        Assert.Equal("generation-b", result.IndexGenerationIdentity);
+        Assert.Equal(1, requests);
         Assert.Equal(8, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_RetainsQueuedNonceAndPicksUpLaterSuccessWithoutEnqueueingAgain()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-delayed-completion");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var clock = new FakeClock();
+        var receipt = new IncrementalReconcileRequestReceipt("request-1", "request", "completion");
+        int requests = 0;
+        bool completed = false;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            clock: clock,
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) => new WorkspaceFreshnessProbe(
+                7, "store-1", "view-a", 1, "manifest-a", IndexGenerationIdentity: "generation-a"),
+            requestIncrementalReconcile: (_, _, _, _) =>
+            {
+                requests++;
+                return receipt;
+            },
+            readIncrementalReconcileCompletion: (_, workspaceId) => new IncrementalReconcileCompletion(
+                    receipt.RequestId,
+                    workspaceId,
+                    completed ? IncrementalReconcileOutcome.Scanned : IncrementalReconcileOutcome.Queued,
+                    completed ? 7 : null,
+                    completed ? "store-1" : null,
+                    completed ? "generation-a" : null,
+                    completed ? null : "queued",
+                    DateTimeOffset.UtcNow,
+                    42));
+
+        WorkspaceRefreshResult first = service.Refresh("target-ws");
+        completed = true;
+        WorkspaceRefreshResult second = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, first.Status);
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, second.Status);
+        Assert.Equal("generation-a", second.IndexGenerationIdentity);
+        Assert.Equal(1, requests);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_ExplicitBlockingRequestAlwaysCreatesANewNonce()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-explicit-fresh-nonce");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int requests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            requestIncrementalReconcile: (_, _, _, _) => new IncrementalReconcileRequestReceipt(
+                $"request-{++requests}", "request", "completion"),
+            readIncrementalReconcileCompletion: (_, _) => null);
+
+        service.Refresh("target-ws", requireNewReconcile: true);
+        service.Refresh("target-ws", requireNewReconcile: true);
+
+        Assert.Equal(2, requests);
+    }
+
+    [Theory]
+    [InlineData(8, "generation-c")]
+    [InlineData(9, "generation-b")]
+    public void Refresh_LockBusy_ReadableWitnessMismatchRetiresTheReceiptForTheNextRequest(
+        long currentRevision,
+        string currentGeneration)
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-witness-mismatch");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int requests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) => new WorkspaceFreshnessProbe(
+                currentRevision,
+                "store-1",
+                "view-a",
+                1,
+                "manifest-a",
+                IndexGenerationIdentity: currentGeneration),
+            requestIncrementalReconcile: (_, _, _, _) => new IncrementalReconcileRequestReceipt(
+                $"request-{++requests}", "request", "completion"),
+            readIncrementalReconcileCompletion: (receipt, workspaceId) => new IncrementalReconcileCompletion(
+                receipt.RequestId,
+                workspaceId,
+                IncrementalReconcileOutcome.Scanned,
+                8,
+                "store-1",
+                "generation-b",
+                null,
+                DateTimeOffset.UtcNow,
+                42));
+
+        service.Refresh("target-ws");
+        service.Refresh("target-ws");
+
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_ExpiredPendingReceiptCreatesOneReplacement()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-expired-receipt");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var clock = new FakeClock();
+        int requests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            clock: clock,
+            requestIncrementalReconcile: (_, _, _, _) => new IncrementalReconcileRequestReceipt(
+                $"request-{++requests}", "request", "completion"),
+            readIncrementalReconcileCompletion: (_, _) => null);
+
+        service.Refresh("target-ws");
+        clock.Sleep(LeaderScanRequestQueue.RequestTtl + TimeSpan.FromSeconds(1));
+        service.Refresh("target-ws");
+
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_TransientUnreadableWitnessKeepsPollingTheSameScannedReceipt()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-transient-witness");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int probeReads = 0;
+        int requests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("reader must not scan"),
+            acquireLock: _ => null,
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) => ++probeReads == 3
+                ? throw new IOException("temporarily unreadable")
+                : new WorkspaceFreshnessProbe(
+                    7, "store-1", "view-a", 1, "manifest-a", IndexGenerationIdentity: "generation-a"),
+            requestIncrementalReconcile: (_, _, _, _) => new IncrementalReconcileRequestReceipt(
+                $"request-{++requests}", "request", "completion"),
+            readIncrementalReconcileCompletion: (receipt, workspaceId) => new IncrementalReconcileCompletion(
+                receipt.RequestId,
+                workspaceId,
+                IncrementalReconcileOutcome.Scanned,
+                7,
+                "store-1",
+                "generation-a",
+                null,
+                DateTimeOffset.UtcNow,
+                42));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, result.Status);
+        Assert.Equal(1, requests);
+        Assert.True(probeReads >= 4);
     }
 
     [Fact]
@@ -1562,6 +1809,9 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         FakeClock? clock = null,
         SymbolSearchSidecar? sidecar = null,
         Action<string, string, long>? requestFullScan = null,
+        Func<string, string, long, string?, IncrementalReconcileRequestReceipt>? requestIncrementalReconcile = null,
+        Func<IncrementalReconcileRequestReceipt, string, IncrementalReconcileCompletion?>?
+            readIncrementalReconcileCompletion = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
         Func<string, string?>? readArtifactId = null,
         Func<string, string, string?, WorkspaceFreshnessProbe>? readStoreProbe = null,
@@ -1585,6 +1835,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             utcNow: clock.UtcNow,
             sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
             requestFullScan: requestFullScan,
+            requestIncrementalReconcile: requestIncrementalReconcile,
+            readIncrementalReconcileCompletion: readIncrementalReconcileCompletion,
             eligibilityGate: eligibilityGate,
             readArtifactId: readArtifactId ?? (_ => null),
             readStoreProbe: readStoreProbe,

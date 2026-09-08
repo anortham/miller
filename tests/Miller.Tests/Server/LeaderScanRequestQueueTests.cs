@@ -66,6 +66,201 @@ public sealed class LeaderScanRequestQueueTests : IDisposable
     }
 
     [Fact]
+    public void IncrementalReconcile_RequestDrainAndCompletionPreserveNonceAndGenerationProof()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        IncrementalReconcileRequestReceipt receipt = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir,
+            "workspace-1",
+            baselineRevision: 17,
+            baselineIndexGenerationIdentity: "generation-a");
+
+        IncrementalReconcileRequest request = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+        Assert.Equal(receipt.RequestId, request.RequestId);
+        Assert.Equal(17, request.BaselineRevision);
+        Assert.Equal("generation-a", request.BaselineIndexGenerationIdentity);
+        Assert.Empty(LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+
+        LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request,
+            IncrementalReconcileOutcome.Scanned,
+            revision: 18,
+            artifactId: "artifact-b",
+            indexGenerationIdentity: "generation-b",
+            error: null);
+
+        IncrementalReconcileCompletion completion = Assert.IsType<IncrementalReconcileCompletion>(
+            LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion(receipt, "workspace-1"));
+        Assert.Equal(receipt.RequestId, completion.RequestId);
+        Assert.Equal(IncrementalReconcileOutcome.Scanned, completion.Outcome);
+        Assert.Equal(18, completion.Revision);
+        Assert.Equal("artifact-b", completion.ArtifactId);
+        Assert.Equal("generation-b", completion.IndexGenerationIdentity);
+    }
+
+    [Fact]
+    public void IncrementalReconcile_DrainCapturesBatchAndLeavesLateArrivalForNextTick()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        IncrementalReconcileRequestReceipt first = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, "generation-a");
+        IncrementalReconcileRequestReceipt second = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, "generation-a");
+
+        IncrementalReconcileDrainResult batch =
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1");
+        IncrementalReconcileRequestReceipt late = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, "generation-a");
+
+        Assert.Equal(
+            new[] { first.RequestId, second.RequestId }.Order(StringComparer.Ordinal),
+            batch.Requests.Select(request => request.RequestId).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            late.RequestId,
+            Assert.Single(LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests).RequestId);
+    }
+
+    [Fact]
+    public void IncrementalReconcile_MalformedAndMismatchedCompletionsAreRejectedAndDeleted()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        IncrementalReconcileRequestReceipt receipt = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, null);
+        Directory.CreateDirectory(Path.GetDirectoryName(receipt.CompletionPath)!);
+        File.WriteAllText(receipt.CompletionPath, "not-json");
+
+        Assert.Null(LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion(receipt, "workspace-1"));
+        Assert.False(File.Exists(receipt.CompletionPath));
+
+        IncrementalReconcileRequest request = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+        LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request with { WorkspaceId = "workspace-2" },
+            IncrementalReconcileOutcome.Scanned,
+            2,
+            "artifact",
+            "generation",
+            null);
+
+        Assert.Null(LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion(receipt, "workspace-1"));
+        Assert.False(File.Exists(receipt.CompletionPath));
+    }
+
+    [Fact]
+    public void IncrementalReconcile_MalformedAndMismatchedRequestsAreRejectedAndDeleted()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        IncrementalReconcileRequestReceipt malformed = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, null);
+        File.WriteAllText(malformed.RequestPath, "not-json");
+        LeaderScanRequestQueue.RequestIncrementalReconcile(millerDir, "workspace-2", 1, null);
+
+        IncrementalReconcileDrainResult drained =
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1");
+
+        Assert.Empty(drained.Requests);
+        Assert.Equal(2, drained.InvalidDiscarded);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(millerDir, "requests"), "*.incremental-reconcile.json*"));
+    }
+
+    [Fact]
+    public void IncrementalReconcile_ExpiredRequestAndCompletionAreSweptWithoutFalseSuccess()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, null);
+        AgeSingleRequestBeyondTtl(Path.Combine(millerDir, "requests"), ".incremental-reconcile.json");
+
+        IncrementalReconcileDrainResult drained =
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1");
+        Assert.Empty(drained.Requests);
+        Assert.Equal(1, drained.ExpiredDiscarded);
+
+        IncrementalReconcileRequestReceipt completedReceipt = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, null);
+        IncrementalReconcileRequest request = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+        LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request,
+            IncrementalReconcileOutcome.Failed,
+            null,
+            null,
+            null,
+            "failed");
+        File.SetLastWriteTimeUtc(
+            completedReceipt.CompletionPath,
+            DateTime.UtcNow - LeaderScanRequestQueue.RequestTtl - TimeSpan.FromMinutes(1));
+
+        Assert.Null(LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion(completedReceipt, "workspace-1"));
+        Assert.False(File.Exists(completedReceipt.CompletionPath));
+    }
+
+    [Theory]
+    [InlineData("Queued")]
+    [InlineData("NotLeader")]
+    public void IncrementalReconcile_NonterminalCompletionRequeuesTheSameNonce(
+        string outcomeName)
+    {
+        var outcome = Enum.Parse<IncrementalReconcileOutcome>(outcomeName);
+        string millerDir = Path.Combine(_dir, ".miller");
+        IncrementalReconcileRequestReceipt receipt = LeaderScanRequestQueue.RequestIncrementalReconcile(
+            millerDir, "workspace-1", 1, "generation-a");
+        IncrementalReconcileRequest first = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+
+        LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir, first, outcome, null, null, null, null);
+
+        IncrementalReconcileRequest retried = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+        Assert.Equal(receipt.RequestId, retried.RequestId);
+        Assert.Equal(outcome, Assert.IsType<IncrementalReconcileCompletion>(
+            LeaderScanRequestQueue.TryReadIncrementalReconcileCompletion(receipt, "workspace-1")).Outcome);
+
+        LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir, retried, IncrementalReconcileOutcome.Scanned, 2, "artifact", "generation-b", null);
+        Assert.Empty(LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+    }
+
+    [Fact]
+    public void IncrementalReconcile_RejectsInvalidNonceAndIncompleteSuccessProof()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        LeaderScanRequestQueue.RequestIncrementalReconcile(millerDir, "workspace-1", 1, null);
+        IncrementalReconcileRequest request = Assert.Single(
+            LeaderScanRequestQueue.DrainIncrementalReconcileRequests(millerDir, "workspace-1").Requests);
+
+        Assert.Throws<ArgumentException>(() => LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request with { RequestId = "../outside" },
+            IncrementalReconcileOutcome.Failed,
+            null,
+            null,
+            null,
+            "failed"));
+        Assert.Throws<ArgumentException>(() => LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request,
+            IncrementalReconcileOutcome.Scanned,
+            -1,
+            null,
+            null,
+            null));
+        Assert.Throws<ArgumentException>(() => LeaderScanRequestQueue.WriteIncrementalReconcileCompletion(
+            millerDir,
+            request,
+            IncrementalReconcileOutcome.Scanned,
+            2,
+            null,
+            null,
+            null));
+    }
+
+    [Fact]
     public void DrainFileConvergeRequests_DedupesAcrossRequests_AndDeletesMalformed()
     {
         string millerDir = Path.Combine(_dir, ".miller");

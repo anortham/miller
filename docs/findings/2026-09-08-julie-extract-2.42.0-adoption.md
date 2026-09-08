@@ -72,6 +72,49 @@ The same qualification found that content search could report `more_may_exist=fa
 window saturated and post-filtering removed rows. Miller now propagates the saturation flag and keeps
 `more_may_exist=true` even when post-filtering returns fewer rows than the requested limit.
 
+### Reader-process freshness follow-up
+
+An independent two-process check found a second Miller-side defect after the resident fix. A reader that lost
+the writer lock did not ask the leader to reconcile source; it only waited for an uncorrelated revision advance.
+That could never confirm an unchanged scan and could mistake unrelated work for the requested reconciliation.
+The pre-fix run returned `unconfirmed_lock_busy` after the default background wait, returned `lock_busy` for an
+explicit blocking read, and served the old TypeScript symbol after an `alpha` to `beta` source edit.
+
+Miller now uses the existing leader request directory for a nonce-bearing `incremental_reconcile` request. The
+leader atomically captures a bounded batch, performs one automatic delta scan under the existing backoff and
+admission rules, and publishes a completion only with the post-scan generation/revision witness. The reader
+accepts success only when its independently read served witness exactly matches that completion, including the
+unchanged-revision case. Default background calls retain a timed-out nonce for later pickup; explicit blocking
+calls create a fresh nonce after the invocation begins. Queued and not-leader attempts retain the same request;
+failed, mismatched, corrupt, and expired results remain unconfirmed and cannot stamp an old snapshot fresh.
+
+The independent pre-fix fixture used leader PID 2034799 and reader PID 2036888 on one isolated family at
+revision 6. Its first default read queued, the read two seconds later was
+`unconfirmed_lock_busy/background: finished`, and blocking reads stayed lock-busy. After an
+`alphaProbe` to `betaProbe` edit, the blocking read missed beta and served the stale alpha near match.
+
+The final nonce-corrected fixture paused only its disposable leader, allowed the reader's background request
+to time out as queued, edited alpha to beta, and issued a fresh blocking request. After the leader resumed,
+the blocking read returned `refreshed` with exact beta and no exact alpha. No-edit blocking returned
+`unchanged`. After the disposable leader exited, a beta to gamma edit still returned `refreshed` with
+exact gamma and no exact beta. The reader finished fresh with an empty queue.
+
+Default reads also settled within the five-second background cooldown. The retained result was
+`refreshed/background: finished` at revision 12. A later read queued revision 14, and the next observation
+returned `unchanged/background: finished` at revision 14. A subsequent cooldown-expired read legitimately
+started another cycle; the status was not permanently pending.
+
+Both the leader and reader must restart onto the corrected build. A reader with the new protocol cannot make
+an older live leader service an operation it does not understand, and Miller does not kill or force a handoff
+from user processes. Every qualification server used a private home, registry, workspace, and family. The
+harness stopped all children, copied JSON summaries and raw logs under
+`/home/murphy/.cache/miller-dogfood/adoption-2.42.0/`, then deleted the disposable roots and sidecars.
+
+The alternatives were rejected because a live leader does not prove source reconciliation, a newer DB revision
+does not correlate with the caller's request, a leadership handoff would disrupt user processes, and a forced
+full rebuild changes the requested operation and its backoff/downgrade contract. The protocol is language-neutral
+consumer coordination; julie-extract schemas and per-language extraction remain unchanged.
+
 ## Miller verification
 
 - `dotnet build Miller.slnx -c Release`: zero warnings and errors.
@@ -80,7 +123,8 @@ window saturated and post-filtering removed rows. Miller now propagates the satu
   checks passed 14 of 14.
 - Resident freshness and served-snapshot scope: 37 passed, zero skipped or failed. The retained reader
   factory after dependency-injection scope disposal passed its focused regression.
-- Fast suite: 10,438 passed, nine expected skips, zero failures.
+- Reader-to-leader protocol and caller scope: 694 passed, one expected skip, zero failures.
+- Fast suite: 10,457 passed, nine expected skips, zero failures.
 - Scale suite: 233 passed, 38 expected skips, zero failures.
 - `miller capabilities --json` reports pin 2.42.0 with schema contracts 7/7/4/3/5.
 - The running 2.41.1 Miller family was not reset, rebuilt, or restarted during adoption.

@@ -52,7 +52,8 @@ public sealed class WorkspaceEditContextFactory
             workspaceId => refreshService.Refresh(
                 workspaceId,
                 scanAdmission: ScanAdmissionBudget.Of(TimeSpan.Zero),
-                bypassBackoff: true),
+                bypassBackoff: true,
+                requireNewReconcile: true),
             logger)
     {
         ArgumentNullException.ThrowIfNull(primary);
