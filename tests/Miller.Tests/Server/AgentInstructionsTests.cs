@@ -182,6 +182,25 @@ public sealed class AgentInstructionsTests
         Assert.Contains("degradation", descriptions["workspace"]);
     }
 
+    [Fact]
+    public void ToolDescriptions_DistinguishRankedFromLiteralTextSearch()
+    {
+        IReadOnlyDictionary<string, string> descriptions = DiscoverToolMethods()
+            .ToDictionary(
+                ToolName,
+                static method => method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty,
+                StringComparer.Ordinal);
+
+        Assert.Contains("mode=text is fuzzy ranked symbol search", descriptions["search"]);
+        Assert.Contains("not literal or exhaustive", descriptions["search"]);
+        Assert.Contains("token-normalized ranked matches", descriptions["content"]);
+        Assert.Contains("more_may_exist", descriptions["content"]);
+        Assert.Contains("flags prove incompleteness, not completeness", descriptions["content"]);
+        Assert.DoesNotContain("proves only", descriptions["content"]);
+        Assert.Contains("prefer search mode=source/content", descriptions["content"]);
+        Assert.Contains("filesystem search", descriptions["content"]);
+    }
+
     [Theory]
     [MemberData(nameof(ToolNames))]
     public void Load_RoutingTableNamesEveryTool(string toolName)

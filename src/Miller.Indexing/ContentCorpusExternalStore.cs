@@ -310,17 +310,25 @@ public sealed class ContentCorpusExternalStore
         string query,
         string contentKind = TextContentKind.ExternalFile,
         int limit = 10,
+        string? sourceId = null) =>
+        SearchExtended(contentDbPath, query, contentKind, limit, sourceId).Hits;
+
+    public TextContentSearchResult SearchExtended(
+        string contentDbPath,
+        string query,
+        string contentKind = TextContentKind.ExternalFile,
+        int limit = 10,
         string? sourceId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
         if (limit <= 0 || !File.Exists(Path.GetFullPath(contentDbPath)))
-            return Array.Empty<TextContentSearchHit>();
+            return new TextContentSearchResult(Array.Empty<TextContentSearchHit>(), 0, false);
 
         return FtsTextContentSearchIndex
             .OpenUnversioned(contentDbPath)
-            .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
+            .SearchExtended(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
     }
 
     public IReadOnlyList<ExternalContentSource> List(

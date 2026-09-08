@@ -52,9 +52,10 @@ search(workspace_id="<id>", query="<imported log phrase>", mode="external")
 search(workspace_id="<id>", query="<comment or literal>", regions="comment,string_literal,doc_comment")
 ```
 
-For exact-text audits across registered workspaces, use
+For token-normalized text evidence across registered workspaces, use
 `content(operation="search", workspace_id="all", query="<term>", content_kind="source")` (or `docs`, `config`, `external_file`, `web`)
 and bounded `content(operation="read", ...)` windows (the `miller-text-audit` skill) before escalating to broader context.
+Use filesystem search for strict literal or exhaustive audits.
 
 `context` integration from content hits remains opt-in: use it only when the user asks for surrounding code context after an audit or text-search hit.
 

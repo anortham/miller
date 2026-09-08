@@ -287,7 +287,8 @@ public sealed class SearchTool
         "files. Pass a symbol name, identifier, or natural-language phrase; test code is auto-hidden for phrase " +
         "queries unless exclude_tests=false. Semantic retrieval is on by default; retrieval=lexical performs zero " +
         "vector work for that call, and MILLER_SEMANTIC=off is the permanent process-wide zero-work switch. " +
-        "Modes: mode=text (symbol alias); mode=markers audits TODO/FIXME/HACK/XXX/RAZORBACK in comments; " +
+        "Modes: mode=text is fuzzy ranked symbol search, not literal or exhaustive; mode=markers audits " +
+        "TODO/FIXME/HACK/XXX/RAZORBACK in comments; " +
         "mode=content (alias docs) searches docs/config prose; mode=source searches source-body text; " +
         "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
         "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +
@@ -296,7 +297,7 @@ public sealed class SearchTool
         "default; format=json to chain.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text (symbol-name/phrase alias)|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text (fuzzy ranked symbol alias)|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 6; MCP requests above 10 are clamped.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,

@@ -1,9 +1,11 @@
 using Miller.Core.Graph;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
+using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -19,6 +21,8 @@ public sealed class WorkspaceIndexProvider
     private readonly IndexBootstrapService? _primary;
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, WorkspaceRefreshResult> _refresh;
+    private Func<WorkspaceRegistryRow, bool> _canUseResidentRefresh = static _ => false;
+    private Func<WorkspaceRegistryRow, WorkspaceRefreshResult?> _residentRefresh = static _ => null;
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
     private readonly Func<string, SymbolSearchProjection> _loadSymbolSearch;
     private readonly Func<string, string, ContentSearchProjection> _loadContentSearch;
@@ -1105,7 +1109,7 @@ public sealed class WorkspaceIndexProvider
         {
             long revisionBeforeRefresh = row.LastRevision ?? 0;
             TelemetryContext.Current?.SetWaitReason("workspace_refresh");
-            refreshResult = _refresh(row.WorkspaceId);
+            refreshResult = RefreshRegisteredWorkspace(row);
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingIndex)
@@ -1170,7 +1174,7 @@ public sealed class WorkspaceIndexProvider
                 _backgroundRefreshGate.RecordRunning(workspaceId);
                 try
                 {
-                    WorkspaceRefreshResult result = _refresh(workspaceId);
+                    WorkspaceRefreshResult result = RefreshRegisteredWorkspace(row);
 
                     if (result.Status == WorkspaceRefreshStatus.Failed)
                     {
@@ -1213,6 +1217,101 @@ public sealed class WorkspaceIndexProvider
             if (!scheduled)
                 _backgroundRefreshGate.Release(workspaceId);
         }
+    }
+
+    private WorkspaceRefreshResult RefreshRegisteredWorkspace(WorkspaceRegistryRow row)
+    {
+        WorkspaceContext? current = _currentWorkspace
+            ?? (_primary?.IsBound == true ? _primary.Workspace : null);
+        if (current is not null
+            && _canUseResidentRefresh(row)
+            && string.Equals(row.WorkspaceId, current.WorkspaceId, StringComparison.Ordinal)
+            && WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, current.WorkspaceRoot)
+            && _residentRefresh(row) is { } resident)
+        {
+            return resident;
+        }
+
+        return _refresh(row.WorkspaceId);
+    }
+
+    internal void ConfigureResidentRefresh(
+        IndexerService indexer,
+        FreshnessService freshness)
+    {
+        _canUseResidentRefresh = _ => indexer.IsLeader;
+        _residentRefresh = row => RefreshResidentWorkspace(row, indexer, freshness);
+    }
+
+    internal void ConfigureResidentRefresh(
+        Func<WorkspaceRegistryRow, bool> canUse,
+        Func<WorkspaceRegistryRow, WorkspaceRefreshResult?> refresh)
+    {
+        _canUseResidentRefresh = canUse;
+        _residentRefresh = refresh;
+    }
+
+    private WorkspaceRefreshResult? RefreshResidentWorkspace(
+        WorkspaceRegistryRow row,
+        IndexerService indexer,
+        FreshnessService freshness)
+    {
+        ScanOutcome scan = indexer.TryScanAsLeader(
+            ScanIntent.IncrementalReconcile,
+            bypassBackoff: false);
+        if (scan.Result == ScanOutcome.Kind.NotLeader)
+            return null;
+        if (scan.Result == ScanOutcome.Kind.Downgraded)
+        {
+            throw new InvalidOperationException(
+                "An incremental resident refresh returned a downgraded rebuild outcome.");
+        }
+
+        PollResult poll = freshness.PollNow();
+        WorkspaceReadSnapshot? snapshot = null;
+        if (scan.Result == ScanOutcome.Kind.Scanned)
+        {
+            using WorkspaceReadHandle read = OpenCurrentReadSession();
+            snapshot = read.Snapshot;
+        }
+        long servedRevision = snapshot?.Freshness.StoreLogSequence
+            ?? snapshot?.Freshness.Revision
+            ?? poll.Revision;
+        bool scanObserved = scan.Report?.Revision is not { } scanRevision
+            || scanRevision == servedRevision;
+        WorkspaceRefreshStatus status = scan.Result switch
+        {
+            ScanOutcome.Kind.Scanned when !scanObserved || poll.Revision != servedRevision =>
+                WorkspaceRefreshStatus.Failed,
+            ScanOutcome.Kind.Scanned when poll.Swapped || servedRevision > (row.LastRevision ?? 0) =>
+                WorkspaceRefreshStatus.Refreshed,
+            ScanOutcome.Kind.Scanned => WorkspaceRefreshStatus.Unchanged,
+            ScanOutcome.Kind.Queued => WorkspaceRefreshStatus.Queued,
+            ScanOutcome.Kind.Failed => WorkspaceRefreshStatus.Failed,
+            _ => throw new ArgumentOutOfRangeException(nameof(scan), scan.Result, "Unknown resident scan outcome."),
+        };
+        string? warning = scan.Result == ScanOutcome.Kind.Queued
+            ? scan.HolderDescription
+            : scan.Report is { } report ? ExtractReportLog.DescribeWarning(report) : null;
+        string? error = scan.Result switch
+        {
+            ScanOutcome.Kind.Scanned when !scanObserved || poll.Revision != servedRevision =>
+                "The current workspace refresh scan completed, but the resident freshness poll did not publish its revision.",
+            ScanOutcome.Kind.Failed => "The current workspace refresh scan failed.",
+            _ => null,
+        };
+
+        return new WorkspaceRefreshResult(
+            status,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            row.IndexDbPath,
+            poll.Revision,
+            Scanned: scan.Result == ScanOutcome.Kind.Scanned,
+            WarningText: warning,
+            Error: error,
+            ArtifactId: snapshot?.ArtifactOrStoreId,
+            IndexGenerationIdentity: snapshot?.IndexGenerationIdentity);
     }
 
     /// <summary>

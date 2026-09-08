@@ -223,7 +223,11 @@ public static class MillerServiceRegistration
         services.AddSingleton<BackgroundRefreshGate>();
         services.AddSingleton<WorkspaceReadProjectionCache>();
         services.AddTransient<WorkspaceIndexProvider>(sp =>
-            new WorkspaceIndexProvider(
+        {
+            var indexer = sp.GetRequiredService<IndexerService>();
+            var freshness = sp.GetRequiredService<FreshnessService>();
+            MillerHostPaths paths = sp.GetRequiredService<MillerHostPaths>();
+            var provider = new WorkspaceIndexProvider(
                 holder: null,
                 currentWorkspace: null,
                 registry: sp.GetRequiredService<WorkspaceRegistry>(),
@@ -233,8 +237,11 @@ public static class MillerServiceRegistration
                 factCacheStore: sp.GetRequiredService<RevisionFactCacheStore>(),
                 backgroundRefreshGate: sp.GetRequiredService<BackgroundRefreshGate>(),
                 primary: sp.GetRequiredService<IndexBootstrapService>(),
-                readerClientFactory: () => JulieStoreClient.Locate(sp.GetRequiredService<MillerHostPaths>().ToolsRoot),
-                projectionCache: sp.GetRequiredService<WorkspaceReadProjectionCache>()));
+                readerClientFactory: () => JulieStoreClient.Locate(paths.ToolsRoot),
+                projectionCache: sp.GetRequiredService<WorkspaceReadProjectionCache>());
+            provider.ConfigureResidentRefresh(indexer, freshness);
+            return provider;
+        });
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

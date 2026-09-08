@@ -126,10 +126,14 @@ calls and optional only for the CLI.
   ambiguous, retry with `scope=<file>`. A `mode=path` no-path result is not proof the code is unrelated; follow its
   `Next:` actions.
 - **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.
-- **Find source-body text**: `search mode=source "<literal or phrase>"` searches verified source files.
-- **Audit registered workspaces for exact text**:
+- **Find source-body text**: `search mode=source "<token or phrase>"` searches verified source files with token normalization.
+- **Audit registered workspaces for token-normalized text**:
   `content search query="dangerous term" workspace_id=all content_kind=source` (or
   `content_kind=docs|config|external_file|web`), then `content read` with the hit's `workspace_id`.
+  Inspect freshness, skipped/degraded workspaces, `more_may_exist`, and output truncation. These flags
+  identify incomplete bounded evidence; their absence does not prove completeness. Use filesystem search
+  for strict literal or exhaustive audits, configured for the required case, token-boundary, hidden-file,
+  and ignore rules.
 - **Find known code shapes**: `patterns operation=list`, then `patterns operation=search pattern_id=<id>` with
   filters. If a query has no matches, use the suggested near matches or list output instead of raw AST grepping.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →

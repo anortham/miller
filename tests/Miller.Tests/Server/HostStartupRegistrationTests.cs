@@ -2,9 +2,11 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Reflection;
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
@@ -148,6 +150,39 @@ public sealed class HostStartupRegistrationTests : IDisposable
             type => Assert.Equal(
                 ServiceLifetime.Transient,
                 services.Single(d => d.ServiceType == type).Lifetime));
+    }
+
+    [Fact]
+    public void TransientProvider_DeferredReaderFactorySurvivesResolvingScopeDisposal()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+
+        using var rootProvider = services.BuildServiceProvider();
+        IndexBootstrapService bootstrap = rootProvider.GetRequiredService<IndexBootstrapService>();
+        bootstrap.TestHomeDirectoryOverride = CreateTempRoot();
+
+        WorkspaceIndexProvider workspaceProvider;
+        using (IServiceScope scope = rootProvider.CreateScope())
+            workspaceProvider = scope.ServiceProvider.GetRequiredService<WorkspaceIndexProvider>();
+
+        FieldInfo openReadSessionField = typeof(WorkspaceIndexProvider).GetField(
+            "_openReadSession",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var openReadSession = (Delegate)openReadSessionField.GetValue(workspaceProvider)!;
+        Func<IJulieStoreClient> readerFactory = openReadSession.Target!
+            .GetType()
+            .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Select(field => field.GetValue(openReadSession.Target))
+            .OfType<Func<IJulieStoreClient>>()
+            .Single();
+
+        IJulieStoreClient? client = null;
+        Action retainedBackgroundAction = () => client = readerFactory();
+        retainedBackgroundAction();
+
+        Assert.NotNull(client);
     }
 
     [Fact]

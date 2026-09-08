@@ -1,6 +1,6 @@
 ---
 name: miller-text-audit
-description: Use when auditing registered Miller workspaces for dangerous strings, deprecated APIs, compatibility markers, secrets-like terms, or other exact text across source, docs, logs, external files, and web imports.
+description: Use when auditing registered Miller workspaces for token-normalized text evidence across source, docs, logs, external files, and web imports.
 user-invocable: true
 argument-hint: "<audit terms or term file>"
 allowed-tools: mcp__miller__content, mcp__miller__search, mcp__miller__workspace, mcp__plugin_miller_miller__content, mcp__plugin_miller_miller__search, mcp__plugin_miller_miller__workspace
@@ -8,7 +8,7 @@ allowed-tools: mcp__miller__content, mcp__miller__search, mcp__miller__workspace
 
 # Miller Text Audit
 
-Use this workflow for token-efficient text audits. Prefer content-corpus search over raw grep because it returns ranked snippets, workspace identity, and bounded read coordinates.
+Use this workflow for token-efficient text evidence. Content-corpus search returns ranked, token-normalized matches with workspace identity and bounded read coordinates. It does not provide strict literal or exhaustive filesystem search.
 
 ## Workspace targeting (required)
 
@@ -29,8 +29,8 @@ workspace(operation="list")
 
 CLI equivalent: `miller workspace list`.
 
-2. Search each audit term across registered content DBs. `workspace_id="all"` is the one read-only fan-out
-   exception for text audits:
+2. Search each term across registered content DBs. `workspace_id="all"` is the one read-only fan-out
+   exception for text evidence:
 
 ```text
 content(operation="search", workspace_id="all", query="dangerous phrase", content_kind="source", limit=20)
@@ -64,7 +64,9 @@ Use the `source_id` from each `content search` hit or `content list`. When the h
 ## Rules
 
 - Context remains opt-in; do not feed audit hits into `context` unless the user asks for code context around a finding.
-- Keep exact-term audits exact first. Raise `--limit` or switch kind only after the targeted query misses.
+- Keep targeted audits narrow first. Raise `--limit` or switch kind only after the targeted query misses.
+- Inspect freshness, skipped/degraded workspaces, `more_may_exist`, and output truncation. These flags identify incomplete bounded evidence; their absence does not prove completeness.
+- Use filesystem search for strict source spelling, case-sensitive tokens, token-boundary rules, or exhaustive results. Configure hidden-file and ignore rules to match the requested scope.
 - Use `content export` only for integration feeds, not for interactive audit output.
 - Empty searches and failed reads include compact recovery text and JSON `diagnostic_code`/`next_actions`; follow those before falling back to shell search.
 - If `workspace_id="all"` returns no rows, confirm workspaces are registered and content DBs are built before falling back to shell search.

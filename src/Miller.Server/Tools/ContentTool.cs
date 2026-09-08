@@ -97,11 +97,13 @@ public sealed class ContentTool
 
     [McpServerTool(Name = "content")]
     [Description(
-        "Import, search, read, shape, list, and remove text in Miller's content corpus: logs, CI output, web " +
-        "markdown, reports, large text files, JSONL feeds. Search hits carry a source_id; shape gives a bounded " +
-        "first look, and read returns a bounded line window. Use for any big non-workspace text you'd otherwise " +
-        "cat into context. NOT for: workspace source/docs text (search mode=source or mode=content) or code " +
-        "symbols (search/inspect). Example: content operation=import path=/tmp/ci.log then content " +
+        "Import, search, read, shape, list, and remove corpus text: logs, CI output, web markdown, reports, and " +
+        "workspace source/docs/config. Search returns token-normalized ranked matches and bounded coverage; " +
+        "flags prove incompleteness, not completeness. Inspect more_may_exist, output truncation, freshness, and " +
+        "skipped/degraded workspaces. Use workspace_id=all for cross-workspace evidence; " +
+        "prefer search mode=source/content for one workspace. Hits carry source_id; read returns a bounded line " +
+        "window. NOT for: strict literal or exhaustive audits (use filesystem search) or " +
+        "code symbols (search/inspect). Example: content operation=import path=/tmp/ci.log then content " +
         "operation=search query=\"first failing test\".")]
     public string Content(
         [Description("import|add_markdown|search|read|shape|list|remove. Default list.")] string? operation = "list",
@@ -409,10 +411,11 @@ public sealed class ContentTool
         sourceId = ResolveSearchSourceId(currentLocation, sourceId);
         var failures = new List<WorkspaceSearchFailure>();
         int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
-        IReadOnlyList<TextContentSearchHit> candidates = contentKind is null
+        TextContentSearchResult result = contentKind is null
             ? SearchCurrentAllContent(currentLocation, query, probeLimit, failures, sourceId)
             : SearchCurrentContent(currentLocation, query, contentKind, probeLimit, sourceId);
-        bool moreMayExist = candidates.Count > limit;
+        IReadOnlyList<TextContentSearchHit> candidates = result.Hits;
+        bool moreMayExist = result.WindowSaturated || candidates.Count > limit;
         TextContentSearchHit[] hits = candidates.Take(limit).ToArray();
         var coverage = new ContentSearchCoverage(
             limit,
@@ -453,7 +456,7 @@ public sealed class ContentTool
         return RenderMcpSearch(hits, query, contentKindLabel, coverage, json, outputByteBudget.Value);
     }
 
-    private IReadOnlyList<TextContentSearchHit> SearchCurrentContent(
+    private TextContentSearchResult SearchCurrentContent(
         ContentReadLocation location,
         string query,
         string contentKind,
@@ -461,16 +464,16 @@ public sealed class ContentTool
         string? sourceId = null)
     {
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
+            return _store.SearchExtended(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
 
         if (!File.Exists(location.ContentDbPath))
-            return [];
+            return new TextContentSearchResult(Array.Empty<TextContentSearchHit>(), 0, false);
 
         if (location.Snapshot is { } snapshot)
         {
             return ContentCorpusSidecar
                 .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
-                .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
+                .SearchExtended(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
         }
 
         string indexDbPath = location.IndexDbPath
@@ -483,10 +486,10 @@ public sealed class ContentTool
             expectedRevision = freshness.LatestRevision();
         return ContentCorpusSidecar
             .OpenGenerationChecked(location.ContentDbPath, indexDbPath, expectedRevision)
-            .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
+            .SearchExtended(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
     }
 
-    private IReadOnlyList<TextContentSearchHit> SearchCurrentAllContent(
+    private TextContentSearchResult SearchCurrentAllContent(
         ContentReadLocation location,
         string query,
         int limit,
@@ -494,7 +497,7 @@ public sealed class ContentTool
         string? sourceId = null)
     {
         var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
-        IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
+        TextContentSearchResult result = SearchAllContentKinds(
             location,
             query,
             limit,
@@ -508,7 +511,7 @@ public sealed class ContentTool
                 "current",
                 kindFailures);
 
-        return hits;
+        return result;
     }
 
     private static bool IsExpectedContentSearchFailure(Exception ex) =>
@@ -577,7 +580,7 @@ public sealed class ContentTool
                 searchedWorkspaceCount++;
                 ContentReadLocation location = Location(row);
                 string? resolvedSourceId = ResolveSearchSourceId(location, localSourceId);
-                IReadOnlyList<TextContentSearchHit> local = SearchWorkspaceContent(
+                TextContentSearchResult local = SearchWorkspaceContent(
                     row,
                     location,
                     query,
@@ -585,9 +588,9 @@ public sealed class ContentTool
                     probeLimit,
                     failures,
                     resolvedSourceId);
-                moreMayExist |= local.Count > limit;
-                for (int localRank = 0; localRank < local.Count; localRank++)
-                    hits.Add(new WorkspaceContentSearchHit(row, local[localRank], localRank));
+                moreMayExist |= local.WindowSaturated || local.Hits.Count > limit;
+                for (int localRank = 0; localRank < local.Hits.Count; localRank++)
+                    hits.Add(new WorkspaceContentSearchHit(row, local.Hits[localRank], localRank));
             }
             catch (Exception ex) when (isolateFailures)
             {
@@ -672,7 +675,7 @@ public sealed class ContentTool
             : RenderWorkspaceSearchCompact(page, query, contentKindLabel);
     }
 
-    private IReadOnlyList<TextContentSearchHit> SearchWorkspaceContent(
+    private TextContentSearchResult SearchWorkspaceContent(
         WorkspaceRegistryRow row,
         ContentReadLocation location,
         string query,
@@ -684,7 +687,7 @@ public sealed class ContentTool
         if (contentKind is null)
         {
             var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
-            IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
+            TextContentSearchResult result = SearchAllContentKinds(
                 location,
                 query,
                 limit,
@@ -692,22 +695,22 @@ public sealed class ContentTool
                 sourceId);
             if (kindFailures.Count > 0 && failures is not null)
                 AddWorkspaceSearchFailure(failures, row.WorkspaceId, row.DisplayId, kindFailures);
-            return hits;
+            return result;
         }
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
+            return _store.SearchExtended(location.ContentDbPath, query, contentKind, limit, sourceId: sourceId);
 
         if (location.Snapshot is { } snapshot)
         {
             return ContentCorpusSidecar
                 .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
-                .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
+                .SearchExtended(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
         }
 
         long expectedRevision = ExpectedWorkspaceRevision(row);
         return ContentCorpusSidecar
             .OpenGenerationChecked(location.ContentDbPath, row.IndexDbPath, expectedRevision)
-            .Search(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
+            .SearchExtended(query, contentKind, limit, excludeTests: false, sourceId: sourceId);
     }
 
     private static long ExpectedWorkspaceRevision(WorkspaceRegistryRow row)
@@ -746,7 +749,7 @@ public sealed class ContentTool
         TextContentKind.WorkspaceConfig,
     ];
 
-    private static IReadOnlyList<TextContentSearchHit> SearchAllContentKinds(
+    private static TextContentSearchResult SearchAllContentKinds(
         ContentReadLocation location,
         string query,
         int limit,
@@ -754,7 +757,7 @@ public sealed class ContentTool
         string? sourceId = null)
     {
         if (!File.Exists(location.ContentDbPath))
-            return [];
+            return new TextContentSearchResult(Array.Empty<TextContentSearchHit>(), 0, false);
 
         FtsTextContentSearchIndex? index = null;
         try
@@ -783,16 +786,17 @@ public sealed class ContentTool
         }
 
         var groups = new Dictionary<string, IReadOnlyList<TextContentSearchHit>>(StringComparer.Ordinal);
+        bool windowSaturated = false;
         if (index is not null)
         {
-            SearchKinds(index, AllContentKinds, query, limit, groups, failures, sourceId);
+            windowSaturated |= SearchKinds(index, AllContentKinds, query, limit, groups, failures, sourceId);
         }
         else
         {
             try
             {
                 index = FtsTextContentSearchIndex.OpenUnversioned(location.ContentDbPath);
-                SearchKinds(index, ImportedContentKinds, query, limit, groups, failures, sourceId);
+                windowSaturated |= SearchKinds(index, ImportedContentKinds, query, limit, groups, failures, sourceId);
             }
             catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
             {
@@ -800,14 +804,17 @@ public sealed class ContentTool
             }
         }
 
-        return InterleaveByKind(
-            AllContentKinds
-                .Where(groups.ContainsKey)
-                .Select(kind => groups[kind]),
-            limit);
+        return new TextContentSearchResult(
+            InterleaveByKind(
+                AllContentKinds
+                    .Where(groups.ContainsKey)
+                    .Select(kind => groups[kind]),
+                limit),
+            0,
+            windowSaturated);
     }
 
-    private static void SearchKinds(
+    private static bool SearchKinds(
         FtsTextContentSearchIndex index,
         IEnumerable<string> kinds,
         string query,
@@ -816,17 +823,22 @@ public sealed class ContentTool
         ICollection<(string Kind, string DiagnosticCode, string Message)> failures,
         string? sourceId = null)
     {
+        bool windowSaturated = false;
         foreach (string kind in kinds)
         {
             try
             {
-                groups[kind] = index.Search(query, kind, limit, excludeTests: false, sourceId: sourceId);
+                TextContentSearchResult result =
+                    index.SearchExtended(query, kind, limit, excludeTests: false, sourceId: sourceId);
+                groups[kind] = result.Hits;
+                windowSaturated |= result.WindowSaturated;
             }
             catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
             {
                 failures.Add((kind, ContentDiagnosticCode("search", ex), ex.Message));
             }
         }
+        return windowSaturated;
     }
 
     private static void AddKindFailures(

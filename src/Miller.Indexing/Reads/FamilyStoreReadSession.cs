@@ -51,7 +51,7 @@ public sealed class FamilyStoreReadSession :
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
     // Fresh stores use their creator version as the reader floor; qualify each pin bump.
-    private const string ReaderContractCapability = "2.41.1";
+    private const string ReaderContractCapability = "2.42.0";
     private static readonly Regex GenerationName = new(
         @"^gen-[0-9]{3,}$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

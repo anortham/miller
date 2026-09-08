@@ -911,6 +911,95 @@ public sealed class ContentToolTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("more_may_exist").GetBoolean());
     }
 
+    [Theory]
+    [InlineData(TextContentKind.ExternalFile, null)]
+    [InlineData(null, null)]
+    [InlineData(TextContentKind.ExternalFile, "all")]
+    public void Content_Search_ReportsMoreWhenFtsCandidateWindowIsSaturatedBeforeFiltering(
+        string? contentKind,
+        string? workspaceId)
+    {
+        WriteSaturatedExternalCorpus();
+        if (workspaceId is not null)
+        {
+            using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
+            registry.UpsertSeen(
+                _workspace.WorkspaceId!,
+                _workspace.WorkspaceId!,
+                _workspace.WorkspaceRoot,
+                _workspace.ExtractDbPath);
+            registry.MarkScanned(_workspace.WorkspaceId!, revision: 1);
+        }
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content(
+            "search",
+            query: "needle_exact",
+            content_kind: contentKind,
+            workspace_id: workspaceId,
+            limit: 1,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(0, doc.RootElement.GetProperty("returned_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("more_may_exist").GetBoolean());
+    }
+
+    private void WriteSaturatedExternalCorpus()
+    {
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(contentDbPath)!);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = contentDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        using (var schema = connection.CreateCommand())
+        {
+            schema.Transaction = transaction;
+            schema.CommandText = ContentCorpusSchema.SchemaDdl + """
+                INSERT INTO content_meta
+                    (schema_version, workspace_revision, chunker_version, source_count, chunk_count,
+                     indexed_source_bytes, stored_raw_bytes, updated_at_utc)
+                VALUES ($schema, NULL, $chunker, 1, 5001, 0, 0, '1970-01-01T00:00:00Z');
+                """;
+            schema.Parameters.AddWithValue("$schema", ContentCorpusSchema.SchemaVersion);
+            schema.Parameters.AddWithValue("$chunker", ContentCorpusSchema.ChunkerVersion);
+            schema.ExecuteNonQuery();
+        }
+
+        using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO content_chunks(
+                chunk_id, source_id, content_kind, path, url, display_path, language,
+                line_start, line_end, byte_start, byte_end, raw_text, doc_len, is_test,
+                source_bytes, containing_symbol_id, containing_symbol_name)
+            VALUES(
+                $chunk_id, 'saturation-source', $content_kind, 'saturation.log', NULL, 'saturation.log', 'text',
+                $line, $line, 0, 0, $raw_text, 8, 0, 0, NULL, NULL);
+            INSERT INTO content_fts(chunk_id, body) VALUES ($chunk_id, $body);
+            """;
+        SqliteParameter chunkId = insert.Parameters.Add("$chunk_id", SqliteType.Text);
+        insert.Parameters.AddWithValue("$content_kind", TextContentKind.ExternalFile);
+        SqliteParameter line = insert.Parameters.Add("$line", SqliteType.Integer);
+        SqliteParameter rawText = insert.Parameters.Add("$raw_text", SqliteType.Text);
+        SqliteParameter body = insert.Parameters.Add("$body", SqliteType.Text);
+        for (int i = 0; i < 5001; i++)
+        {
+            bool survivesFiltering = i == 5000;
+            chunkId.Value = $"chunk-{i:D4}";
+            line.Value = i + 1;
+            rawText.Value = survivesFiltering ? "needle_exact" : "needle exact";
+            body.Value = survivesFiltering ? "needle exact" : "needle exact needle exact needle exact";
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
     [Fact]
     public void Content_SearchUnknownKind_ErrorListsCanonicalValuesAndAliases()
     {

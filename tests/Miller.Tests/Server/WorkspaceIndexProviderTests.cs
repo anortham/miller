@@ -189,6 +189,254 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ExplicitMatchingPrimaryBlockingDoesNotReportItsOwnLeaderLockAsBusy()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-blocking");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.LockBusy,
+                workspaceId,
+                root,
+                current.DbPath,
+                Revision: 4,
+                Scanned: false,
+                WarningText: "own lock"),
+            canUseResidentRefresh: _ => true,
+            residentRefresh: row => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: 4,
+                Scanned: true));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.Blocking);
+
+        Assert.Equal("unchanged", context.FreshnessStatus);
+        Assert.True(context.IndexFresh);
+        Assert.Null(context.WarningText);
+        Assert.Single(context.Index.FindByName("CurrentType"));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitMatchingPrimaryQueuedRefreshStaysUnconfirmed()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-queued");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ => throw new InvalidOperationException("cross-workspace refresh was not expected"),
+            canUseResidentRefresh: _ => true,
+            residentRefresh: row => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Queued,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: 4,
+                Scanned: false,
+                WarningText: "scan queued"));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.Blocking);
+
+        Assert.Equal("unconfirmed_queued", context.FreshnessStatus);
+        Assert.Null(context.IndexFresh);
+        Assert.Equal("scan queued", context.WarningText);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitMatchingPrimaryFailedRefreshThrows()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-failed");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ => throw new InvalidOperationException("cross-workspace refresh was not expected"),
+            canUseResidentRefresh: _ => true,
+            residentRefresh: row => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Failed,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: 4,
+                Scanned: false,
+                Error: "resident scan failed"));
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => provider.Resolve(workspaceId, WorkspaceRefreshMode.Blocking));
+
+        Assert.Equal("resident scan failed", error.Message);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitMatchingPrimaryWithoutLeadershipKeepsCrossWorkspaceRefresh()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-reader");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        int crossRefreshes = 0;
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ =>
+            {
+                crossRefreshes++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged,
+                    workspaceId,
+                    root,
+                    current.DbPath,
+                    Revision: 4,
+                    Scanned: true);
+            },
+            canUseResidentRefresh: _ => false,
+            residentRefresh: _ => throw new InvalidOperationException("resident refresh was not expected"));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.Blocking);
+
+        Assert.Equal(1, crossRefreshes);
+        Assert.Equal("unchanged", context.FreshnessStatus);
+        Assert.True(context.IndexFresh);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitMatchingPrimaryBackgroundPublishesFinishedResidentRefresh()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        ReplaceArtifactId(current.DbPath, "confirmed-artifact");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-background");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        int residentRefreshes = 0;
+        var scheduled = new List<Action>();
+        var gate = new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => 1_000);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ => throw new InvalidOperationException("cross-workspace refresh was not expected"),
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate,
+            canUseResidentRefresh: _ => true,
+            residentRefresh: row =>
+            {
+                residentRefreshes++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged,
+                    row.WorkspaceId,
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    Revision: 4,
+                    Scanned: true,
+                    ArtifactId: "confirmed-artifact");
+            });
+
+        using (WorkspaceReadContext pending = provider.Resolve(workspaceId, WorkspaceRefreshMode.Background))
+        {
+            Assert.Equal("refresh_pending", pending.FreshnessStatus);
+            Assert.Null(pending.IndexFresh);
+        }
+        Assert.Single(scheduled);
+        scheduled[0]();
+        BackgroundRefreshOperationSnapshot finished = gate.GetSnapshot(workspaceId);
+        Assert.Equal(BackgroundRefreshActivityState.Finished, finished.State);
+        Assert.NotNull(finished.Result);
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.Background);
+
+        Assert.Equal(1, residentRefreshes);
+        Assert.Equal("unchanged", context.FreshnessStatus);
+        Assert.True(context.IndexFresh);
+        Assert.Null(context.WarningText);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitMatchingPrimaryNoneDoesNoRefreshWork()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 4, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("matching-primary-none");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", root, current.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 4),
+            CurrentWorkspaceAt(root, current.DbPath, workspaceId),
+            registry,
+            refresh: _ => throw new InvalidOperationException("cross-workspace refresh was not expected"),
+            canUseResidentRefresh: _ => throw new InvalidOperationException("leadership must not be checked"),
+            residentRefresh: _ => throw new InvalidOperationException("resident refresh was not expected"));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.None);
+
+        Assert.Equal("unconfirmed", context.FreshnessStatus);
+        Assert.Null(context.IndexFresh);
+        Assert.Single(context.Index.FindByName("CurrentType"));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitSameIdDifferentRootKeepsCrossWorkspaceRefresh()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string currentRoot = NewRoot("same-id-current");
+        string targetRoot = NewRoot("same-id-target");
+        const string workspaceId = "shared-id";
+        registry.UpsertSeen(workspaceId, "target-111111111111", targetRoot, target.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+        int crossRefreshes = 0;
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspaceAt(currentRoot, current.DbPath, workspaceId),
+            registry,
+            refresh: _ =>
+            {
+                crossRefreshes++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged,
+                    workspaceId,
+                    targetRoot,
+                    target.DbPath,
+                    Revision: 4,
+                    Scanned: true);
+            },
+            canUseResidentRefresh: _ => true,
+            residentRefresh: _ => throw new InvalidOperationException("resident refresh was not expected"));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.Blocking);
+
+        Assert.Equal(1, crossRefreshes);
+        Assert.Equal(targetRoot, context.WorkspaceRoot);
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Empty(context.Index.FindByName("CurrentType"));
+    }
+
+    [Fact]
     public void Resolve_CurrentFamilyStoreDoesNotMaterializeTheHolderRepository()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -4183,8 +4431,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Action<Action>? scheduleBackgroundRefresh = null,
         Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
         BackgroundRefreshGate? backgroundRefreshGate = null,
-        WorkspaceReadProjectionCache? projectionCache = null) =>
-        new(
+        WorkspaceReadProjectionCache? projectionCache = null,
+        Func<WorkspaceRegistryRow, bool>? canUseResidentRefresh = null,
+        Func<WorkspaceRegistryRow, WorkspaceRefreshResult?>? residentRefresh = null)
+    {
+        var provider = new WorkspaceIndexProvider(
             holder,
             workspace,
             registry,
@@ -4214,6 +4465,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             hasReadableIndex: hasReadableIndex ?? (row => File.Exists(row.IndexDbPath)),
             backgroundRefreshGate: backgroundRefreshGate,
             projectionCache: projectionCache);
+        provider.ConfigureResidentRefresh(
+            canUseResidentRefresh ?? (_ => false),
+            residentRefresh ?? (_ => null));
+        return provider;
+    }
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

@@ -869,8 +869,10 @@ public sealed class FamilyStoreReadSessionRetentionTests
     [InlineData("2.40.7", true)]
     [InlineData("2.41.0", true)]
     [InlineData("2.41.1", true)]
-    [InlineData("2.41.2", false)]
-    [InlineData("2.42.0", false)]
+    [InlineData("2.41.2", true)]
+    [InlineData("2.42.0", true)]
+    [InlineData("2.42.1", false)]
+    [InlineData("2.43.0", false)]
     public void ReaderCapabilityAcceptsImplementedFloorAndRefusesFutureFloor(string floor, bool accepted)
     {
         using StoreFixture fixture = StoreFixture.Create();
