@@ -1779,30 +1779,31 @@ public sealed class IndexerService : BackgroundService
             return;
         _storeSidecarRetry.MarkInspected(now);
 
-        if (_inspectStoreSidecarsForTest is { } inspect && _convergeStoreSidecarsForTest is { } converge)
+        StoreSidecarRetryTarget? target = _storeSidecarRetry.Target;
+        try
         {
-            StoreSidecarRetryProbe probe = inspect(workspace);
-            if (!probe.NeedsRetry)
+            if (_inspectStoreSidecarsForTest is { } inspect && _convergeStoreSidecarsForTest is { } converge)
             {
-                _storeSidecarRetry.Clear();
+                StoreSidecarRetryProbe probe = inspect(workspace);
+                target = probe.Target;
+                if (!probe.NeedsRetry)
+                {
+                    _storeSidecarRetry.Clear();
+                    return;
+                }
+
+                if (!_storeSidecarRetry.IsDue(probe.Target, now))
+                    return;
+
+                BeforeSidecarConvergeForTest?.Invoke();
+                StoreSidecarConvergenceResult result = converge(workspace, probe.Target);
+                if (result.Content.Failed || result.Search.Failed)
+                    _storeSidecarRetry.RecordFailure(probe.Target, _clock());
+                else
+                    _storeSidecarRetry.Clear();
                 return;
             }
 
-            if (!_storeSidecarRetry.IsDue(probe.Target, now))
-                return;
-
-            BeforeSidecarConvergeForTest?.Invoke();
-            StoreSidecarConvergenceResult result = converge(workspace, probe.Target);
-            if (result.Content.Failed || result.Search.Failed)
-                _storeSidecarRetry.RecordFailure(probe.Target, _clock());
-            else
-                _storeSidecarRetry.Clear();
-            return;
-        }
-
-        StoreSidecarRetryTarget? target = null;
-        try
-        {
             string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
             using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
@@ -1832,7 +1833,7 @@ public sealed class IndexerService : BackgroundService
                 or ArgumentException or NotSupportedException or TimeoutException or IncompatibleExtractException)
         {
             if (target is { } retryTarget)
-                _storeSidecarRetry.RecordFailure(retryTarget, now);
+                _storeSidecarRetry.RecordFailure(retryTarget, _clock());
             _logger.LogDebug(ex, "Idle store sidecar retry failed; the bounded retry schedule remains armed.");
         }
     }

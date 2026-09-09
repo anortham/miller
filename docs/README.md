@@ -5,8 +5,10 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [v1.29.0 release notes](release-notes/v1.29.0.md) - agent workflow improvements, truthful search and freshness reporting, continuous-testing usability, and julie-extract 2.42.0.
-- [v1.29.0 release verification](findings/2026-09-08-v1.29.0-release-verification.md) - live package validation and promotion, eight public assets, scoped corrective qualification, and published package smokes.
+- [v1.29.1 release notes](release-notes/v1.29.1.md) - bounded idle shared-store inspection and retry scheduling while agents and workspaces are inactive.
+- [v1.29.1 release verification](findings/2026-09-09-v1.29.1-release-verification.md) - local qualification and publication evidence for the idle shared-store work fix.
+- [v1.29.0 release notes](release-notes/v1.29.0.md) - historical notes for agent workflow improvements, truthful search and freshness reporting, continuous-testing usability, and julie-extract 2.42.0.
+- [v1.29.0 release verification](findings/2026-09-08-v1.29.0-release-verification.md) - historical live package validation and promotion, eight public assets, scoped corrective qualification, and published package smokes.
 - [v1.28.1 release notes](release-notes/v1.28.1.md) - historical release notes for julie-extract 2.40.6 and its redundant SQLite configuration-write fix.
 - [v1.28.0 release notes](release-notes/v1.28.0.md) - historical release notes for shared-store reliability, durable sidecar cursors, cache accounting, shared Context implementation, and offline agent-evaluation tooling.
 - [julie-extract 2.42.0 adoption](findings/2026-09-08-julie-extract-2.42.0-adoption.md) - public four-platform hashes, unchanged epoch-10 compatibility, reader-floor qualification, and Miller verification.

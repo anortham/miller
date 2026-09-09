@@ -239,6 +239,58 @@ public sealed class IndexerServiceScanTests : IDisposable
     }
 
     [Fact]
+    public void IdleStoreSidecarRetry_WhenDueInspectionThrows_BacksOffTheArmedTarget()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-probe-failure-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+            DateTimeOffset now = new(2026, 9, 9, 12, 0, 0, TimeSpan.Zero);
+            int inspectCalls = 0;
+            var service = NewSeededService(
+                workspace,
+                SymbolSearchSidecar.Disabled,
+                clock: () => now,
+                storeSidecarRetryEnabledForTest: () => true,
+                storeSidecarRetryLeaderForTest: () => true,
+                inspectStoreSidecarsForTest: _ =>
+                {
+                    inspectCalls++;
+                    if (inspectCalls == 2)
+                    {
+                        now = now.AddSeconds(1);
+                        throw new IOException("store reader probe failed");
+                    }
+                    return new StoreSidecarRetryProbe(target, NeedsRetry: inspectCalls == 1);
+                },
+                convergeStoreSidecarsForTest: (_, _) => throw new InvalidOperationException("probe failure must prevent convergence"));
+            service.PublishOpsForTest(new RecordingScanOps());
+            string millerDir = Path.Combine(workspace.CanonicalRoot!, ".miller");
+
+            service.RunDrainTickForTest(millerDir);
+            now = now.AddSeconds(5);
+            service.RunDrainTickForTest(millerDir);
+            now = now.AddMilliseconds(250);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(2, inspectCalls);
+
+            now = now.AddSeconds(14.5);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(2, inspectCalls);
+
+            now = now.AddMilliseconds(250);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(3, inspectCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DebounceDrain_WholeRepoDeltaScan_StampsTheVectorTargetWithoutAFullRebuild()
     {
         using JulieDbFixture fixture = JulieDbFixture.Create(
