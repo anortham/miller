@@ -106,6 +106,75 @@ public sealed class IndexerServiceScanTests : IDisposable
     }
 
     [Fact]
+    public void StoreSidecarRetryState_IdleInspectionWaitsForTheIntervalOrADueRetry()
+    {
+        var state = new StoreSidecarRetryState();
+        var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+        DateTimeOffset start = new(2026, 9, 9, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.True(state.ShouldInspect(start));
+        state.MarkInspected(start);
+        Assert.False(state.ShouldInspect(start.AddSeconds(29)));
+        Assert.True(state.ShouldInspect(start.AddSeconds(30)));
+
+        state.MarkInspected(start);
+        state.RequestInspect();
+        Assert.True(state.ShouldInspect(start));
+
+        state.MarkInspected(start);
+        Assert.False(state.IsDue(target, start));
+        Assert.False(state.ShouldInspect(start.AddSeconds(4)));
+        Assert.True(state.ShouldInspect(start.AddSeconds(5)));
+
+        state.Clear();
+        Assert.False(state.ShouldInspect(start.AddSeconds(5)));
+    }
+
+    [Fact]
+    public void IdleStoreSidecarRetry_HealthyStoreIsInspectedOncePerIntervalNotPerTick()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-idle-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+            DateTimeOffset now = new(2026, 9, 9, 12, 0, 0, TimeSpan.Zero);
+            int inspectCalls = 0;
+            var service = NewSeededService(
+                workspace,
+                SymbolSearchSidecar.Disabled,
+                clock: () => now,
+                storeSidecarRetryEnabledForTest: () => true,
+                storeSidecarRetryLeaderForTest: () => true,
+                inspectStoreSidecarsForTest: _ =>
+                {
+                    inspectCalls++;
+                    return new StoreSidecarRetryProbe(target, NeedsRetry: false);
+                },
+                convergeStoreSidecarsForTest: (_, _) => throw new InvalidOperationException("healthy stores never converge"));
+            service.PublishOpsForTest(new RecordingScanOps());
+            string millerDir = Path.Combine(workspace.CanonicalRoot!, ".miller");
+
+            for (int tick = 0; tick < 20; tick++)
+            {
+                service.RunDrainTickForTest(millerDir);
+                now = now.AddMilliseconds(250);
+            }
+
+            Assert.Equal(1, inspectCalls);
+
+            now = now.AddSeconds(30);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(2, inspectCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void IdleStoreSidecarRetry_ArmsThenConvergesOnceAndClears()
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-retry-" + Guid.NewGuid().ToString("N"));
@@ -160,7 +229,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             service.RunDrainTickForTest(millerDir);
             Assert.Equal(1, publishedConvergences);
             Assert.Equal(1, convergenceCalls);
-            Assert.Equal(4, inspectCalls);
+            Assert.Equal(2, inspectCalls);
         }
         finally
         {

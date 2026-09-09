@@ -54,8 +54,15 @@ internal sealed class StoreSidecarRetryState
         TimeSpan.FromSeconds(30),
     ];
 
+    /// <summary>
+    /// Inspecting the sidecars opens a family-store read session, which admits a reader through a
+    /// <c>julie-extract</c> child process. A healthy store is re-inspected at this cadence, not per tick.
+    /// </summary>
+    internal static readonly TimeSpan IdleInspectInterval = TimeSpan.FromSeconds(30);
+
     private StoreSidecarRetryTarget? _target;
     private DateTimeOffset _nextAttemptUtc;
+    private DateTimeOffset _nextInspectUtc = DateTimeOffset.MinValue;
     private int _failedAttempts;
 
     internal StoreSidecarRetryTarget? Target => _target;
@@ -90,6 +97,13 @@ internal sealed class StoreSidecarRetryState
         _failedAttempts = Math.Min(_failedAttempts + 1, RetryIntervals.Length);
         _nextAttemptUtc = now + RetryIntervals[Math.Min(_failedAttempts, RetryIntervals.Length - 1)];
     }
+
+    internal bool ShouldInspect(DateTimeOffset now) =>
+        now >= _nextInspectUtc || (_target is not null && now >= _nextAttemptUtc);
+
+    internal void MarkInspected(DateTimeOffset now) => _nextInspectUtc = now + IdleInspectInterval;
+
+    internal void RequestInspect() => _nextInspectUtc = DateTimeOffset.MinValue;
 
     internal void Clear() =>
         (_target, _nextAttemptUtc, _failedAttempts) = (null, default, 0);
@@ -849,6 +863,7 @@ public sealed class IndexerService : BackgroundService
                 TryConvergeSidecarToLatest(
                     workspace.CanonicalExtractDbPath,
                     fullRebuild: SidecarNeedsFullRebuild(wholeRepoScanReport));
+                _storeSidecarRetry.RequestInspect();
                 _walCheckpointOwed = true;
             }
             else
@@ -1759,6 +1774,11 @@ public sealed class IndexerService : BackgroundService
         if (!_storeSidecarRetryLeader())
             return;
 
+        DateTimeOffset now = _clock();
+        if (!_storeSidecarRetry.ShouldInspect(now))
+            return;
+        _storeSidecarRetry.MarkInspected(now);
+
         if (_inspectStoreSidecarsForTest is { } inspect && _convergeStoreSidecarsForTest is { } converge)
         {
             StoreSidecarRetryProbe probe = inspect(workspace);
@@ -1768,8 +1788,7 @@ public sealed class IndexerService : BackgroundService
                 return;
             }
 
-            DateTimeOffset probeTime = _clock();
-            if (!_storeSidecarRetry.IsDue(probe.Target, probeTime))
+            if (!_storeSidecarRetry.IsDue(probe.Target, now))
                 return;
 
             BeforeSidecarConvergeForTest?.Invoke();
@@ -1782,7 +1801,6 @@ public sealed class IndexerService : BackgroundService
         }
 
         StoreSidecarRetryTarget? target = null;
-        DateTimeOffset now = _clock();
         try
         {
             string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
