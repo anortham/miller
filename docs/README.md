@@ -6,7 +6,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 ## Current docs
 
 - [v1.29.1 release notes](release-notes/v1.29.1.md) - bounded idle shared-store inspection and retry scheduling while agents and workspaces are inactive.
-- [v1.29.1 release verification](findings/2026-09-09-v1.29.1-release-verification.md) - local qualification and publication evidence for the idle shared-store work fix.
+- [v1.29.1 release verification](findings/2026-09-09-v1.29.1-release-verification.md) - Linux and Windows qualification, validated package promotion, eight public assets, and native package smokes for the idle shared-store work fix.
 - [v1.29.0 release notes](release-notes/v1.29.0.md) - historical notes for agent workflow improvements, truthful search and freshness reporting, continuous-testing usability, and julie-extract 2.42.0.
 - [v1.29.0 release verification](findings/2026-09-08-v1.29.0-release-verification.md) - historical live package validation and promotion, eight public assets, scoped corrective qualification, and published package smokes.
 - [v1.28.1 release notes](release-notes/v1.28.1.md) - historical release notes for julie-extract 2.40.6 and its redundant SQLite configuration-write fix.
