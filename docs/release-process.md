@@ -2,6 +2,36 @@
 
 Use a two-step release path so publishing does not rebuild the full platform matrix.
 
+## Qualification order and corrective scope
+
+Run the local package preflight before the expensive full-suite gates:
+
+```bash
+scripts/release-preflight.sh
+```
+
+```powershell
+.\scripts\release-preflight.ps1
+```
+
+The preflight restores both pinned toolsets, publishes the server for the local release RID with the workflow's
+NativeAOT and reflection settings, publishes the self-contained single-file dashboard, verifies the packaged
+payload, runs the prepared-model semantic smoke, and exercises the native MCP and CT-daemon lifecycle. It writes
+only beneath the user cache by default; `--output-dir` must be outside the source tree. Prepare Miller's active
+semantic model before running it. `--skip-restore` and `--skip-semantic-smoke` exist for explicit offline
+diagnostics; a release preflight uses neither.
+
+Establish one full qualification baseline per release candidate: Release build, Linux fast suite, relevant
+Scale suite, plugin and launcher smokes, and the required Windows fast suite below. Do not dispatch package
+validation while an artifact-affecting local gate or corrective source change is pending.
+
+When a narrow defect is found after that baseline, fix it and run the affected focused tests on each applicable
+host plus the actual native publish/package smoke when deployment behavior changed. Record the baseline commit,
+the corrective diff, focused results, and this scope override in the release verification finding. Keep the
+original full-suite result as the baseline; do not claim that a later commit passed a full suite that was not
+rerun. Repeat a full gate only when changes invalidate the baseline or the affected scope cannot be bounded. Do
+not add open-ended review cycles or automatic full-suite reruns beyond these defined gates.
+
 ## 0. Windows Verification (required before every release)
 
 CI runs no per-push Windows test job (hosted runners were slow and flaky). Windows proof comes from
@@ -13,10 +43,12 @@ win-test sync miller   # refuses a dirty host tree; syncs HEAD
 win-test run miller -- powershell -Command "dotnet test --filter 'Category!=Scale'"
 ```
 
-The suite must report 0 failures on the release commit (or the source-final commit when later
-commits are docs-only). Record the result in the release verification finding. The win-test skill
-(`~/.claude/skills/win-test`) documents the guest; `scripts/test.ps1` mirrors the wrapper for runs
-inside the guest.
+Run this full Windows gate once for the release's qualification baseline and require zero failures. If a later
+narrow correction uses the bounded scope rule above, preserve this result as baseline evidence, run its affected
+Windows tests, and do not relabel the baseline as a full pass on the corrected commit. Repeat the full gate only
+when the correction invalidates the baseline or its affected scope cannot be bounded. Record the commit and result
+in the release verification finding. The win-test skill (`~/.claude/skills/win-test`) documents the guest;
+`scripts/test.ps1` mirrors the wrapper for runs inside the guest.
 
 ## 1. Validate Packages
 
