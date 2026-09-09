@@ -1,11 +1,13 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Testing;
 using Miller.Testing;
+using Miller.Tests.Support;
 using Miller.Tests.Testing.Selection;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
 
+[Collection(ContinuousTestDaemonAdoptionCollection.Name)]
 public sealed class ContinuousTestBackgroundSelectionTests : IDisposable
 {
     private readonly ITestOutputHelper _output;
