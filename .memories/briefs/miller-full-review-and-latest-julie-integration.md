@@ -1,24 +1,20 @@
 ---
 id: miller-full-review-and-latest-julie-integration
 title: Miller full review and latest Julie integration
-status: active
+status: completed
 created: 2026-10-02T14:02:53.072Z
-updated: 2026-10-02T14:02:53.072Z
+updated: 2026-10-02T15:17:28.389Z
 tags: []
 ---
 
-## Goal
+## Outcome
 
-Keep Miller supported for users who prefer it to code-kb: review the project, fix confirmed defects, and verify working workflows. User additionally requires latest published julie-extractors.
+Completed the full project review and fixed every confirmed actionable finding. Latest published Julie v3.7.2 is pinned and restored; all 42 extractor languages were verified on the real upstream fixture corpus. Julie 3 removed store/export commands, so Miller reuses its standalone artifact path with forced promotion, exact family identity validation, preservation of imports, and pointer retirement last. Older MCP servers and CT daemons must be stopped before switching builds; no mixed-version migration guarantee.
 
-## Constraints
+## Verification
 
-No new MCP tools, pushes, releases, destructive store changes, or changes to unrelated worktrees. Work stays in clean-start main checkout /home/murphy/source/miller at 3ed3920b. Preserve external/web imports and existing store data during migration; failed rebuild must retain the workspace pointer.
+Release build: zero warnings/errors. Linux fast: 10,520 passed, 9 skipped; Scale: 208 passed, 64 skipped. Plugin: 104 passed. Python: 436 tests, 3 skips. Windows fast: 10,471 passed, 58 skipped; plugin: 97 passed, 7 skipped. Zero failures. Native Windows PowerShell restored both runtimes from clean a05655c2 with preloaded archive module and preserved caller settings. PowerShell 7 verifier skipped because that toolchain is unavailable. Live legacy migration, CLI/MCP, dashboard HTTP smoke, and dependency vulnerability audit passed.
 
-## Direction
+## Evidence and boundaries
 
-GitHub latest Julie is v3.7.2, while Miller pins 2.42.0. Astra confirmed Julie v3 removed the store and export commands. A pin-only bump is broken. Reuse Miller's existing standalone SQLite path and RequiresSourceRebuild rollback handling; make standalone the supported default, refuse unsupported store opt-in clearly, and remove old pointer only after successful forced promotion and preservation of imports. Historical store default guidance must be updated. Do not revive the removed upstream store implementation.
-
-## Success criteria
-
-Current pins/restored binaries, fresh and existing workspace migrations, failed-migration preservation, focused regression checks, zero-warning Release build, fast/Scale/plugin checks, and real CLI/MCP smoke. Windows checks where available. Review concrete findings with Astra; preserve user work.
+See docs/findings/2026-10-02-project-review.md, its committed language matrix and smoke JSON, and docs/julie-3-migration.md. Task used /home/murphy/source/miller on main; unrelated worktrees were preserved. Changes committed locally; no push, release, deploy, new MCP tools, or destructive store cleanup. Windows test guest shut down after verification.

@@ -34,8 +34,10 @@ release, push, or unrelated worktree changes were made.
 | Site checks | 1 passed |
 | NuGet vulnerability audit | No vulnerable packages reported across the solution, including transitive dependencies |
 | Scale suite | 208 passed, 64 skipped, 0 failed |
-| Windows verification | Clean commit `e725b252` synced; native verification in progress |
+| Windows fast suite | 10,471 passed, 58 platform/toolchain skips, 0 failed; clean commit `e725b252`, .NET SDK 10.0.400 |
 | Windows plugin checks | 97 passed, 7 platform skips, 0 failed |
+| Windows runtime restoration | Both scripts passed at clean commit `a05655c2` under native Windows PowerShell, with the archive module preloaded; caller progress preference preserved |
+| PowerShell 7 archive verifier | Skipped: PowerShell 7 is unavailable on the guest; native Windows PowerShell restoration was verified directly |
 
 The pinned runtime extracted the upstream `fixtures/extraction` corpus without
 modifying its source: 975 scanned files, 974 indexed, one unsupported
@@ -57,6 +59,14 @@ workspace open, and explicitly scoped search also passed.
 Dashboard HTTP checks passed for list/detail pages and JSON projections while
 a store pointer blocks standalone reads. They show `source_rebuild_required`
 and the Refresh index action, without serving stale legacy details.
+
+The Windows fast run used `dotnet test Miller.slnx -c Release --filter
+"Category!=Scale"`. Subsequent changes only corrected PowerShell archive
+progress suppression; both updated restore scripts were exercised directly
+without a caller workaround. Restored versions are Julie 3.7.2, semantic sidecar
+0.1.0, and sqlite-vec 0.1.9, with archive hashes verified. Linux Scale skips
+include retired family-store contracts and unavailable provider toolchains or
+platforms. The test guest was shut down after verification.
 
 ## Upgrade boundary
 
