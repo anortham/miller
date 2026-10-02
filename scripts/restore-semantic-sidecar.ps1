@@ -275,7 +275,15 @@ try {
     # --- extract (sidecar .zip has the binary at the ARCHIVE ROOT; sqlite-vec ships a .tar.gz) ---
     $sidecarExtract = Join-Path $staging 'sidecar'
     New-Item -ItemType Directory -Force -Path $sidecarExtract | Out-Null
-    Expand-Archive -Path $sidecarArchive -DestinationPath $sidecarExtract -Force
+    # Expand-Archive reads the progress preference from global scope in the Windows host.
+    $savedGlobalProgressPreference = $global:ProgressPreference
+    try {
+        $global:ProgressPreference = 'SilentlyContinue'
+        Expand-Archive -Path $sidecarArchive -DestinationPath $sidecarExtract -Force
+    }
+    finally {
+        $global:ProgressPreference = $savedGlobalProgressPreference
+    }
     Assert-PackageManifest -PackageRoot $sidecarExtract -ExpectedTriple $triple
 
     $vecExtract = Join-Path $staging 'vec'

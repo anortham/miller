@@ -133,7 +133,15 @@ Write-Host "  sha256 OK"
 $staging = Join-Path $ToolsDir ('julie-extract-stage-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 try {
-    Expand-Archive -Path $archive -DestinationPath $staging -Force
+    # Expand-Archive reads the progress preference from global scope in the Windows host.
+    $savedGlobalProgressPreference = $global:ProgressPreference
+    try {
+        $global:ProgressPreference = 'SilentlyContinue'
+        Expand-Archive -Path $archive -DestinationPath $staging -Force
+    }
+    finally {
+        $global:ProgressPreference = $savedGlobalProgressPreference
+    }
     $found = Get-ChildItem -Path $staging -Recurse -Filter 'julie-extract.exe' | Select-Object -First 1
     if ($null -eq $found) {
         Write-Error "julie-extract.exe not found inside $asset"

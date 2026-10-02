@@ -20,6 +20,7 @@ release, push, or unrelated worktree changes were made.
 | Watcher filtering missed basename-selected sources, including go.mod and go.sum. | Match the pinned extractor's source names and hard exclusions. |
 | Dashboard and CT could present stale legacy facts or vague errors while store migration was required. | Refuse stale reads and expose actionable rebuild guidance through existing results. |
 | Python proxy tests raced subprocess startup and leaked captured streams. | Synchronize startup and close streams while preserving the timeout and EOF assertions. |
+| Windows PowerShell archive restoration could fail without an interactive console despite local progress suppression. | Suppress the archive module's global progress preference during extraction and restore the caller's prior value afterward. |
 | Setup examples referenced old archives and omitted the semantic restore step. | Align published download examples and document both runtime restores. |
 
 ## Validation
@@ -32,8 +33,9 @@ release, push, or unrelated worktree changes were made.
 | Python script checks | 436 tests, 3 skipped, 0 failed; declared requirements installed in an isolated venv |
 | Site checks | 1 passed |
 | NuGet vulnerability audit | No vulnerable packages reported across the solution, including transitive dependencies |
-| Scale suite | In progress |
-| Windows verification | Pending clean-checkout sync |
+| Scale suite | 208 passed, 64 skipped, 0 failed |
+| Windows verification | Clean commit `e725b252` synced; native verification in progress |
+| Windows plugin checks | 97 passed, 7 platform skips, 0 failed |
 
 The pinned runtime extracted the upstream `fixtures/extraction` corpus without
 modifying its source: 975 scanned files, 974 indexed, one unsupported
