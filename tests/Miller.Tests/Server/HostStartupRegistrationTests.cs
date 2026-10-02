@@ -155,13 +155,20 @@ public sealed class HostStartupRegistrationTests : IDisposable
     [Fact]
     public void TransientProvider_DeferredReaderFactorySurvivesResolvingScopeDisposal()
     {
+        string toolsBase = CreateTempRoot();
+        string tempHome = CreateTempRoot();
+        Directory.CreateDirectory(Path.Combine(toolsBase, ".tools"));
+        File.WriteAllText(
+            Path.Combine(toolsBase, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"),
+            "");
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+        services.AddSingleton(MillerHostPaths.Create(toolsBase, tempHome));
 
         using var rootProvider = services.BuildServiceProvider();
         IndexBootstrapService bootstrap = rootProvider.GetRequiredService<IndexBootstrapService>();
-        bootstrap.TestHomeDirectoryOverride = CreateTempRoot();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
 
         WorkspaceIndexProvider workspaceProvider;
         using (IServiceScope scope = rootProvider.CreateScope())
