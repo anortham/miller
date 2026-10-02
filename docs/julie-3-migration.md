@@ -1,7 +1,7 @@
 # Julie 3.x migration
 
-Source builds now pin julie-extract 3.7.2. The published Miller v1.29.1 archives
-still bundle 2.42.0; these changes require building Miller from this checkout.
+Miller v1.30.0 release archives and source builds pin julie-extract 3.7.2.
+Miller v1.29.1 and earlier archives bundle the older extractor and storage backend.
 
 Julie 3.0 removed the `store` and `export` commands. Its standalone SQLite
 artifact remains compatible with Miller's readers. Miller uses a separate
@@ -15,7 +15,8 @@ storage backend. Existing MCP tools and CLI workflows remain available.
    workspace pointer during migration.
 2. Remove an explicit `MILLER_INDEX_STORE=on` setting. The pinned Julie runtime
    does not support store mode. `MILLER_INDEX_STORE=off` remains usable.
-3. Restore and build:
+3. Install the v1.30.0 release archive or update the agent plugin. For a source
+   checkout, restore and build:
 
    ```bash
    bash scripts/restore-julie-extract.sh

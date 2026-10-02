@@ -29,7 +29,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.29.1](https://github.com/anortham/miller/releases/tag/v1.29.1)** ·
+> **Current release: [v1.30.0](https://github.com/anortham/miller/releases/tag/v1.30.0)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
@@ -69,10 +69,10 @@ continuous testing (`tests enable`) then start it (`tests start`); status never 
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
-- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-aarch64-apple-darwin.tar.gz),
-  [macOS x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-apple-darwin.tar.gz),
-  [Linux x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-unknown-linux-gnu.tar.gz),
-  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
+- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.30.0/miller-1.30.0-aarch64-apple-darwin.tar.gz),
+  [macOS x64](https://github.com/anortham/miller/releases/download/v1.30.0/miller-1.30.0-x86_64-apple-darwin.tar.gz),
+  [Linux x64](https://github.com/anortham/miller/releases/download/v1.30.0/miller-1.30.0-x86_64-unknown-linux-gnu.tar.gz),
+  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.30.0/miller-1.30.0-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
   sidecar, extract it, and point your MCP client at the binary. No .NET SDK or Node.js required.
 - **Any other MCP harness:** same binary, plus a routing block from `miller rules --harness <name>`.
 - **Source checkout (development):** needs the .NET 10 SDK, then
@@ -85,7 +85,7 @@ The minimal MCP config for clients you configure by hand (such as Antigravity in
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.29.1-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.30.0-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
@@ -183,8 +183,8 @@ or registered root path. The CLI also accepts `current` and `primary` and adds `
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. Source builds pin `julie-extract` 3.7.2,
-which supports **42 languages** (published Miller v1.29.1 bundles 2.42.0 with 40):
+Miller indexes what the pinned extractor parses. Miller v1.30.0 and source builds pin
+`julie-extract` 3.7.2, which supports **42 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
   `.hh`, `.hxx`, `.h++`), Go (`.go`), Zig (`.zig`), Swift (`.swift`), Java (`.java`),
@@ -350,10 +350,10 @@ MCP client (Claude Code / Cursor / Codex / Antigravity)
 
 Design choices that follow from this:
 
-- Source builds use julie-extract 3.7.2 and a standalone `.miller/symbols.db` per checkout. Julie 3.x
+- Miller v1.30.0 and source builds use julie-extract 3.7.2 and a standalone `.miller/symbols.db` per checkout. Julie 3.x
   removed the family-store commands. Older store-backed workspaces rebuild from source before
   switching, preserving imported content and the original shared store. See the
-  [Julie 3.x migration guide](docs/julie-3-migration.md). Published v1.29.1 still uses Julie 2.42.0.
+  [Julie 3.x migration guide](docs/julie-3-migration.md).
 - Lexical ranking stays deterministic in C#. The default-on semantic arm lives in a separate
   `vectors.db` and is fused after ranking, so disabling it (`MILLER_SEMANTIC=off`) leaves lexical
   output byte-identical.
