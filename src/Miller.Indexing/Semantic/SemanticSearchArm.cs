@@ -452,8 +452,7 @@ public sealed class SemanticSearchArm
             using WorkspaceReadHandle live = WorkspaceReadSessionFactory.Open(
                 dbPath,
                 _workspaceRoot,
-                workspaceId: null,
-                storeEnabled: true);
+                workspaceId: null);
             return (live.Snapshot.VectorArtifactId, live.Snapshot.VectorRevision);
         }
 

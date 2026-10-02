@@ -5,6 +5,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [Julie 3.x migration](julie-3-migration.md) - current source-build storage transition, import preservation, and restart requirements; published v1.29.1 still bundles Julie 2.42.0.
+- [2026-10-02 project review](findings/2026-10-02-project-review.md) - current dependency upgrade, lifecycle fixes, and integration verification.
+
 - [v1.29.1 release notes](release-notes/v1.29.1.md) - bounded idle shared-store inspection and retry scheduling while agents and workspaces are inactive.
 - [v1.29.1 release verification](findings/2026-09-09-v1.29.1-release-verification.md) - Linux and Windows qualification, validated package promotion, eight public assets, and native package smokes for the idle shared-store work fix.
 - [v1.29.0 release notes](release-notes/v1.29.0.md) - historical notes for agent workflow improvements, truthful search and freshness reporting, continuous-testing usability, and julie-extract 2.42.0.

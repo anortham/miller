@@ -19,7 +19,7 @@ public sealed class StoreSidecarCursorScaleTests
     [Fact]
     public void Published_cursor_contract_preserves_real_delta_and_exact_release()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         using var fixture = PublishedStore.Create(binary, [("source.cs", "public sealed class First { }\n")]);
         var oldSequences = new Dictionary<StoreSidecarKind, long>();
         var oldStamps = new Dictionary<StoreSidecarKind, StoreSidecarStamp>();
@@ -193,7 +193,7 @@ public sealed class StoreSidecarCursorScaleTests
     [Fact]
     public void Published_language_inventory_serves_context_content_and_search()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         (string Language, string FileName, string Source)[] samples = LanguageSamples();
         using var catalog = JsonDocument.Parse(ScaleTestSupport.RunJulie(binary, "languages", "--json"));
         string[] supported = catalog.RootElement.GetProperty("languages").GetProperty("languages")

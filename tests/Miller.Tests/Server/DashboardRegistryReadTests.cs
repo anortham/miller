@@ -141,7 +141,87 @@ public sealed class DashboardRegistryReadTests : IDisposable
 
         Assert.Equal("unreadable", facts.Status);
         Assert.Equal(0, facts.SymbolCount);
-        Assert.Contains("Store mode is disabled", facts.Message, StringComparison.Ordinal);
+        Assert.Equal("source_rebuild_required", facts.Store?.Failure);
+        Assert.Null(facts.ExtractorVersion);
+        Assert.Contains("Refresh index", facts.Message!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StoreOffSnapshotRefusesLegacyDetailPanelsWithoutOpeningAStoreReader()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.CreateDefault();
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fixture.WorkspaceRoot);
+        StoreWorkspacePointer.Write(
+            fixture.WorkspaceRoot,
+            new StoreFamilyBinding(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                Path.Combine(fixture.WorkspaceRoot, "missing-store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-pointer",
+                "pointer-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.UtcNow);
+        }
+
+        int readerClientFactoryCalls = 0;
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
+            _registryDb,
+            _telemetryDb,
+            "ws-pointer",
+            preferredWorkspaceRoot: null,
+            readerClientFactory: () =>
+            {
+                readerClientFactoryCalls++;
+                throw new InvalidOperationException("store reader must not be opened");
+            },
+            storeEnabledOverride: false);
+
+        Assert.Equal(0, readerClientFactoryCalls);
+        Assert.Equal("source_rebuild_required", snapshot.SelectedWorkspaceFacts?.Store?.Failure);
+        Assert.Contains("Refresh index", snapshot.SelectedWorkspaceFacts?.Message ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal("unavailable", snapshot.PatternInventory!.State);
+        Assert.Equal("unavailable", snapshot.LocalMetrics!.State);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCacheRefusesCachedLegacyFactsAfterAStorePointerAppears()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.CreateDefault();
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fixture.WorkspaceRoot);
+        var workspace = new DashboardWorkspaceRow(
+            "ws-pointer-cache",
+            "pointer-cache-abcd1234",
+            fixture.WorkspaceRoot,
+            fixture.DbPath,
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts legacyFacts = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+        StoreWorkspacePointer.Write(
+            fixture.WorkspaceRoot,
+            new StoreFamilyBinding(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                Path.Combine(fixture.WorkspaceRoot, "missing-store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+
+        DashboardWorkspaceFacts refusedFacts = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+
+        Assert.Null(legacyFacts.Store);
+        Assert.NotSame(legacyFacts, refusedFacts);
+        Assert.Equal("source_rebuild_required", refusedFacts.Store?.Failure);
+        DashboardIndexFactsCache.Clear();
     }
 
     public void Dispose()
@@ -908,13 +988,16 @@ public sealed class DashboardRegistryReadTests : IDisposable
     public void DashboardIndexFactsCache_NeverServesALegacyEntryToAStoreRead()
     {
         using StoreFixture fixture = StoreFixture.Create();
-        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-mode-isolation", "mode-isolation-abcd1234");
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.IndexDbPath)!);
+        File.WriteAllText(workspace.IndexDbPath, "not a sqlite database");
 
         DashboardIndexFactsCache.Clear();
         DashboardWorkspaceFacts legacy = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         DashboardWorkspaceFacts store = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
+        StoreWorkspacePointer.Delete(fixture.Binding.WorkspaceRoot);
         DashboardWorkspaceFacts legacyAgain = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
 
         Assert.NotSame(legacy, store);

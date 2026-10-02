@@ -58,6 +58,15 @@ public sealed class PathCanonicalizerTests
     }
 
     [Fact]
+    public void CanonicalizeRoot_ExistingDirectoryBelowFilesystemRoot_PreservesFilesystemRoot()
+    {
+        string canonical = PathCanonicalizer.CanonicalizeRoot(Path.GetTempPath());
+
+        Assert.True(Directory.Exists(canonical));
+        Assert.Equal(Path.GetPathRoot(Path.GetTempPath()), Path.GetPathRoot(canonical));
+    }
+
+    [Fact]
     public void CanonicalizeRoot_WindowsVerbatimInput_ReturnsCleanCanonicalRoot()
     {
         if (!OperatingSystem.IsWindows())

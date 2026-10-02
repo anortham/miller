@@ -207,6 +207,19 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public async Task EmbedBatch_RejectsNonZeroVectorBelowTheNormalizationTolerance()
+    {
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.UnderNormalizedVector),
+            FastOptions);
+
+        SemanticEmbedOutcome outcome = await session.EmbedBatchAsync(["alpha"], TestContext.Current.CancellationToken);
+
+        Assert.False(outcome.Succeeded);
+        Assert.Contains("L2 norm", outcome.FailureReason);
+    }
+
+    [Fact]
     public async Task Stall_EndsInABoundedTimeoutRatherThanAHang()
     {
         await using var session = new SemanticEmbeddingSession(

@@ -10,6 +10,8 @@ namespace Miller.Dashboard;
 public static class DashboardIndexFactsReader
 {
     private static readonly ContentCorpusSidecar ContentSidecar = new();
+    private const string SourceRebuildRequiredMessage =
+        "This workspace needs a source rebuild before its details can be read. Use Refresh index to rebuild it.";
 
     // The heavy-arm metric recorded by `metrics clones --near-duplicates` / `report --near-duplicates`. Count-level
     // only per ADR-0002: the dashboard plots how many Type-2 groups exist over time and never the groups themselves.
@@ -233,12 +235,16 @@ public static class DashboardIndexFactsReader
                 return Empty(
                     workspace,
                     "unreadable",
-                    "Store mode is disabled but the workspace still has an active store pointer; " +
-                    "export the active view before serving the legacy artifact.",
+                    SourceRebuildRequiredMessage,
                     searchSidecarStatus: "unknown",
                     contentSidecarStatus: "unknown",
                     indexRevision: null,
-                    artifactId: null);
+                    artifactId: null,
+                    store: StoreWorkspaceFacts.Unavailable(
+                        "failed",
+                        "source_rebuild_required",
+                        SourceRebuildRequiredMessage),
+                    readExtractorVersion: false);
             }
         }
         catch (StorePointerFormatException ex)
@@ -250,7 +256,23 @@ public static class DashboardIndexFactsReader
                 searchSidecarStatus: "unknown",
                 contentSidecarStatus: "unknown",
                 indexRevision: null,
-                artifactId: null);
+                artifactId: null,
+                store: StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", ex.Message),
+                readExtractorVersion: false);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null,
+                store: StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", ex.Message),
+                readExtractorVersion: false);
         }
 
         if (!File.Exists(workspace.IndexDbPath))
@@ -430,7 +452,9 @@ public static class DashboardIndexFactsReader
         string searchSidecarStatus,
         string contentSidecarStatus,
         long? indexRevision,
-        string? artifactId) =>
+        string? artifactId,
+        StoreWorkspaceFacts? store = null,
+        bool readExtractorVersion = true) =>
         new(
             workspace.WorkspaceId,
             workspace.DisplayId,
@@ -450,7 +474,7 @@ public static class DashboardIndexFactsReader
             contentSidecarStatus,
             SymbolKindCount: 0,
             RegistryLastError: workspace.LastError,
-            ExtractorVersion: ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
+            ExtractorVersion: readExtractorVersion ? ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath) : null,
             ArtifactId: artifactId,
             IndexRevision: indexRevision,
             FreshnessStatus: ComputeFreshnessStatus(
@@ -458,7 +482,8 @@ public static class DashboardIndexFactsReader
                 status,
                 indexRevision,
                 searchSidecarStatus,
-                contentSidecarStatus));
+                contentSidecarStatus),
+            Store: store);
 
     private static FileFacts ReadFileFacts(SqliteConnection connection)
     {

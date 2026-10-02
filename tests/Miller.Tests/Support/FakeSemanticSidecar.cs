@@ -35,6 +35,8 @@ public enum FakeSidecarFault
     /// <summary>Substitutes a zero vector for the poison text, per the contract's per-item isolation.</summary>
     PoisonItem,
 
+    UnderNormalizedVector,
+
     /// <summary>Echoes a wrong <c>request_id</c>, the stream desync the consumer must never accept.</summary>
     RequestIdDesync,
 
@@ -433,6 +435,11 @@ public static class FakeSemanticSidecar
                 float[] vector = poisoning && poisonIndices.Contains(i)
                     ? new float[pin.Dims]
                     : ExpectedVector("document", inputs[i], pin.Dims);
+                if (fault == FakeSidecarFault.UnderNormalizedVector)
+                {
+                    for (int component = 0; component < vector.Length; component++)
+                        vector[component] *= 0.0001f;
+                }
                 WriteVectorValue(writer, vector);
             }
 

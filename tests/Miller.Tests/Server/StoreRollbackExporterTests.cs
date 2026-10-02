@@ -27,7 +27,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
 
         Assert.Throws<JulieStoreProcessException>(() => StoreRollbackExporter.ExportIfRequired(
             fixture.Binding.WorkspaceRoot,
-            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), client));
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), client,
+            storeCliSupported: true));
 
         Assert.True(submitted);
         Assert.NotNull(StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot));
@@ -43,7 +44,10 @@ public sealed class StoreRollbackExporterTests : IDisposable
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply) { FailRelease = releaseFails };
 
         Assert.Throws<JulieStoreProcessException>(() => StoreRollbackExporter.ExportIfRequired(
-            fixture.Binding.WorkspaceRoot, Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), reader.Client));
+            fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"),
+            reader.Client,
+            storeCliSupported: true));
 
         Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
         Assert.Equal(releaseFails ? 1 : 0, reader.Owed);
@@ -88,7 +92,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
             },
         };
 
-        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(workspace, legacy, reader.Client);
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            workspace, legacy, reader.Client, storeCliSupported: true);
 
         Assert.True(result.RequiresSourceRebuild);
         Assert.False(result.Exported);
@@ -102,6 +107,291 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.Equal(0, reader.Owed);
         Assert.Equal(expectedMarker, File.ReadAllBytes(marker));
         Assert.Equal(expectedPointer, File.ReadAllBytes(Path.Combine(miller, "store.json")));
+    }
+
+    [Fact]
+    public void LatestPinRequiresSourceRebuildWithoutCallingProducer()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"),
+            new UnexpectedStoreClient());
+
+        Assert.False(JulieExtractVersionProbe.PinnedVersionSupportsStoreCli);
+        Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.NotNull(StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot));
+    }
+
+    [Fact]
+    public void SourceRebuildPreservesFamilyAndLocalImportsBeforeDetachingMember()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-preserve-ws", out string legacyDatabasePath);
+        string workspaceRoot = fixture.Binding.WorkspaceRoot;
+        StoreWorkspacePointer.Write(workspaceRoot, fixture.Binding);
+        string contentPath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Content,
+            fixture.Binding.ViewId);
+        ContentCorpusWriter.Write(contentPath, legacyDatabasePath, workspaceRoot, "migration-preserve-ws", 1);
+        var contentStore = new ContentCorpusExternalStore();
+        string familyExternalFile = Path.Combine(fixture.Root, "family-import.log");
+        string familyMarkdownFile = Path.Combine(fixture.Root, "family-import.md");
+        string localExternalFile = Path.Combine(fixture.Root, "local-import.log");
+        File.WriteAllText(familyExternalFile, "FamilyExternalMigrationMarker");
+        File.WriteAllText(familyMarkdownFile, "# Imported page\n\nFamilyWebMigrationMarker");
+        File.WriteAllText(localExternalFile, "LocalExternalMigrationMarker");
+        contentStore.Import(contentPath, familyExternalFile);
+        contentStore.ImportMarkdown(
+            contentPath,
+            familyMarkdownFile,
+            "https://example.test/family-migration");
+        string localContentPath = Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db");
+        ContentCorpusWriter.Write(localContentPath, legacyDatabasePath, workspaceRoot, "migration-preserve-ws", 1);
+        contentStore.Import(localContentPath, localExternalFile);
+
+        _ = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            workspaceRoot,
+            legacyDatabasePath,
+            "migration-preserve-ws",
+            revision: 2);
+
+        Assert.Null(StoreWorkspacePointer.Read(workspaceRoot));
+        Assert.Null(registry.GetStoreMember("migration-preserve-ws"));
+        Assert.NotNull(registry.GetStoreFamily(fixture.Binding.FamilyId));
+        Assert.True(File.Exists(contentPath));
+        Assert.Contains(contentStore.Search(localContentPath, "FamilyExternalMigrationMarker", limit: 5),
+            hit => hit.Snippet.Contains("FamilyExternalMigrationMarker", StringComparison.Ordinal));
+        Assert.Contains(contentStore.Search(
+                localContentPath,
+                "FamilyWebMigrationMarker",
+                contentKind: TextContentKind.Web,
+                limit: 5),
+            hit => hit.Snippet.Contains("FamilyWebMigrationMarker", StringComparison.Ordinal));
+        Assert.Contains(contentStore.Search(localContentPath, "LocalExternalMigrationMarker", limit: 5),
+            hit => hit.Snippet.Contains("LocalExternalMigrationMarker", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SourceRebuildRetriesPointerCleanupAfterMemberWasDetached()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-retry-ws", out string legacyDatabasePath, addMember: false);
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        _ = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            fixture.Binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-retry-ws",
+            revision: 2);
+
+        Assert.Null(StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot));
+        Assert.Null(registry.GetStoreMember("migration-retry-ws"));
+        Assert.NotNull(registry.GetStoreFamily(fixture.Binding.FamilyId));
+        Assert.True(Directory.Exists(fixture.Binding.StoreRoot));
+    }
+
+    [Fact]
+    public void SourceRebuildRefusesAnUnavailableFamilyStoreRoot()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string missingStoreRoot = Path.Combine(
+            fixture.Root,
+            "missing-family",
+            fixture.Binding.FamilyId.ToString("D"));
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture,
+            "migration-missing-store-ws",
+            out string legacyDatabasePath,
+            storeRoot: missingStoreRoot);
+        var binding = fixture.Binding with { StoreRoot = missingStoreRoot };
+        StoreWorkspacePointer.Write(binding.WorkspaceRoot, binding);
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-missing-store-ws",
+            revision: 2));
+
+        Assert.NotNull(StoreWorkspacePointer.Read(binding.WorkspaceRoot));
+        Assert.NotNull(registry.GetStoreMember("migration-missing-store-ws"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
+    }
+
+    [Fact]
+    public void SourceRebuildRefusesAnEmptyReadableStoreMountPoint()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string emptyStoreRoot = Path.Combine(
+            fixture.Root,
+            "empty-mounted-store",
+            fixture.Binding.FamilyId.ToString("D"));
+        Directory.CreateDirectory(emptyStoreRoot);
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture,
+            "migration-empty-mount-ws",
+            out string legacyDatabasePath,
+            storeRoot: emptyStoreRoot);
+        var binding = fixture.Binding with { StoreRoot = emptyStoreRoot };
+        StoreWorkspacePointer.Write(binding.WorkspaceRoot, binding);
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-empty-mount-ws",
+            revision: 2));
+
+        Assert.NotNull(StoreWorkspacePointer.Read(binding.WorkspaceRoot));
+        Assert.NotNull(registry.GetStoreMember("migration-empty-mount-ws"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
+    }
+
+    [Fact]
+    public void SourceRebuildRefusesStoreDatabaseForAnotherFamily()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-wrong-family-ws", out string legacyDatabasePath);
+        string storeDatabasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                   {
+                       DataSource = storeDatabasePath,
+                       Pooling = false,
+                   }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_meta SET value = $family WHERE key = 'family_id'";
+            command.Parameters.AddWithValue("$family", Guid.NewGuid().ToString("D"));
+            command.ExecuteNonQuery();
+        }
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            fixture.Binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-wrong-family-ws",
+            revision: 2));
+
+        Assert.NotNull(StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot));
+        Assert.NotNull(registry.GetStoreMember("migration-wrong-family-ws"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
+    }
+
+    [Fact]
+    public void SourceRebuildRefusesPointerWhoseViewDoesNotMatchTheRegisteredMember()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-mismatch-ws", out string legacyDatabasePath);
+        StoreWorkspacePointer.Write(
+            fixture.Binding.WorkspaceRoot,
+            fixture.Binding with { ViewId = "other-view" });
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            fixture.Binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-mismatch-ws",
+            revision: 2));
+
+        Assert.Equal("other-view", StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot)?.ViewId);
+        Assert.Equal("view-a", registry.GetStoreMember("migration-mismatch-ws")?.ViewId);
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
+    }
+
+    [Fact]
+    public void SourceRebuildRefusesPointerWhoseStoreRootDoesNotMatchTheRegisteredFamily()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-root-mismatch-ws", out string legacyDatabasePath);
+        StoreWorkspacePointer.Write(
+            fixture.Binding.WorkspaceRoot,
+            fixture.Binding with { StoreRoot = fixture.Root });
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            fixture.Binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-root-mismatch-ws",
+            revision: 2));
+
+        Assert.Equal(fixture.Root, StoreWorkspacePointer.Read(fixture.Binding.WorkspaceRoot)?.StoreRoot);
+        Assert.NotNull(registry.GetStoreMember("migration-root-mismatch-ws"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
+    }
+
+    [Fact]
+    public void MalformedSourceRebuildUsesExactRegisteredMemberToPreserveImports()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture, "migration-malformed-ws", out string legacyDatabasePath);
+        string workspaceRoot = fixture.Binding.WorkspaceRoot;
+        string sidecar = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Content,
+            fixture.Binding.ViewId);
+        ContentCorpusWriter.Write(sidecar, legacyDatabasePath, workspaceRoot, "migration-malformed-ws", 1);
+        string importedPath = Path.Combine(fixture.Root, "malformed-import.log");
+        File.WriteAllText(importedPath, "MalformedRecoveryImportMarker");
+        var contentStore = new ContentCorpusExternalStore();
+        contentStore.Import(sidecar, importedPath);
+        File.WriteAllText(Path.Combine(workspaceRoot, ".miller", "store.json"), "not-json");
+
+        _ = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            workspaceRoot,
+            legacyDatabasePath,
+            "migration-malformed-ws",
+            revision: 2);
+
+        Assert.Null(StoreWorkspacePointer.Read(workspaceRoot));
+        Assert.Null(registry.GetStoreMember("migration-malformed-ws"));
+        Assert.Contains(contentStore.Search(
+                Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db"),
+                "MalformedRecoveryImportMarker",
+                limit: 5),
+            hit => hit.Snippet.Contains("MalformedRecoveryImportMarker", StringComparison.Ordinal));
+        Assert.True(Directory.Exists(fixture.Binding.StoreRoot));
+        Assert.True(File.Exists(sidecar));
+    }
+
+    [Fact]
+    public void MalformedSourceRebuildRefusesWhenImportIdentityCannotBeRecovered()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using WorkspaceRegistry registry = SeedMigrationRegistry(
+            fixture,
+            "migration-malformed-unbound-ws",
+            out string legacyDatabasePath,
+            addMember: false);
+        string pointerPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "store.json");
+        File.WriteAllText(pointerPath, "not-json");
+
+        Assert.Throws<IOException>(() => StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            registry,
+            fixture.Binding.WorkspaceRoot,
+            legacyDatabasePath,
+            "migration-malformed-unbound-ws",
+            revision: 2));
+
+        Assert.Equal("not-json", File.ReadAllText(pointerPath));
+        Assert.Null(registry.GetStoreMember("migration-malformed-unbound-ws"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(legacyDatabasePath)!, "content.db")));
     }
 
     private readonly string _root = Path.Combine(
@@ -236,7 +526,7 @@ public sealed class StoreRollbackExporterTests : IDisposable
     }
 
     [Fact]
-    public void BootstrapRollbackOperationalFailuresBecomeRetryFailures()
+    public void BootstrapRollbackRequiresSourceRebuildForLatestPin()
     {
         Directory.CreateDirectory(_root);
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(_root);
@@ -249,13 +539,13 @@ public sealed class StoreRollbackExporterTests : IDisposable
                 canonicalRoot,
                 StoreBindingState.Ready));
 
-        StoreRollbackRetryException error = Assert.Throws<StoreRollbackRetryException>(() =>
-            StoreRollbackExporter.ExportForBootstrap(
-                _root,
-                Path.Combine(_root, ".miller", "symbols.db"),
-                new UnexpectedStoreClient()));
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportForBootstrap(
+            _root,
+            Path.Combine(_root, ".miller", "symbols.db"),
+            new UnexpectedStoreClient());
 
-        Assert.IsAssignableFrom<IOException>(error.InnerException);
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.False(result.Exported);
         Assert.NotNull(StoreWorkspacePointer.Read(_root));
     }
 
@@ -347,7 +637,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
         StoreRollbackExportResult retry = StoreRollbackExporter.ExportIfRequired(
             workspace,
             legacy,
-            new UnexpectedStoreClient());
+            new UnexpectedStoreClient(),
+            storeCliSupported: true);
 
         Assert.True(retry.Exported);
         Assert.False(retry.RequiresPointerCleanup);
@@ -387,7 +678,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
         StoreRollbackExportResult retry = StoreRollbackExporter.ExportIfRequired(
             workspace,
             legacy,
-            new UnexpectedStoreClient());
+            new UnexpectedStoreClient(),
+            storeCliSupported: true);
 
         Assert.True(retry.Exported);
         Assert.False(retry.RequiresPointerCleanup);
@@ -422,7 +714,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
         StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
             workspace,
             legacy,
-            new UnexpectedStoreClient());
+            new UnexpectedStoreClient(),
+            storeCliSupported: true);
 
         Assert.False(result.Exported);
         Assert.True(result.RequiresSourceRebuild);
@@ -472,7 +765,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
         StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
             workspace,
             legacy,
-            new UnexpectedStoreClient());
+            new UnexpectedStoreClient(),
+            storeCliSupported: true);
 
         Assert.False(result.Exported);
         Assert.True(result.RequiresSourceRebuild);
@@ -521,7 +815,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
             workspace,
             legacy,
             new JulieStoreClient(Path.Combine(_root, "missing-producer"), (_, _) =>
-                throw new InvalidOperationException("A previous marker must not acquire a reader.")));
+                throw new InvalidOperationException("A previous marker must not acquire a reader.")),
+            storeCliSupported: true);
 
         Assert.False(result.Exported);
         Assert.True(result.RequiresSourceRebuild);
@@ -549,6 +844,42 @@ public sealed class StoreRollbackExporterTests : IDisposable
             onSubmit();
             throw new JulieStoreProcessException("export failed", "", 1);
         }
+    }
+
+    private static WorkspaceRegistry SeedMigrationRegistry(
+        StoreFixture fixture,
+        string workspaceId,
+        out string legacyDatabasePath,
+        bool addMember = true,
+        string? storeRoot = null)
+    {
+        string workspaceRoot = fixture.Binding.WorkspaceRoot;
+        legacyDatabasePath = SymbolsLevelArtifact.Create(Path.Combine(workspaceRoot, ".miller"));
+        WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(fixture.Root, "migration-registry.db"));
+        registry.UpsertSeen(
+            workspaceId,
+            "migration-workspace",
+            workspaceRoot,
+            legacyDatabasePath,
+            WorkspaceRegistryState.Ready);
+        string familyStoreRoot = storeRoot ?? fixture.Binding.StoreRoot;
+        StoreFamilyRegistryRow family = registry.AdoptStoreFamily(
+            fixture.Binding.FamilyId,
+            "migration-lineage-" + workspaceId,
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storeRoot: familyStoreRoot);
+        Assert.Equal(familyStoreRoot, family.StoreRoot);
+        if (addMember)
+        {
+            registry.UpsertStoreMember(
+                workspaceId,
+                family.FamilyId,
+                fixture.Binding.ViewId,
+                workspaceRoot,
+                WorkspaceRootIdentity.Unknown);
+        }
+        return registry;
     }
 
     private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));

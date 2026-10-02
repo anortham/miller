@@ -33,6 +33,30 @@ public sealed class JulieExtractLanguagesScaleTests
         Assert.True(extensions!.Count >= 50, $"expected a broad catalog, got {extensions.Count} extensions");
         foreach (string expected in new[] { "cs", "rs", "ts", "py", "vue", "md", "sql", "yaml" })
             Assert.Contains(expected, extensions);
+        Assert.Contains("file:go.mod", extensions);
+        Assert.Contains("file:go.sum", extensions);
+        Assert.Contains("file:qmldir", extensions);
+        Assert.Contains("file:Gemfile", extensions);
+        Assert.Contains("file:Pipfile", extensions);
+        Assert.Contains("file:NAMESPACE", extensions);
+        Assert.Contains("file:.bashrc", extensions);
+        Assert.Contains("file:.envrc", extensions);
+        foreach (string exactName in new[]
+        {
+            "go.mod", "go.sum", "qmldir", "Gemfile", "Pipfile", "NAMESPACE", ".bashrc", ".envrc",
+        })
+            Assert.DoesNotContain(exactName, extensions);
+        Assert.DoesNotContain("mod", extensions);
+        Assert.DoesNotContain("sum", extensions);
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/go.mod", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/go.sum", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/qmldir", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/Gemfile", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/Pipfile", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/NAMESPACE", extensions));
+        Assert.True(WatchPathFilter.IsExtractableSource("/repo", "/repo/.bashrc", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource("/repo", "/repo/example.mod", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource("/repo", "/repo/example.sum", extensions));
         // Normalization contract: dot-less, case-insensitive membership.
         Assert.DoesNotContain(".cs", extensions);
         Assert.Contains("CS", extensions);

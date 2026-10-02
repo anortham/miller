@@ -44,6 +44,20 @@ public static class DashboardIndexFactsCache
     {
         ArgumentNullException.ThrowIfNull(workspace);
         bool enabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        if (!enabled)
+        {
+            try
+            {
+                if (StoreWorkspacePointer.Exists(workspace.CanonicalRoot))
+                    return DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
+            }
+        }
+
         if (DefaultTtl <= TimeSpan.Zero)
             return DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
 

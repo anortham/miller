@@ -15,7 +15,7 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
     [Fact]
     public void ImportUpdateExportDeleteAndIdempotentRetryRoundTrip()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string root = Path.Combine(_directory, "root");
         string store = Path.Combine(_directory, "family");
         Directory.CreateDirectory(root);
@@ -90,7 +90,7 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
     [Fact]
     public void RequestTimeoutLeavesDurableWorkForASuccessor()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string root = Path.Combine(_directory, "root");
         string store = Path.Combine(_directory, "family");
         Directory.CreateDirectory(root);

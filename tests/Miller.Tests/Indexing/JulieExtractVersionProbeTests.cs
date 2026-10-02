@@ -6,6 +6,22 @@ namespace Miller.Tests.Indexing;
 public sealed class JulieExtractVersionProbeTests
 {
     [Theory]
+    [InlineData("2.42.0", true)]
+    [InlineData("2.99.0", true)]
+    [InlineData("2.41.9", false)]
+    [InlineData("3.0.0", false)]
+    [InlineData("3.7.2", false)]
+    [InlineData(null, false)]
+    public void SupportsStoreCliUsesKnownProducerVersionRange(string? version, bool expected) =>
+        Assert.Equal(expected, JulieExtractVersionProbe.SupportsStoreCli(version));
+
+    [Fact]
+    public void PinnedVersionUsesTheStoreCliVersionRange() =>
+        Assert.Equal(
+            JulieExtractVersionProbe.SupportsStoreCli(MillerExtractContract.PinnedJulieExtractVersion),
+            JulieExtractVersionProbe.PinnedVersionSupportsStoreCli);
+
+    [Theory]
     [InlineData("julie-extract 2.1.3", "2.1.3")]
     [InlineData("julie-extract 2.2.1\n", "2.2.1")]
     [InlineData("2.2.1", "2.2.1")]

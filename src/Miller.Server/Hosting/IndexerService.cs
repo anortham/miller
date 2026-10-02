@@ -767,16 +767,12 @@ public sealed class IndexerService : BackgroundService
     internal static string? ReadIndexLevel(WorkspaceContext workspace)
     {
         string databasePath = workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath;
-        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
-            return ExtractIndexLevelReader.Read(databasePath);
-
         string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
             databasePath,
             root,
             workspace.WorkspaceId,
-            workspace.ReaderProducerFactory,
-            storeEnabled: true);
+            workspace.ReaderProducerFactory);
         return session.Snapshot.IndexLevel;
     }
 
@@ -2210,7 +2206,7 @@ public sealed class IndexerService : BackgroundService
             return;
 
         string root = _bootstrap.Workspace.CanonicalRoot!;
-        if (WatchPathFilter.ShouldProcess(root, fullPath))
+        if (WatchPathFilter.ShouldProcessDirectory(root, fullPath))
             _core.SignalRescan();
     }
 
@@ -2225,8 +2221,8 @@ public sealed class IndexerService : BackgroundService
             return;
 
         string root = _bootstrap.Workspace.CanonicalRoot!;
-        if (WatchPathFilter.ShouldProcess(root, oldFullPath)
-            || WatchPathFilter.ShouldProcess(root, fullPath))
+        if (WatchPathFilter.ShouldProcessDirectory(root, oldFullPath)
+            || WatchPathFilter.ShouldProcessDirectory(root, fullPath))
             _core.SignalRescan();
     }
 

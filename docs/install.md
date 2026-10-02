@@ -135,34 +135,34 @@ explicitly share them.
 Use this path when your MCP client does not use Miller's plugin package.
 
 1. Download the archive for your platform from the
-   [v1.14.1 release](https://github.com/anortham/miller/releases/tag/v1.14.1), plus the matching
+   [v1.29.1 release](https://github.com/anortham/miller/releases/tag/v1.29.1), plus the matching
    `.sha256` sidecar:
 
-   - `miller-1.14.1-aarch64-apple-darwin.tar.gz`
-   - `miller-1.14.1-x86_64-apple-darwin.tar.gz`
-   - `miller-1.14.1-x86_64-unknown-linux-gnu.tar.gz`
-   - `miller-1.14.1-x86_64-pc-windows-msvc.zip`
+   - `miller-1.29.1-aarch64-apple-darwin.tar.gz`
+   - `miller-1.29.1-x86_64-apple-darwin.tar.gz`
+   - `miller-1.29.1-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-1.29.1-x86_64-pc-windows-msvc.zip`
 
 2. Verify and extract it:
 
    ```bash
-   shasum -a 256 -c miller-1.14.1-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-1.14.1-aarch64-apple-darwin.tar.gz
-   cd miller-1.14.1-aarch64-apple-darwin
+   shasum -a 256 -c miller-1.29.1-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-1.29.1-aarch64-apple-darwin.tar.gz
+   cd miller-1.29.1-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
-   (Get-FileHash .\miller-1.14.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against miller-1.14.1-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-1.14.1-x86_64-pc-windows-msvc.zip -DestinationPath .
-   .\miller-1.14.1-x86_64-pc-windows-msvc\miller.exe version
+   (Get-FileHash .\miller-1.29.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-1.29.1-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-1.29.1-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-1.29.1-x86_64-pc-windows-msvc\miller.exe version
    ```
 
 3. Point your MCP client at the extracted binary (see [MCP configuration](#mcp-configuration)).
 
 Keep the extracted directory together. Each archive extracts to a versioned top-level directory such as
-`miller-1.14.1-aarch64-apple-darwin/` containing `miller`, native runtime libraries such as SQLite and
+`miller-1.29.1-aarch64-apple-darwin/` containing `miller`, native runtime libraries such as SQLite and
 BLAKE3 bindings, the matching pinned `.tools/julie-extract` binary, the loopback dashboard under
 `dashboard/`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. Do not move `.tools/julie-extract` out of the
 directory or replace it with a separately installed copy.
@@ -215,7 +215,7 @@ absolute path inside the versioned directory and the explicit `serve` argument:
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.14.1-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.29.1-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
@@ -258,12 +258,17 @@ path to stderr.
 
 ## Source checkout
 
+Source builds pin Julie 3.7.2 and use standalone workspace artifacts. Existing store-backed
+workspaces follow the [Julie 3.x migration guide](julie-3-migration.md). Stop older Miller
+processes before switching builds.
+
 Use this path for Miller development or for trying unreleased local changes. It requires the .NET 10 SDK
 on `PATH` (`dotnet --version` should report a `10.x` SDK), and the restore script downloads the pinned
-`julie-extract` binary into this checkout's `.tools/` directory.
+`julie-extract` binary and semantic runtime into this checkout's `.tools/` directory.
 
 ```bash
 bash scripts/restore-julie-extract.sh
+bash scripts/restore-semantic-sidecar.sh
 dotnet build Miller.slnx -c Release
 dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
@@ -273,6 +278,7 @@ On Windows:
 
 ```powershell
 scripts/restore-julie-extract.ps1
+scripts/restore-semantic-sidecar.ps1
 dotnet build Miller.slnx -c Release
 dotnet run --project src/Miller.Server -c Release -- workspace open --path C:\source\repo --full
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5

@@ -4,11 +4,11 @@
 
 .DESCRIPTION
   Reads scripts\julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
-  Detects the host platform (x86_64-pc-windows-msvc is the only Windows asset), downloads the matching
+  Detects the host platform (x86_64-pc-windows-msvc is Miller's only Windows package target), downloads the matching
   release archive from anortham/julie-extractors, VERIFIES its sha256 against the pin (julie-extractors
   publishes no checksum assets — these were download-verified and committed), extracts ONLY
   julie-extract.exe from the archive, and removes the archive. Fails loudly on unsupported platforms
-  (no windows-arm64).
+  (Miller does not package the upstream aarch64 Windows asset).
   While a contract bump is staged before release assets publish, pass -FromSource or set
   MILLER_JULIE_SOURCE to build julie-extract from a local julie-extractors checkout.
 #>
@@ -80,7 +80,7 @@ if ($FromSource -or -not [string]::IsNullOrWhiteSpace($sourceFromEnv)) {
     exit 0
 }
 
-# --- detect platform -> triple (only x64 Windows is published) ---
+# --- detect platform -> triple (Miller packages x64 Windows only) ---
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
 $triple = $null
 switch ($arch) {
@@ -89,8 +89,9 @@ switch ($arch) {
 
 if ($null -eq $triple) {
     Write-Error @"
-unsupported platform 'windows/$arch'. julie-extract v$($config.version) publishes only x86_64-pc-windows-msvc on
-Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, or use a supported host.
+unsupported platform 'windows/$arch'. Miller packages julie-extract only for x86_64-pc-windows-msvc on
+Windows. Julie publishes an aarch64 Windows asset, but Miller does not package that target. Build from source
+with cargo, or use a supported host.
 "@
     exit 1
 }
@@ -100,7 +101,7 @@ $sha256 = $config.assets.$triple.sha256
 if ([string]::IsNullOrEmpty($asset) -or [string]::IsNullOrEmpty($sha256)) {
     Write-Error @"
 no published asset pin for julie-extract v$($config.version) / $triple in $Pins.
-Until release assets publish, run:
+If the Miller target is not published, run:
   `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors'; scripts\restore-julie-extract.ps1 -FromSource
 "@
     exit 1

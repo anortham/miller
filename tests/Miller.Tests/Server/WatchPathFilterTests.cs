@@ -76,6 +76,15 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/.hg/store/data/x.i")]
     [InlineData("/repo/.svn/pristine/ab/abc.svn-base")]
     [InlineData("/repo/.cache/build/some.o")]
+    [InlineData("/repo/.code-kb/index.sqlite")]
+    [InlineData("/repo/.claude/settings.json")]
+    [InlineData("/repo/.venv/lib/python/site.py")]
+    [InlineData("/repo/venv/lib/python/site.py")]
+    [InlineData("/repo/.env/cache/item")]
+    [InlineData("/repo/.tox/py312/site.py")]
+    [InlineData("/repo/.idea/workspace.xml")]
+    [InlineData("/repo/.vscode/settings.json")]
+    [InlineData("/repo/worktrees/feature/src/A.cs")]
     [InlineData("/repo/.julie/indexes/workspace/symbols.db")]
     [InlineData("/repo/.memories/2026-06-11-checkpoint.md")]
     [InlineData("/repo/vendor/github.com/pkg/errors/errors.go")]
@@ -139,14 +148,23 @@ public sealed class WatchPathFilterTests
         Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/docs/chart.png", extensions));
         Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/font.woff2", extensions));
         Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.csproj", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/cs", extensions));
         Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.cs", supportedExtensions: null));
         Assert.True(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.cs", extensions));
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/cs", extensions));
     }
 
     [Fact]
     public void Skips_TheWorkspaceRootItself_EvenWithTheExtensionGateActive()
     {
         Assert.False(WatchPathFilter.ShouldProcess(Root, Root, new HashSet<string> { "cs" }));
+    }
+
+    [Fact]
+    public void ExtensionGate_DotfileRemainsFailSoftWhileSameNamedDirectoryIsSkipped()
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/.env", Extensions));
+        Assert.False(WatchPathFilter.ShouldProcessDirectory(Root, "/repo/.env"));
     }
 
     [Fact]
@@ -174,9 +192,9 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/.claude/prompts/example.md")]
     [InlineData("/repo/.claude/worktree/example/src/A.cs")]
     [InlineData("/repo/claude/worktrees/example/src/A.cs")]
-    public void Accepts_ClaudePaths_OutsideTheNestedWorktreeDirectory(string path)
+    public void Skips_UpstreamHardExcludedClaudeAndWorktreePaths(string path)
     {
-        Assert.True(WatchPathFilter.ShouldProcess(Root, path));
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
     }
 
     [Theory]
@@ -190,7 +208,7 @@ public sealed class WatchPathFilterTests
 
     [Theory]
     [InlineData("/repo/docs/worktrees.md")]
-    [InlineData("/repo/worktrees/feature/src/A.cs")]
+    [InlineData("/repo/worktrees.md")]
     [InlineData("/repo/src/.worktrees.cs")]
     public void Accepts_PathsThatMerelyContainTheWorktreesToken(string path)
     {
@@ -201,6 +219,7 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/src/A.cs")]
     [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/docs/readme.md")]
     [InlineData("/repo/.claude/worktrees/feature", "/repo/.claude/worktrees/feature/src/A.cs")]
+    [InlineData("/repo/worktrees/feature", "/repo/worktrees/feature/src/A.cs")]
     [InlineData("/repo/bin/tools", "/repo/bin/tools/src/A.cs")]
     [InlineData("/repo/obj", "/repo/obj/src/A.cs")]
     public void Accepts_FilesOfAWorkspaceWhoseOwnRootContainsASkipSegment(string root, string path)
@@ -250,8 +269,6 @@ public sealed class WatchPathFilterTests
 
     // ---------- supported-extension gate (julie's claimed set, injected — pure, no process) ----------
 
-    // A miniature stand-in for the `languages --json` catalog: lowercase, dot-less, case-insensitive —
-    // exactly what JulieExtractRunner.ParseSupportedExtensions produces.
     private static readonly IReadOnlySet<string> Extensions =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs", "rs", "vue", "md" };
 
@@ -276,10 +293,45 @@ public sealed class WatchPathFilterTests
         Assert.False(WatchPathFilter.ShouldProcess(Root, path, Extensions));
     }
 
+    [Fact]
+    public void ExtensionGate_AcceptsReportedGoManifestBasenamesAndRejectsOtherModAndSumFiles()
+    {
+        IReadOnlySet<string> extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "file:go.mod",
+            "file:go.sum",
+            "file:qmldir",
+            "file:Gemfile",
+        };
+
+        foreach (string path in new[]
+        {
+            "/repo/go.mod", "/repo/modules/GO.MOD", "/repo/go.sum", "/repo/modules/GO.SUM",
+            "/repo/qmldir", "/repo/Gemfile",
+        })
+        {
+            Assert.True(WatchPathFilter.ShouldProcess(Root, path, extensions), path);
+            Assert.True(WatchPathFilter.IsExtractableSource(Root, path, extensions), path);
+        }
+
+        foreach (string path in new[]
+        {
+            "/repo/example.mod", "/repo/example.sum", "/repo/go.work.sum", "/repo/go.sum.orig",
+            "/repo/anything.qmldir", "/repo/anything.Gemfile",
+        })
+        {
+            Assert.False(WatchPathFilter.ShouldProcess(Root, path, extensions), path);
+            Assert.False(WatchPathFilter.IsExtractableSource(Root, path, extensions), path);
+        }
+
+        Assert.False(WatchPathFilter.ShouldProcess(Root, "/repo/anything.go.mod", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/anything.go.mod", extensions));
+    }
+
     [Theory]
     [InlineData("/repo/Dockerfile")]            // extensionless: catalog cannot prove unsupported
     [InlineData("/repo/Makefile")]
-    [InlineData("/repo/.env")]                  // dotfile = no extension
+    [InlineData("/repo/.env")]
     [InlineData("/repo/src/trailingdot.")]
     public void ExtensionGate_KeepsExtensionlessPathsFailSoft(string path)
     {

@@ -286,32 +286,23 @@ public sealed class ContentCorpusSidecar
                 Error: "content.db path could not be derived: " + ex.Message);
         }
 
-        if (!File.Exists(contentDbPath))
-        {
-            return new ContentCorpusFacts(
-                "missing",
-                contentDbPath,
-                SchemaVersion: null,
-                WorkspaceRevision: null,
-                SourceCount: 0,
-                ChunkCount: 0,
-                IndexedSourceBytes: 0,
-                StoredRawBytes: 0);
-        }
-
+        bool contentDbExists = File.Exists(contentDbPath);
         if (ContentCorpusWriter.TryReadPreservationFailure(contentDbPath) is { } preservationFailure)
         {
-            try
+            if (contentDbExists)
             {
-                return ReadFactsWithBusyRetry(
-                    contentDbPath,
-                    expectedRevision,
-                    () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
-            }
-            catch (Exception ex) when (
-                ex is SqliteException or InvalidOperationException or IOException
-                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-            {
+                try
+                {
+                    return ReadFactsWithBusyRetry(
+                        contentDbPath,
+                        expectedRevision,
+                        () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
+                }
+                catch (Exception ex) when (
+                    ex is SqliteException or InvalidOperationException or IOException
+                        or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                }
             }
 
             return new ContentCorpusFacts(
@@ -324,6 +315,19 @@ public sealed class ContentCorpusSidecar
                 IndexedSourceBytes: 0,
                 StoredRawBytes: 0,
                 Error: preservationFailure);
+        }
+
+        if (!contentDbExists)
+        {
+            return new ContentCorpusFacts(
+                "missing",
+                contentDbPath,
+                SchemaVersion: null,
+                WorkspaceRevision: null,
+                SourceCount: 0,
+                ChunkCount: 0,
+                IndexedSourceBytes: 0,
+                StoredRawBytes: 0);
         }
 
         try

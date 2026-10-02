@@ -809,14 +809,19 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
                     try
                     {
+                        using WorkspaceRegistry rollbackRegistry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
                         string? cleanupWarning = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+                            rollbackRegistry,
                             canonicalRoot,
                             canonicalDbPath,
+                            stableWorkspaceId,
+                            scanRevision ?? loadResult.RebuiltRevision
+                                ?? ReadLatestRevisionOrZero(canonicalDbPath, stableWorkspaceId),
                             bootstrapLease);
                         if (cleanupWarning is not null)
                             _logger.LogWarning("{Warning}", cleanupWarning);
                     }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
                     {
                         throw new StoreRollbackRetryException(ex);
                     }

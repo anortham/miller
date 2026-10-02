@@ -298,7 +298,7 @@ public sealed class StoreViewRetirementRunnerTests : IDisposable
     }
 
     [Fact]
-    public void ForToolsRoot_BindsThePinnedExtractor()
+    public void ForToolsRoot_DoesNotBindRetiredStoreCommands()
     {
         RequireUnix();
         string toolsRoot = Path.Combine(_root, "tools");
@@ -309,10 +309,12 @@ public sealed class StoreViewRetirementRunnerTests : IDisposable
 
         Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? callback =
             StoreViewRetirementRunner.ForToolsRoot(toolsRoot);
-
-        Assert.NotNull(callback);
-        StoreViewRetirementOutcome outcome = callback!(_target, false);
-        Assert.Equal(StoreViewRetirementDisposition.Planned, outcome.Disposition);
+        Assert.Equal(JulieExtractVersionProbe.PinnedVersionSupportsStoreCli, callback is not null);
+        if (callback is not null)
+        {
+            StoreViewRetirementOutcome outcome = callback(_target, false);
+            Assert.Equal(StoreViewRetirementDisposition.Planned, outcome.Disposition);
+        }
     }
 
     [Fact]

@@ -19,7 +19,7 @@ public sealed class IndexerServiceWalTests : IDisposable
     public void Dispose() => Environment.SetEnvironmentVariable("MILLER_INDEX_STORE", _original);
 
     [Fact]
-    public void IdleWalMaintenanceDiscoversDebtAndThrottlesEmptyChecks()
+    public void IdleWalMaintenanceSkipsFamilyStoreWhilePinnedJulieUsesStandaloneArtifacts()
     {
         using StoreFixture fixture = StoreFixture.Create();
         string root = fixture.Binding.WorkspaceRoot;
@@ -52,8 +52,8 @@ public sealed class IndexerServiceWalTests : IDisposable
         write.ExecuteNonQuery();
         string millerDir = Path.Combine(root, ".miller");
         service.RunDrainTickForTest(millerDir);
-        Assert.Equal(0, new FileInfo(database + "-wal").Length);
-        Assert.Single(phases.Records, p => p.Phase == "wal_checkpoint");
+        Assert.True(new FileInfo(database + "-wal").Length > 0);
+        Assert.DoesNotContain(phases.Records, p => p.Phase == "wal_checkpoint");
         write.CommandText = "INSERT INTO idle_wal VALUES (2);";
         write.ExecuteNonQuery();
         now = now.AddSeconds(29);
@@ -61,7 +61,8 @@ public sealed class IndexerServiceWalTests : IDisposable
         Assert.True(new FileInfo(database + "-wal").Length > 0);
         now = now.AddSeconds(2);
         service.RunDrainTickForTest(millerDir);
-        Assert.Equal(0, new FileInfo(database + "-wal").Length);
+        Assert.True(new FileInfo(database + "-wal").Length > 0);
+        Assert.DoesNotContain(phases.Records, p => p.Phase == "wal_checkpoint");
     }
 
     private sealed class RecordingPhaseSink : IIndexerPhaseSink

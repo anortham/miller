@@ -45,7 +45,7 @@ Miller serves a fresh index of this workspace's code. One Miller call beats shel
 - trace — exact refs, shortest dependency paths, or cross-language route chains.
 - impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff. With no args it reads the working-tree diff.
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
-- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 40 languages.
+- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 42 languages.
 - content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, open, onboarding, dashboard.
 - tests — continuous testing (CT), opt-in per workspace: which cases your change staled and their last verdict. status is cheap and starts nothing; after an edit, run wait=true executes the explicit selection, including owed and red cases. CT off reports `enabled: false` plus the test projects it found: run those with your test runner for a one-off answer; enable only for ongoing verdicts; start is explicit.

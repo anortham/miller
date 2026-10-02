@@ -1,11 +1,10 @@
 # Known limits
 
-- Family-store mode is default-on. Set `MILLER_INDEX_STORE=off` for the legacy standalone compatibility
-  and rollback path. Family-store read sessions acquire producer-owned retention before opening a serving
-  generation and release it after their last connection closes. Unknown process identity and failed renewal
-  or release retain protection and can delay cleanup. Native forced owner death, PID reuse, and unknown kernel
-  identity remain explicit Miller qualification limits; see the
-  [M1 finding](findings/2026-09-04-reader-retention-integration.md). The explicit standalone path is unaffected.
+- Source builds pin Julie 3.7.2 and use standalone workspace artifacts. Julie 3.x removed the
+  family-store commands, so an explicit store-on setting is unsupported. Existing store-backed
+  workspaces need a source rebuild with imported-content preservation before switching. Stop older
+  Miller processes first; see the [migration guide](julie-3-migration.md). Published v1.29.1 still
+  bundles Julie 2.42.0 and its historical store contracts.
 - Generated ignore policy is Miller-owned state at
   `$MILLER_HOME/.miller/ignore-policies/<canonical-workspace-id>.julieignore`. Workspace removal derives the ID
   from the validated canonical root and deletes only that exact
@@ -13,7 +12,7 @@
   versions are not migrated or auto-deleted: ownership cannot be proven from a header after a user edits the file,
   so review and remove those legacy files manually. If the global policy cannot be removed, the removal result
   reports the cleanup warning while keeping the existing `.miller` and registry safeguards.
-- Search and content family-store sidecars use per-kind durable consumer cursors and apply file changes in place
+- Older builds' search and content family-store sidecars use per-kind durable consumer cursors and apply file changes in place
   only when the sidecar stamp and complete protected revision delta match. Sidecar data and stamp commit before
   the final cursor advance; incomplete history, identity changes, and unsafe recovery fall back to a full build.
   SQLite logical-row/stamp parity, deterministic counters, crash-boundary recovery, the published 2.40.4 cursor

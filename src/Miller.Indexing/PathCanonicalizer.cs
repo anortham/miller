@@ -159,11 +159,7 @@ public static class PathCanonicalizer
             return root;
         }
 
-        // Seed the walk at the filesystem root. Trim a trailing separator so Path.Combine composes cleanly,
-        // but keep a bare "/" on POSIX.
-        string current = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (current.Length == 0)
-            current = root.Length > 0 ? root : Path.DirectorySeparatorChar.ToString();
+        string current = root;
 
         for (int i = 0; i < parts.Length; i++)
         {

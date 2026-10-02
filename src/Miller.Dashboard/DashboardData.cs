@@ -760,8 +760,14 @@ public static class DashboardData
     public static string RenderIndexJson(string registryDbPath, string? telemetryDbPath = null) =>
         JsonSerializer.Serialize(ReadIndex(registryDbPath, telemetryDbPath), JsonContext.DashboardWorkspaceIndex);
 
-    internal static string RenderIndexJson(string registryDbPath, string? telemetryDbPath, Func<IJulieStoreClient> readerClientFactory) =>
-        JsonSerializer.Serialize(ReadIndex(registryDbPath, telemetryDbPath, null, readerClientFactory), JsonContext.DashboardWorkspaceIndex);
+    internal static string RenderIndexJson(
+        string registryDbPath,
+        string? telemetryDbPath,
+        Func<IJulieStoreClient> readerClientFactory,
+        bool? storeEnabledOverride = null) =>
+        JsonSerializer.Serialize(
+            ReadIndex(registryDbPath, telemetryDbPath, storeEnabledOverride, readerClientFactory),
+            JsonContext.DashboardWorkspaceIndex);
 
     /// <summary>
     /// Registry rows for the page spine. A corrupt/truncated <c>workspaces.db</c> degrades to an EMPTY list
@@ -1141,14 +1147,15 @@ public static class DashboardData
         string registryDbPath, string telemetryDbPath, string? workspaceId,
         string? preferredWorkspaceRoot, Func<IJulieStoreClient>? readerClientFactory,
         DateTimeOffset? anchor = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        bool? storeEnabledOverride = null)
     {
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
         DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId, registryDbPath);
         DashboardWorkspaceRow? selectedWorkspace = workspaces.FirstOrDefault(
             row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
-        bool storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        bool storeEnabled = storeEnabledOverride ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
         WorkspaceReadHandle? storeSession = null;
         string? storeSessionError = null;
         Exception? storeSessionFailure = null;
@@ -1167,7 +1174,7 @@ public static class DashboardData
                                 storeSessionError,
                                 storeSessionFailure)
                             : DashboardIndexFactsReader.Read(selectedWorkspace, storeSession)
-                        : DashboardIndexFactsCache.Read(selectedWorkspace),
+                        : DashboardIndexFactsCache.Read(selectedWorkspace, storeEnabled, readerClientFactory),
                     workspaces,
                     storeEnabled ? storeSession : null);
             IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
@@ -1265,7 +1272,7 @@ public static class DashboardData
     {
         try
         {
-            if (storeEnabled && storeSession is null)
+            if ((storeEnabled || dashboardFacts.Store is not null) && storeSession is null)
                 return UnavailableLocalMetrics(workspace, dashboardFacts.Message);
             if (storeEnabled && IndexLevels.IsSymbolsLevel(storeSession!.Snapshot.IndexLevel))
                 return UnavailableLocalMetrics(workspace, "local metrics require a full-level family-store view");
@@ -1334,7 +1341,7 @@ public static class DashboardData
     {
         try
         {
-            WorkspaceExtractionHealthFacts extraction = storeEnabled
+            WorkspaceExtractionHealthFacts extraction = storeEnabled || dashboardFacts.Store is not null
                 ? storeSession is null
                     ? UnavailableExtraction(dashboardFacts.Message ?? dashboardFacts.FreshnessStatus)
                     : WorkspaceHealthReader.Read(storeSession)
@@ -1412,7 +1419,7 @@ public static class DashboardData
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
-            WorkspaceExtractionHealthFacts extraction = storeEnabled
+            WorkspaceExtractionHealthFacts extraction = storeEnabled || dashboardFacts.Store is not null
                 ? storeSession is null
                     ? UnavailableExtraction(facts.WarningText ?? facts.FreshnessStatus)
                     : WorkspaceHealthReader.Read(storeSession)
@@ -1796,9 +1803,16 @@ public static class DashboardData
 
     internal static string RenderSnapshotJson(
         string registryDbPath, string telemetryDbPath, string? workspaceId,
-        string? preferredWorkspaceRoot, Func<IJulieStoreClient> readerClientFactory) =>
+        string? preferredWorkspaceRoot, Func<IJulieStoreClient> readerClientFactory,
+        bool? storeEnabledOverride = null) =>
         JsonSerializer.Serialize(
-            ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot, readerClientFactory),
+            ReadSnapshot(
+                registryDbPath,
+                telemetryDbPath,
+                workspaceId,
+                preferredWorkspaceRoot,
+                readerClientFactory,
+                storeEnabledOverride: storeEnabledOverride),
             JsonContext.DashboardSnapshot);
 
     public static string RenderRefreshJson(WorkspaceRefreshResult result) =>

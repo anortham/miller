@@ -181,19 +181,77 @@ public sealed class JulieExtractRunnerTests
         """;
 
     [Fact]
-    public void ParseSupportedExtensions_FlattensAllLanguages_LowercaseDotless_CaseInsensitiveSet()
+    public void ParseSupportedExtensions_FlattensExtensionsAndAddsReportedBasenames()
     {
         IReadOnlySet<string> set = JulieExtractRunner.ParseSupportedExtensions(LanguagesJson);
 
-        // Derived purely from the JSON: every claimed extension, normalized (leading dot stripped,
-        // lowercased), under a case-insensitive comparer; the empty entry is dropped, "R"/"r" collapse.
-        Assert.Equal(5, set.Count);
+        Assert.Equal(6, set.Count);
         Assert.Contains("rs", set);
         Assert.Contains("c", set);
         Assert.Contains("h", set);
         Assert.Contains("r", set);
         Assert.Contains("tsx", set);
+        Assert.Contains("file:NAMESPACE", set);
         Assert.Contains("TSX", set); // comparer, not data
+    }
+
+    [Fact]
+    public void ParseSupportedExtensions_AddsExactBasenamesOnlyForReportedLanguages()
+    {
+        const string json = """
+            { "languages": { "languages": [
+            { "language": "gomod", "extensions": [] },
+            { "language": "gosum", "extensions": [] },
+            { "language": "qmldir", "extensions": [] },
+            { "language": "ruby", "extensions": ["rb"] },
+            { "language": "toml", "extensions": ["toml"] },
+            { "language": "r", "extensions": ["r"] },
+            { "language": "bash", "extensions": ["sh"] },
+            { "language": "unrelated", "extensions": [] }
+            ] } }
+            """;
+
+        IReadOnlySet<string> set = JulieExtractRunner.ParseSupportedExtensions(json);
+
+        Assert.Contains("file:go.mod", set);
+        Assert.Contains("file:go.sum", set);
+        Assert.Contains("file:qmldir", set);
+        Assert.Contains("file:Gemfile", set);
+        Assert.Contains("file:Rakefile", set);
+        Assert.Contains("file:Pipfile", set);
+        Assert.Contains("file:NAMESPACE", set);
+        Assert.Contains("file:.bashrc", set);
+        Assert.Contains("file:.envrc", set);
+        Assert.DoesNotContain("go.mod", set);
+        Assert.DoesNotContain("go.sum", set);
+        Assert.DoesNotContain("qmldir", set);
+        Assert.DoesNotContain("Gemfile", set);
+        Assert.DoesNotContain("mod", set);
+        Assert.DoesNotContain("sum", set);
+    }
+
+    [Fact]
+    public void ParseSupportedExtensions_DoesNotAddBasenamesForUnreportedLanguages()
+    {
+        IReadOnlySet<string> set = JulieExtractRunner.ParseSupportedExtensions(
+            """{ "languages": { "languages": [{ "language": "gomod", "extensions": [] }] } }""");
+
+        Assert.Contains("file:go.mod", set);
+        Assert.DoesNotContain("file:go.sum", set);
+        Assert.DoesNotContain("file:qmldir", set);
+        Assert.DoesNotContain("file:Gemfile", set);
+        Assert.DoesNotContain("file:Pipfile", set);
+        Assert.DoesNotContain("file:NAMESPACE", set);
+        Assert.DoesNotContain("file:.bashrc", set);
+    }
+
+    [Fact]
+    public void ParseSupportedExtensions_KeepsReadingExtensionOnlyLanguageEntries()
+    {
+        IReadOnlySet<string> set = JulieExtractRunner.ParseSupportedExtensions(
+            """{ "languages": { "languages": [{ "extensions": ["cs"] }] } }""");
+
+        Assert.Contains("cs", set);
     }
 
     [Fact]

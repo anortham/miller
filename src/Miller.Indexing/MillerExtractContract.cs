@@ -14,8 +14,9 @@ internal static class MillerExtractContract
     public const long ExpectedSqliteSchemaVersion = 7;
     public const long ExpectedExtractContractVersion = 4;
     public const long ExpectedReportSchemaVersion = 3;
-    public const long ExpectedJsonlSchemaVersion = 5;
+    public static readonly long? ExpectedJsonlSchemaVersion =
+        JulieExtractVersionProbe.PinnedVersionSupportsStoreCli ? 5 : null;
     public const string ExpectedHashAlgorithm = "blake3";
 
-    public const string PinnedJulieExtractVersion = "2.42.0";
+    public const string PinnedJulieExtractVersion = "3.7.2";
 }

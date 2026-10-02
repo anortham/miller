@@ -20,12 +20,14 @@ public sealed class StoreReaderConsumerTests : IDisposable
 {
     private readonly string? _storeMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
 
+    public StoreReaderConsumerTests() =>
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, null);
+
     [Theory]
     [InlineData(WorkspaceRefreshMode.Background)]
     [InlineData(WorkspaceRefreshMode.None)]
     public void ReaderAdmissionBusy_DoesNotRefreshOrMarkTheRegisteredIndexMissing(WorkspaceRefreshMode mode)
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding,
@@ -34,13 +36,7 @@ public sealed class StoreReaderConsumerTests : IDisposable
         WorkspaceRegistryRow row = registry.UpsertSeen("workspace-a", "example", fixture.Binding.WorkspaceRoot,
             Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
         int refreshCalls = 0;
-        var refresh = new CrossWorkspaceRefreshService(registry,
-            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected scan."),
-            _ => { refreshCalls++; throw new InvalidOperationException("Unexpected refresh."); },
-            _ => 0, TimeSpan.Zero, TimeSpan.FromMilliseconds(1), _ => { },
-            () => DateTimeOffset.UtcNow, SymbolSearchSidecar.Disabled);
-        var provider = new WorkspaceIndexProvider(null, null, registry, refresh, SymbolSearchSidecar.Disabled,
-            new SupplementalEdgeCache(), new RevisionFactCacheStore(), new BackgroundRefreshGate(), readerClient: reader.Client);
+        var provider = CreateStoreEnabledProvider(registry, reader.Client, () => refreshCalls++);
 
         FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(
             () => provider.ResolveSymbolRead("workspace-a", mode));
@@ -57,7 +53,6 @@ public sealed class StoreReaderConsumerTests : IDisposable
     [InlineData("McpStatus")]
     public void ReaderAdmissionBusy_HealthPreservesRegistryAndReportsTemporaryUnavailable(string profileName)
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding,
@@ -67,7 +62,8 @@ public sealed class StoreReaderConsumerTests : IDisposable
             Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
 
         WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(registry, row, Enum.Parse<WorkspaceRegisteredFactsProfile>(profileName),
-            SymbolSearchSidecar.Disabled, new ContentCorpusSidecar(), readerClient: () => reader.Client);
+            SymbolSearchSidecar.Disabled, new ContentCorpusSidecar(), storeEnabled: true,
+            readerClient: () => reader.Client);
 
         Assert.Equal(row, registry.Get(row.WorkspaceId));
         Assert.Equal("reader_admission_busy", facts.FreshnessStatus);
@@ -76,18 +72,18 @@ public sealed class StoreReaderConsumerTests : IDisposable
     }
 
     [Fact]
-    public void IndexerLevelReadUsesTheWorkspaceProducer()
+    public void IndexLevelReadWithDisabledStoreModeRefusesAnActivePointer()
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
         WorkspaceContext workspace = WorkspaceContext.Create(fixture.Binding.WorkspaceRoot, fixture.Root, fixture.Root)
             with { ReaderClient = reader.Client };
 
-        Assert.Equal("full", IndexerService.ReadIndexLevel(workspace));
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() => IndexerService.ReadIndexLevel(workspace));
 
-        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(FamilyStoreReadFailure.BindingNotReady, error.Failure);
+        Assert.Empty(reader.Events);
         Assert.Equal(0, reader.Owed);
     }
 
@@ -120,18 +116,17 @@ public sealed class StoreReaderConsumerTests : IDisposable
     }
 
     [Fact]
-    public void VectorFamilyDiscoveryUsesTheWorkspaceProducerWithoutOpeningVectors()
+    public void VectorFamilyDiscoverySkipsRetainedStoreUnderPinnedStandaloneMode()
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
         WorkspaceContext workspace = WorkspaceContext.Create(fixture.Binding.WorkspaceRoot, fixture.Root, fixture.Root)
             with { ReaderClient = reader.Client };
 
-        Assert.Equal(fixture.Binding.StoreRoot, VectorConvergeService.FamilyStoreRootFor(workspace));
+        Assert.Null(VectorConvergeService.FamilyStoreRootFor(workspace));
 
-        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Empty(reader.Events);
         Assert.Equal(0, reader.Owed);
         Assert.False(File.Exists(Path.Combine(fixture.Binding.StoreRoot, "vectors.db")));
     }
@@ -139,20 +134,13 @@ public sealed class StoreReaderConsumerTests : IDisposable
     [Fact]
     public void UnboundWorkspaceProviderServesAndProbesWithItsConfiguredProducer()
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(fixture.Root, "registry.db"));
         WorkspaceRegistryRow row = registry.UpsertSeen("workspace-a", "example", fixture.Binding.WorkspaceRoot,
             Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
-        string unusedProducer = Path.Combine(fixture.Root, "unused-producer");
-        File.WriteAllText(unusedProducer, "A no-refresh read must never execute this file.");
-        var refresh = new CrossWorkspaceRefreshService(registry,
-            new JulieExtractRunner(unusedProducer), SymbolSearchSidecar.Disabled,
-            ScanGovernor.FromEnvironment(fixture.Root));
-        var provider = new WorkspaceIndexProvider(null, null, registry, refresh, SymbolSearchSidecar.Disabled,
-            new SupplementalEdgeCache(), new RevisionFactCacheStore(), new BackgroundRefreshGate(), readerClient: reader.Client);
+        var provider = CreateStoreEnabledProvider(registry, reader.Client, static () => { });
         Assert.Empty(reader.Events);
 
         using (WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("workspace-a", WorkspaceRefreshMode.None))
@@ -163,7 +151,7 @@ public sealed class StoreReaderConsumerTests : IDisposable
         }
         Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
         reader.Events.Clear();
-        Assert.True(WorkspaceIndexProvider.HasReadableIndex(row, true, reader.Client));
+        Assert.True(WorkspaceIndexProvider.HasReadableIndex(row, storeEnabled: true, readerClient: reader.Client));
         Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
         Assert.Equal(0, reader.Owed);
     }
@@ -203,4 +191,42 @@ public sealed class StoreReaderConsumerTests : IDisposable
     }
 
     public void Dispose() => Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, _storeMode);
+
+    private static WorkspaceIndexProvider CreateStoreEnabledProvider(
+        WorkspaceRegistry registry,
+        IJulieStoreClient reader,
+        Action onUnexpectedRefresh)
+    {
+        WorkspaceRefreshResult UnexpectedRefresh(string _)
+        {
+            onUnexpectedRefresh();
+            throw new InvalidOperationException("The test must not refresh this workspace.");
+        }
+
+        return new WorkspaceIndexProvider(
+            holder: null,
+            currentWorkspace: null,
+            registry: registry,
+            refresh: UnexpectedRefresh,
+            loadIndex: _ => throw new InvalidOperationException("The family store read must not load a legacy index."),
+            loadSymbolSearch: _ => throw new InvalidOperationException("The family store read must not load a legacy symbol projection."),
+            loadContentSearch: (_, _) => throw new InvalidOperationException("The family store read must not load a legacy content projection."),
+            loadTextContentSearch: (_, _) => throw new InvalidOperationException("The family store read must not load a legacy text index."),
+            loadRegionSearch: (_, _) => throw new InvalidOperationException("The family store read must not load a legacy region index."),
+            currentIndexFresh: _ => true,
+            sidecar: SymbolSearchSidecar.Disabled,
+            openReadSession: (databasePath, root, workspaceId) => WorkspaceReadSessionFactory.Open(
+                databasePath,
+                root,
+                workspaceId,
+                storeEnabled: true,
+                factCacheStore: null,
+                readerClientFactory: () => reader),
+            scheduleBackgroundRefresh: _ => { },
+            hasReadableIndex: row => WorkspaceIndexProvider.HasReadableIndex(
+                row,
+                storeEnabled: true,
+                readerClient: reader),
+            backgroundRefreshGate: new BackgroundRefreshGate());
+    }
 }

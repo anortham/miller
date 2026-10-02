@@ -247,6 +247,109 @@ public sealed class ContentCorpusWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_PreservesFamilyImportsBeforeLocalImportsAndDeduplicatesBySourceId()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        var store = new ContentCorpusExternalStore();
+        string familyContentPath = Path.Combine(_dir, "family", "content.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(familyContentPath)!);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        ContentCorpusWriter.Write(familyContentPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+
+        string sharedFile = Path.Combine(_dir, "shared.log");
+        string localWebFile = Path.Combine(_dir, "local-page.md");
+        string familyWebFile = Path.Combine(_dir, "family-page.md");
+        string localOnlyWebFile = Path.Combine(_dir, "local-only.md");
+        File.WriteAllText(sharedFile, "LocalExternalMarker");
+        File.WriteAllText(localWebFile, "LocalWebMarker");
+        File.WriteAllText(familyWebFile, "FamilyWebMarker");
+        File.WriteAllText(localOnlyWebFile, "LocalOnlyWebMarker");
+        ExternalContentImportResult localExternal = store.Import(
+            _contentDbPath, sharedFile, displayPath: "shared.log");
+        ExternalContentImportResult localWeb = store.ImportMarkdown(
+            _contentDbPath, localWebFile, "https://example.test/shared", displayPath: "shared");
+        store.ImportMarkdown(
+            _contentDbPath, localOnlyWebFile, "https://example.test/local", displayPath: "local");
+        File.WriteAllText(sharedFile, "FamilyExternalMarker");
+        ExternalContentImportResult familyExternal = store.Import(
+            familyContentPath, sharedFile, displayPath: "shared.log");
+        ExternalContentImportResult familyWeb = store.ImportMarkdown(
+            familyContentPath, familyWebFile, "https://example.test/shared", displayPath: "shared");
+
+        Assert.Equal(localExternal.SourceId, familyExternal.SourceId);
+        Assert.Equal(localWeb.SourceId, familyWeb.SourceId);
+        ContentCorpusFacts facts = ContentCorpusWriter.Write(
+            _contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "workspace-1",
+            revision: 2,
+            preserveExternalContentFrom: [familyContentPath]);
+
+        Assert.Equal(4, facts.SourceCount);
+        Assert.Single(store.Search(_contentDbPath, "FamilyExternalMarker", TextContentKind.ExternalFile, limit: 5));
+        Assert.Empty(store.Search(_contentDbPath, "LocalExternalMarker", TextContentKind.ExternalFile, limit: 5));
+        Assert.Single(store.Search(_contentDbPath, "FamilyWebMarker", TextContentKind.Web, limit: 5));
+        Assert.Empty(store.Search(_contentDbPath, "LocalWebMarker", TextContentKind.Web, limit: 5));
+        Assert.Single(store.Search(_contentDbPath, "LocalOnlyWebMarker", TextContentKind.Web, limit: 5));
+    }
+
+    [Fact]
+    public void Write_RefusesPromotionWhenRequiredFamilyContentSourceIsMissing()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        byte[] original = File.ReadAllBytes(_contentDbPath);
+        string missingPath = Path.Combine(_dir, "missing-family-content.db");
+
+        Assert.Throws<FileNotFoundException>(() => ContentCorpusWriter.Write(
+            _contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "workspace-1",
+            revision: 2,
+            preserveExternalContentFrom: [missingPath]));
+
+        Assert.False(File.Exists(missingPath));
+        Assert.Equal(original, File.ReadAllBytes(_contentDbPath));
+    }
+
+    [Fact]
+    public void Write_RefusesPromotionWhenRequiredFamilyContentSourceIsMalformed()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        string malformedPath = Path.Combine(_dir, "malformed-family-content.db");
+        File.WriteAllText(malformedPath, "not a SQLite database");
+
+        ContentImportPreservationException exception = Assert.Throws<ContentImportPreservationException>(() =>
+            ContentCorpusWriter.Write(
+                contentDbPath,
+                fx.DbPath,
+                fx.WorkspaceRoot,
+                "workspace-1",
+                revision: 2,
+                preserveExternalContentFrom: [malformedPath]));
+
+        Assert.IsType<InvalidDataException>(exception.InnerException);
+        Assert.Contains("not a SQLite database", ContentCorpusWriter.TryReadPreservationFailure(contentDbPath));
+        Assert.Equal("preservation_blocked", new ContentCorpusSidecar().Inspect(fx.DbPath, expectedRevision: 2).State);
+        Assert.False(File.Exists(contentDbPath));
+    }
+
+    [Fact]
     public void Write_DifferentSchemaVersionWithCompatibleImportShape_PreservesImportedSource()
     {
         using var fx = JulieDbFixture.Create(

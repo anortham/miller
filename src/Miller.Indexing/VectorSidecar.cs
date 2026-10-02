@@ -688,8 +688,7 @@ public sealed class VectorSidecar
         WorkspaceReadSessionFactory.Open(
             Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
-            workspaceId: null,
-            storeEnabled: true);
+            workspaceId: null);
 }
 
 /// <summary>

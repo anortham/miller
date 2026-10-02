@@ -91,12 +91,29 @@ public sealed class CliDispatchTests : IDisposable
         return (code, stdout.ToString(), stderr.ToString());
     }
 
+    private static (int Code, string Out, string Err) RunWithoutJulieOnPath(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx)
+    {
+        string? previousPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", string.Empty);
+        try
+        {
+            return Run(args, ctx);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+    }
+
     private (int Code, string Out, string Err) RunFamilyStore(
         MinimalFamilyStoreFixture fixture,
         IReadOnlyList<string> args,
         bool sidecarEnabled = false,
         bool boundedFacts = true)
     {
+        using IDisposable storeMode = WorkspaceReadSessionFactory.UseStoreModeForTests(true);
         string? previousStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
         string? previousSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
         string? previousSemantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
@@ -366,11 +383,11 @@ public sealed class CliDispatchTests : IDisposable
         Assert.StartsWith(MillerVersion.Current, root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.42.0", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("3.7.2", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(7, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(4, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
-        Assert.Equal(5, julie.GetProperty("jsonl_schema_version").GetInt64());
+        Assert.Equal(JsonValueKind.Null, julie.GetProperty("jsonl_schema_version").ValueKind);
         Assert.Equal("blake3", julie.GetProperty("hash_algorithm").GetString());
         Assert.Equal(
             SemanticQueryPolicy.PolicyVersion,
@@ -4080,13 +4097,10 @@ public sealed class CliDispatchTests : IDisposable
         string dbPath = Path.Combine(targetRoot, ".miller", "symbols.db");
         SeedRegisteredWorkspace("target-ws", "target-111111111111", targetRoot, dbPath);
 
-        var (code, _, errText) = Run(
+        var (code, _, errText) = RunWithoutJulieOnPath(
             new[] { "workspace", "full", "--workspace", targetRoot, "--json" },
             Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
 
-        // The selector must reach the registered row (and then fail on the missing julie-extract tool,
-        // exit 3) rather than being silently dropped onto the unregistered current workspace (exit 2,
-        // "current workspace is not registered") — the 2026-06-11 Eros fleet wrong-target finding.
         Assert.Equal(3, code);
         Assert.Contains("cannot refresh", errText);
     }
@@ -4142,7 +4156,7 @@ public sealed class CliDispatchTests : IDisposable
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
         SeedRegisteredWorkspace("target-ws", "target-111111111111", root, dbPath);
 
-        var (code, outText, errText) = Run(
+        var (code, outText, errText) = RunWithoutJulieOnPath(
             new[] { "refresh", "--json", "--wait", "--workspace-id", "target-ws" },
             Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
 
@@ -4290,16 +4304,13 @@ public sealed class CliDispatchTests : IDisposable
     [Fact]
     public void WorkspaceOpen_MissingTool_ExitsThree_AndDoesNotRegister()
     {
-        // R1: julie-extract is located BEFORE registration, so a missing tool fails with no orphan row.
-        // ctx.ToolsRoot defaults to <_dir>/.tools, which does not exist. Locate also searches PATH, so skip
-        // (don't risk spawning julie) if the binary is resolvable there.
-        Assert.SkipWhen(JulieResolvableOnPath(), "julie-extract is on PATH; cannot prove the missing-tool path here.");
-
-        var (code, _, errText) = Run(new[] { "workspace", "open" }, Context(Path.Combine(_dir, "symbols.db")));
+        var (code, _, errText) = RunWithoutJulieOnPath(
+            new[] { "workspace", "open" },
+            Context(Path.Combine(_dir, "symbols.db")));
 
         Assert.Equal(3, code);
         Assert.False(string.IsNullOrWhiteSpace(errText));
-        Assert.Empty(ListRegistry()); // Locate threw before UpsertSeen
+        Assert.Empty(ListRegistry());
     }
 
     [Fact]
@@ -5020,29 +5031,6 @@ public sealed class CliDispatchTests : IDisposable
         cmd.Parameters.AddWithValue("$last_scan_at", "2026-06-08T00:00:00.0000000Z");
         cmd.Parameters.AddWithValue("$last_revision", revision);
         cmd.ExecuteNonQuery();
-    }
-
-    // Whether `julie-extract` is resolvable on PATH (so an empty ToolsRoot would NOT fail Locate). Used to skip
-    // the missing-tool test rather than risk spawning julie in the fast suite.
-    private static bool JulieResolvableOnPath()
-    {
-        string? path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(path))
-            return false;
-        string[] names = OperatingSystem.IsWindows()
-            ? new[] { "julie-extract.exe", "julie-extract" }
-            : new[] { "julie-extract" };
-        foreach (string dir in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(dir))
-                continue;
-            foreach (string name in names)
-            {
-                try { if (File.Exists(Path.Combine(dir, name))) return true; }
-                catch { /* an unparseable PATH entry is not a julie hit */ }
-            }
-        }
-        return false;
     }
 
     private sealed class RecordingDashboardLauncher : IDashboardLauncher

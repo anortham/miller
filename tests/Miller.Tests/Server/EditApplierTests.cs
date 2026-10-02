@@ -269,6 +269,19 @@ public sealed class EditApplierTests : IDisposable
     }
 
     [Fact]
+    public void Apply_OnSuccess_PreservesUnrelatedMillerTempNamedFiles()
+    {
+        string path = Write("cleanother/c.cs", "orig\n");
+        string unrelated = Write("cleanother/user-data.miller-tmp-backup", "keep\n");
+        var plan = new PlannedEdit(path, "orig\n", "done\n", [new TextEdit(0, 1, "done\n")]);
+
+        var result = NewApplier().Apply([plan]);
+
+        Assert.True(result.Success);
+        Assert.Equal("keep\n", File.ReadAllText(unrelated));
+    }
+
+    [Fact]
     public void Apply_OnFailure_LeavesNoTempFiles()
     {
         string a = Write("cleanfail/a.cs", "a-orig\n");

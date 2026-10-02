@@ -56,7 +56,11 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/", (string? notice, string? detail) =>
             new RazorComponentResult<WorkspacesShell>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath, null, () => paths.ReaderClient),
+                Index = DashboardData.ReadIndex(
+                    paths.RegistryDbPath,
+                    paths.TelemetryDbPath,
+                    paths.StoreEnabledOverride,
+                    () => paths.ReaderClient),
                 Activity = DashboardData.ReadRecentActivity(
                     paths.TelemetryDbPath,
                     paths.RegistryDbPath,
@@ -85,7 +89,9 @@ internal static class DashboardEndpoints
                 paths.RegistryDbPath,
                 paths.TelemetryDbPath,
                 workspace_id,
-                launchDirectory, () => paths.ReaderClient);
+                launchDirectory,
+                () => paths.ReaderClient,
+                storeEnabledOverride: paths.StoreEnabledOverride);
             // A requested id that did not resolve must not silently render the fallback workspace —
             // or, on an empty registry, the empty workspace shell.
             if (!string.IsNullOrWhiteSpace(workspace_id) &&
@@ -133,7 +139,9 @@ internal static class DashboardEndpoints
                     paths.RegistryDbPath,
                     paths.TelemetryDbPath,
                     workspace_id,
-                    launchDirectory, () => paths.ReaderClient),
+                    launchDirectory,
+                    () => paths.ReaderClient,
+                    storeEnabledOverride: paths.StoreEnabledOverride),
             })
             {
                 PreventStreamingRendering = true,
@@ -153,7 +161,11 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/fragments/workspaces", () =>
             new RazorComponentResult<WorkspaceIndex>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath, null, () => paths.ReaderClient),
+                Index = DashboardData.ReadIndex(
+                    paths.RegistryDbPath,
+                    paths.TelemetryDbPath,
+                    paths.StoreEnabledOverride,
+                    () => paths.ReaderClient),
             })
             {
                 PreventStreamingRendering = true,
@@ -297,7 +309,9 @@ internal static class DashboardEndpoints
             paths.RegistryDbPath,
             paths.TelemetryDbPath,
             workspaceId,
-            launchDirectory, () => paths.ReaderClient);
+            launchDirectory,
+            () => paths.ReaderClient,
+            storeEnabledOverride: paths.StoreEnabledOverride);
         return new RazorComponentResult<WorkspaceDetailStack>(new
         {
             Snapshot = snapshot,
@@ -340,7 +354,11 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/index.json", () => Results.Text(
-            DashboardData.RenderIndexJson(paths.RegistryDbPath, paths.TelemetryDbPath, () => paths.ReaderClient),
+            DashboardData.RenderIndexJson(
+                paths.RegistryDbPath,
+                paths.TelemetryDbPath,
+                () => paths.ReaderClient,
+                paths.StoreEnabledOverride),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/activity.json", (string? workspace_id) => Results.Text(
@@ -352,7 +370,13 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(
-            DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id, launchDirectory, () => paths.ReaderClient),
+            DashboardData.RenderSnapshotJson(
+                paths.RegistryDbPath,
+                paths.TelemetryDbPath,
+                workspace_id,
+                launchDirectory,
+                () => paths.ReaderClient,
+                paths.StoreEnabledOverride),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/diagnostics.json", () => Results.Text(
@@ -392,13 +416,15 @@ internal static class DashboardEndpoints
             try
             {
                 using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
+                Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView =
+                    StoreViewRetirementRunner.ForToolsRoot(toolsRoot);
                 WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
                     registry,
                     workspaceId,
                     liveRoot: null,
                     protectedMillerDir: Path.GetDirectoryName(registryDbPath),
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot),
-                    awaitProducerRetirement: false);
+                    retireView: retireView,
+                    awaitProducerRetirement: retireView is null);
                 code = result.Result switch
                 {
                     WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted => "removed",
@@ -440,13 +466,15 @@ internal static class DashboardEndpoints
         try
         {
             using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
+            Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView =
+                StoreViewRetirementRunner.ForToolsRoot(toolsRoot);
             WorkspaceRegistryPrune.Result result =
                 WorkspaceRegistryPrune.Run(
                     registry,
                     protectedWorkspaceId: null,
                     dryRun: false,
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot),
-                    awaitProducerRetirement: false);
+                    retireView: retireView,
+                    awaitProducerRetirement: retireView is null);
             // A kept row is the normal outcome, not a failure: a run that hits the per-run retirement cap, or a
             // row whose removal it cannot confirm, still prunes everything else. Reporting an error whenever any
             // row was kept would show one on every registry that has a backlog — which is every registry that

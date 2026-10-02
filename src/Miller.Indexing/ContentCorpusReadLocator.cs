@@ -25,12 +25,12 @@ public static class ContentCorpusReadLocator
 
         if (!enabled)
         {
-            if (StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            if (StoreWorkspacePointer.Exists(workspaceRoot))
             {
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.BindingNotReady,
-                    $"Store mode is disabled but workspace '{workspaceRoot}' still has an active store pointer; " +
-                    "export the active view before serving the legacy content corpus.");
+                    $"Store mode is disabled but workspace '{workspaceRoot}' still has a store pointer; " +
+                    "rebuild the standalone artifact from source before serving it.");
             }
 
             return new ContentCorpusReadLocation(ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath));

@@ -12,7 +12,7 @@ public sealed class ReaderRetentionLanguageScaleTests(ITestOutputHelper output)
     [Fact]
     public void AdmittedSnapshotServesEveryProducerLanguageAndReleasesItsRegistration()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         using var catalog = JsonDocument.Parse(ScaleTestSupport.RunJulie(binary, "languages", "--json"));
         JsonElement[] languages = catalog.RootElement.GetProperty("languages").GetProperty("languages")
             .EnumerateArray().ToArray();

@@ -33,7 +33,8 @@ public sealed class ScaleTraitConventionTests
 {
     // The substrings that mark a test as julie-extract-spawning. Referencing any means the test launches the
     // real binary and therefore must be excluded from the default suite.
-    private static readonly string[] JulieLaunchSignals = ["RequireJulieServer", "LocateJulieServer", "RunJulie"];
+    private static readonly string[] JulieLaunchSignals = [
+        "RequireJulieServer", "RequireJulieStoreServer", "LocateJulieServer", "RunJulie"];
 
     // The same, for the pinned julie-semantic-sidecar binary.
     private static readonly string[] SemanticLaunchSignals = ["RequireSemanticSidecar", "LocateSemanticSidecar"];

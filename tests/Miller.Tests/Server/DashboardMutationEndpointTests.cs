@@ -8,7 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Miller.Dashboard;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -110,6 +112,56 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         Assert.Contains("notice=removed", response.Headers.Location!.ToString());
         Assert.False(Directory.Exists(millerDir), "the .miller index dir must be deleted");
         Assert.Null(FindRow("ws-a"));
+    }
+
+    [Fact]
+    public async Task RemovePost_WithUnsupportedStoreProducer_KeepsStoreMemberRegistered()
+    {
+        Assert.False(JulieExtractVersionProbe.PinnedVersionSupportsStoreCli);
+        using StoreFixture fixture = StoreFixture.Create();
+        string root = fixture.Binding.WorkspaceRoot;
+        string millerDir = Path.Combine(root, ".miller");
+        string indexDbPath = Path.Combine(millerDir, "symbols.db");
+        Directory.CreateDirectory(millerDir);
+        StoreWorkspacePointer.Write(root, fixture.Binding);
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_paths.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-store", "store-abcd1234", root, indexDbPath, WorkspaceRegistryState.Ready);
+            registry.GetOrCreateStoreFamily(
+                "dashboard-retirement-lineage",
+                canonicalCommonDir: null,
+                commonDirCreatedAtUtc: null,
+                storesRoot: fixture.Binding.StoreRoot,
+                mintFamilyId: () => fixture.Binding.FamilyId);
+            registry.UpsertStoreMember(
+                "ws-store",
+                fixture.Binding.FamilyId,
+                fixture.Binding.ViewId,
+                root,
+                WorkspaceRootIdentity.Unknown);
+        }
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+        (string token, string cookie) = await GetAntiforgeryAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/workspace/remove")
+        {
+            Content = new FormUrlEncodedContent(
+            [
+                new KeyValuePair<string, string>("workspace_id", "ws-store"),
+                new KeyValuePair<string, string>("__RequestVerificationToken", token),
+            ]),
+        };
+        request.Headers.Add("Cookie", cookie);
+
+        HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Contains("notice=remove-error", response.Headers.Location!.ToString());
+        Assert.NotNull(FindRow("ws-store"));
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_paths.RegistryDbPath))
+            Assert.NotNull(registry.GetStoreMember("ws-store"));
+        Assert.True(Directory.Exists(millerDir));
+        Assert.True(StoreWorkspacePointer.Exists(root));
     }
 
     [Fact]

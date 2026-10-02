@@ -136,6 +136,55 @@ public sealed class ContinuousTestRevisionPollerTests
     }
 
     [Fact]
+    public async Task Moving_cursor_retry_preserves_source_rebuild_guidance_without_advancing_or_enqueuing()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-moving-cursor-migration-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 1);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(2));
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                Freshness: null,
+                IndexFresh: false,
+                Status: "source_rebuild_required",
+                ObservedAt: DateTimeOffset.UtcNow,
+                Reason: "BindingNotReady: active store pointer prevents standalone reads"));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "moving_cursor",
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("source_rebuild_required", result.Status);
+            Assert.Equal(
+                "source_rebuild_required: BindingNotReady: active store pointer prevents standalone reads",
+                result.Reason);
+            Assert.Equal(2, source.RefreshCount);
+            Assert.Equal(1, impact.Calls);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+            Assert.Empty(enqueuer.Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public async Task Moving_cursor_reconciliation_stops_after_three_total_attempts()
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-drift-bound-").FullName;
@@ -302,6 +351,164 @@ public sealed class ContinuousTestRevisionPollerTests
     }
 
     [Fact]
+    public async Task Rebuild_persists_the_new_baseline_and_resumes_delta_tracking()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-rebuild-baseline-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            store.SaveLastReconciledCursor(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey("gen-old", 9));
+            var next = new CtFreshnessKey("gen-new", 1);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, next, true, "fresh", DateTimeOffset.UtcNow, Rebuild: true));
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, next, true, "fresh", DateTimeOffset.UtcNow));
+            var nextRevision = new CtFreshnessKey("gen-new", 2);
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, nextRevision, true, "fresh", DateTimeOffset.UtcNow));
+            var impact = new ScriptedImpactSource { Result = ChangedImpact(1, 2) };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+            int rebuilds = 0;
+            ContinuousTestRevisionPollRequest request = Request(workspace, enqueuer, armed: true) with
+            {
+                OnRebuild = _ => rebuilds++,
+            };
+
+            ContinuousTestRevisionPollResult rebuilt = await poller.PollAsync(request, TestContext.Current.CancellationToken);
+            ContinuousTestRevisionPollResult settled = await poller.PollAsync(request, TestContext.Current.CancellationToken);
+            ContinuousTestRevisionPollResult changed = await poller.PollAsync(request, TestContext.Current.CancellationToken);
+
+            Assert.Equal("rebuild", rebuilt.Reason);
+            Assert.Equal("same_revision", settled.Reason);
+            Assert.Equal("enqueued", changed.Reason);
+            Assert.Equal(1, rebuilds);
+            Assert.Equal(1, impact.Calls);
+            Assert.Equal(nextRevision, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+            ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
+            Assert.Equal(1, change.DeltaFromRevision);
+            Assert.Equal(2, change.DeltaToRevision);
+
+            var restartedSource = new ScriptedRevisionSource();
+            restartedSource.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, nextRevision, true, "fresh", DateTimeOffset.UtcNow));
+            var restarted = new ContinuousTestRevisionPoller(restartedSource, impact, cursorStore: store);
+            ContinuousTestRevisionPollResult afterRestart = await restarted.PollAsync(
+                Request(workspace, new RecordingEnqueuer(), armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("same_revision", afterRestart.Reason);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Rebuild_callback_failure_leaves_the_old_cursor_and_retries()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-rebuild-callback-failure-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var old = new CtFreshnessKey("gen-old", 9);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, old);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey("gen-new", 1),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow));
+            var poller = new ContinuousTestRevisionPoller(source, cursorStore: store);
+            var enqueuer = new RecordingEnqueuer();
+            int attempts = 0;
+            ContinuousTestRevisionPollRequest request = Request(workspace, enqueuer, armed: true) with
+            {
+                OnRebuild = _ =>
+                {
+                    if (++attempts == 1)
+                        throw new InvalidOperationException("invalidation failed");
+                },
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => poller.PollAsync(request, TestContext.Current.CancellationToken));
+            Assert.Equal(old, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(request, TestContext.Current.CancellationToken);
+
+            Assert.Equal("rebuild", result.Reason);
+            Assert.Equal(2, attempts);
+            Assert.Equal(new CtFreshnessKey("gen-new", 1), store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+            Assert.Empty(enqueuer.Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Rebuild_cursor_save_failure_keeps_the_old_baseline_until_persistence_succeeds()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-rebuild-cursor-failure-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            string dbPath = CtSchema.DbPathFor(root);
+            using var store = new ContinuousTestStore(dbPath);
+            var old = new CtFreshnessKey("gen-old", 9);
+            var rebuilt = new CtFreshnessKey("gen-new", 1);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, old);
+            Execute(dbPath,
+                "CREATE TRIGGER reject_cursor_insert BEFORE INSERT ON ct_revision_cursors " +
+                "BEGIN SELECT RAISE(ABORT, 'cursor save rejected'); END; " +
+                "CREATE TRIGGER reject_cursor_update BEFORE UPDATE ON ct_revision_cursors " +
+                "BEGIN SELECT RAISE(ABORT, 'cursor save rejected'); END;");
+
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, rebuilt, true, "fresh", DateTimeOffset.UtcNow));
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId, rebuilt, true, "fresh", DateTimeOffset.UtcNow));
+            var poller = new ContinuousTestRevisionPoller(source, cursorStore: store);
+            var enqueuer = new RecordingEnqueuer();
+            int invalidations = 0;
+            ContinuousTestRevisionPollRequest request = Request(workspace, enqueuer, armed: true) with
+            {
+                OnRebuild = _ => invalidations++,
+            };
+
+            ContinuousTestRevisionReadResult first = await poller.ReadAsync(request, TestContext.Current.CancellationToken);
+            Assert.Throws<SqliteException>(() => poller.ApplyRead(request, first));
+            Assert.Equal(old, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+
+            ContinuousTestRevisionReadResult retry = await poller.ReadAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal("rebuild", retry.Reason);
+            Assert.Equal(old, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+
+            Execute(dbPath, "DROP TRIGGER reject_cursor_insert; DROP TRIGGER reject_cursor_update;");
+            ContinuousTestRevisionPollResult result = poller.ApplyRead(request, retry);
+
+            Assert.Equal("rebuild", result.Reason);
+            Assert.Equal(2, invalidations);
+            Assert.Equal(rebuilt, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+            Assert.Empty(enqueuer.Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public async Task Complete_changed_delta_enqueues_project_scope_after_start()
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-poller-").FullName;
@@ -394,17 +601,19 @@ public sealed class ContinuousTestRevisionPollerTests
             var source = new ScriptedRevisionSource();
             source.Observations.Enqueue(new ContinuousTestRevisionObservation(
                 EngineTestSupport.WorkspaceId,
-                Freshness: null,
+                Freshness: new CtFreshnessKey(FixtureIdentity, 9),
                 IndexFresh: false,
                 Status: "degraded",
-                ObservedAt: DateTimeOffset.UtcNow));
+                ObservedAt: DateTimeOffset.UtcNow,
+                Reason: "path permission denied"));
             var enqueuer = new RecordingEnqueuer();
             var poller = new ContinuousTestRevisionPoller(source, new ScriptedImpactSource());
             ContinuousTestRevisionPollResult result = await poller.PollAsync(
                 Request(workspace, enqueuer, armed: true),
                 TestContext.Current.CancellationToken);
             Assert.Empty(enqueuer.Changes);
-            Assert.Equal("degraded", result.Reason);
+            Assert.Equal("degraded", result.Status);
+            Assert.Equal("degraded: path permission denied", result.Reason);
         }
         finally
         {

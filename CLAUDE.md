@@ -19,11 +19,12 @@ This file is a rules and onboarding doc. Design history, field reports, and rati
 - `julie-extractors` / `julie-extract` owns extraction and standalone extract workflows. Do not
   absorb them, and do not add fleet-level semantic surfaces (cross-workspace ranking, guidance/
   confidence views, embeddings-as-a-service) — those were reserved by the retired Eros.
-- The family store is a shared contract: `julie-extract` writes `store.db`/`coord.db`/manifests;
-  Miller reads a pinned view and writes its own sidecars. Both repos have the same owner — when the
-  store is wedged, repair it directly and fix the root cause in whichever repo owns it. Store mode
-  is default-on; `MILLER_INDEX_STORE=off` exports to the legacy artifact first — never serve a
-  stale legacy artifact.
+- The pinned Julie 3.x runtime writes standalone SQLite artifacts; it removed the family-store
+  and export commands. Miller defaults to `.miller/symbols.db` per checkout. Existing family-store
+  workspaces must rebuild from source and preserve imported external/web content before removing
+  their workspace pointer; failures retain the pointer and original shared store. Never serve a
+  stale standalone artifact through an active store pointer. Historical store contracts remain
+  for recovery and fixture coverage. See [Julie 3.x migration](docs/julie-3-migration.md).
 - References are answered at query time (`QueryTimeResolver`, policy v6, `RevisionFactCache`).
   There is no materialized resolution; `views.resolution_state` is permanently `unbound`.
 - **Adding a new MCP tool requires explicit user approval.** Keep the MCP surface stingy: prefer

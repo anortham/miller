@@ -542,6 +542,39 @@ public sealed class WorkspaceRegistryTests : IDisposable
     }
 
     [Fact]
+    public void RemoveStoreMember_DetachesOnlyTheCapturedViewAndKeepsItsFamily()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string root = MakeDirectory("alpha");
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        registry.UpsertSeen(
+            "ws1",
+            "alpha-11111111",
+            canonicalRoot,
+            Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+        StoreFamilyRegistryRow family = registry.GetOrCreateStoreFamily(
+            "lineage-detach",
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storesRoot: MakeDirectory("stores"));
+        registry.UpsertStoreMember(
+            "ws1",
+            family.FamilyId,
+            "view-one",
+            canonicalRoot,
+            WorkspaceRootIdentity.Unknown);
+
+        Assert.False(registry.RemoveStoreMember("ws1", family.FamilyId, "view-other"));
+        Assert.NotNull(registry.GetStoreMember("ws1"));
+        Assert.True(registry.RemoveStoreMember("ws1", family.FamilyId, "view-one"));
+        Assert.Null(registry.GetStoreMember("ws1"));
+        Assert.NotNull(registry.GetStoreFamily(family.FamilyId));
+        Assert.True(registry.RemoveStoreMember("ws1", family.FamilyId, "view-one"));
+    }
+
+    [Fact]
     public void RegistryCanBeOpenedByMultipleProcessesAndSeeCommittedRows()
     {
         using var first = WorkspaceRegistry.Open(_dbPath);

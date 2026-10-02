@@ -2,6 +2,10 @@
 
 Status: active local contract for Eros-facing Miller CLI integration.
 
+Current source builds use Julie 3.x standalone artifacts. Family-store-specific sections below
+describe older builds and retained recovery contracts; Julie 3.x cannot execute store maintenance
+or export. See [Julie 3.x migration](../julie-3-migration.md). Read artifact paths from the report.
+
 Miller is the deterministic local code-intelligence core. Eros should consume Miller through stable CLI JSON,
 JSONL exports, and documented local artifacts instead of private Miller .NET types.
 
@@ -20,6 +24,7 @@ Required top-level fields:
 | `julie_extract.sqlite_schema_version` | Expected SQLite schema version in the extract/report contract. |
 | `julie_extract.extract_contract_version` | Expected extract data contract version. |
 | `julie_extract.report_schema_version` | Expected `julie-extract` report envelope version. |
+| `julie_extract.jsonl_schema_version` | Historical producer JSONL schema; `null` for Julie 3.x, which removed that export. Miller-owned JSONL feeds remain available. |
 | `julie_extract.hash_algorithm` | File-content hash algorithm Miller expects in `symbols.db`; currently `blake3`. |
 | `artifacts.search_sidecar_schema_version` | Miller-owned `.miller/search.db` schema version. |
 | `artifacts.content_corpus_schema_version` | Miller-owned `.miller/content.db` schema version. |

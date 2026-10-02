@@ -8,6 +8,7 @@ internal sealed record DashboardPaths(
     string Url)
 {
     internal Miller.Indexing.Store.IJulieStoreClient? ReaderClientOverride { get; init; }
+    internal bool? StoreEnabledOverride { get; init; }
 
     internal Miller.Indexing.Store.IJulieStoreClient ReaderClient =>
         ReaderClientOverride ?? Miller.Indexing.Store.JulieStoreClient.Locate(ToolsRoot);

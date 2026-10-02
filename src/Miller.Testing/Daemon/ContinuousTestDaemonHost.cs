@@ -181,6 +181,8 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 
     internal CtFreshnessKey? LatestFreshness;
 
+    internal string? PollStatusReason;
+
     /// <summary>
     /// Whether the LAST poll proved the context settled: a healthy answer whose saved cursor
     /// equals the live revision (the poller's <c>same_revision</c>). Any other answer — an
@@ -820,6 +822,7 @@ public sealed class ContinuousTestDaemonHost
                 // run has no other way to learn that. The reason string is what `tests status` prints
                 // as daemon.reason, so no new key is needed for the answer to reach a person.
                 string reason = _primary.Unavailable.StuckReason
+                    ?? _primary.PollStatusReason
                     ?? (_primary.StartedAt is null ? "status-only" : "idle");
                 TryWriteStatus(lease, CtDaemonLifecycleState.Running, reason);
                 Publish(Evaluate(reason, CtDaemonLifecycleState.Running, executing: false));
@@ -1569,6 +1572,20 @@ public sealed class ContinuousTestDaemonHost
 
         context.PollSettled = poll.Freshness is not null
             && string.Equals(poll.Reason, SettledPollReason, StringComparison.Ordinal);
+        if (string.Equals(poll.Status, "source_rebuild_required", StringComparison.Ordinal))
+        {
+            context.PollStatusReason =
+                $"{poll.Reason}; open or refresh this workspace to rebuild from source.";
+        }
+        else if (string.Equals(poll.Status, "degraded", StringComparison.Ordinal))
+        {
+            context.PollStatusReason = poll.Reason == "degraded" ? null : poll.Reason;
+        }
+        else if (poll.Freshness is not null)
+        {
+            context.PollStatusReason = null;
+        }
+
         if (!context.PollSettled)
             context.LastActivityAt = _options.Clock();
 
@@ -1584,7 +1601,7 @@ public sealed class ContinuousTestDaemonHost
             if (!unavailable)
                 context.Unavailable.RecordOther();
 
-            if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
+            if (string.Equals(poll.Status, "degraded", StringComparison.Ordinal))
             {
                 context.Backoff.RecordDegraded();
                 context.Watch.RecordError("degraded");

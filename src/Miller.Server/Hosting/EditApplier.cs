@@ -139,7 +139,6 @@ public sealed class EditApplier
 
             // --- 2. Atomic write with reverse-order rollback on any failure ---
             var written = new List<(string Path, string Original)>(plans.Count);
-            var tempFiles = new List<string>(plans.Count);
             try
             {
                 foreach (var plan in plans)
@@ -181,8 +180,7 @@ public sealed class EditApplier
             }
             finally
             {
-                // 3. Temp cleanup — delete any sibling temp the atomic-move writer may have left behind.
-                CleanTemps(plans, tempFiles);
+                CleanTemps(plans);
             }
         }
     }
@@ -268,17 +266,33 @@ public sealed class EditApplier
         catch (UnauthorizedAccessException) { return false; }
     }
 
-    // Best-effort: remove any *.miller-tmp* sibling left in each target's directory (a crashed move).
-    private static void CleanTemps(IReadOnlyList<PlannedEdit> plans, List<string> _)
+    private static void CleanTemps(IReadOnlyList<PlannedEdit> plans)
     {
-        var dirs = new HashSet<string>(StringComparer.Ordinal);
+        var prefixesByDirectory = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var plan in plans)
         {
             string dir = Path.GetDirectoryName(plan.FilePath) ?? ".";
-            if (!dirs.Add(dir) || !Directory.Exists(dir))
+            if (!prefixesByDirectory.TryGetValue(dir, out HashSet<string>? prefixes))
+            {
+                prefixes = new HashSet<string>(StringComparer.Ordinal);
+                prefixesByDirectory.Add(dir, prefixes);
+            }
+            prefixes.Add(Path.GetFileName(plan.FilePath) + TempSuffix);
+        }
+
+        foreach ((string dir, HashSet<string> prefixes) in prefixesByDirectory)
+        {
+            if (!Directory.Exists(dir))
                 continue;
             foreach (string f in Directory.EnumerateFiles(dir, "*" + TempSuffix + "*", SearchOption.TopDirectoryOnly))
             {
+                string name = Path.GetFileName(f);
+                bool belongsToTarget = prefixes.Any(prefix =>
+                    name.StartsWith(prefix, StringComparison.Ordinal)
+                    && Guid.TryParseExact(name.AsSpan(prefix.Length), "N", out _));
+                if (!belongsToTarget)
+                    continue;
+
                 try { File.Delete(f); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }
         }

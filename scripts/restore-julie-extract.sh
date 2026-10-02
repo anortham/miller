@@ -13,8 +13,9 @@
 # MILLER_JULIE_SOURCE=/path/to/julie-extractors to build julie-extract from that checkout and copy it
 # into .tools/.
 #
-# Only four triples exist upstream: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu,
-# x86_64-pc-windows-msvc. There is NO linux-arm64 and NO windows-arm64 asset.
+# Miller's release matrix uses four triples: aarch64-apple-darwin, x86_64-apple-darwin,
+# x86_64-unknown-linux-gnu, and x86_64-pc-windows-msvc. Julie also publishes aarch64 Linux and Windows
+# assets, but Miller does not package those targets.
 #
 # Usage:
 #   bash scripts/restore-julie-extract.sh
@@ -142,10 +143,10 @@ case "${OS}" in
 esac
 
 if [[ -z "${TRIPLE}" ]]; then
-  echo "error: unsupported platform '${OS}/${ARCH}'. julie-extract v$(read_pin .version) publishes only:" >&2
+  echo "error: unsupported platform '${OS}/${ARCH}'. Miller currently packages julie-extract for:" >&2
   echo "  macOS arm64 (aarch64-apple-darwin), macOS x64 (x86_64-apple-darwin)," >&2
   echo "  Linux x64 (x86_64-unknown-linux-gnu), Windows x64 (x86_64-pc-windows-msvc, via the .ps1 script)." >&2
-  echo "  No linux-arm64 / windows-arm64 prebuilt asset exists; build from source with cargo." >&2
+  echo "  Other upstream assets are not Miller release targets; build from source with cargo." >&2
   exit 1
 fi
 

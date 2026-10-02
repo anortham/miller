@@ -23,7 +23,7 @@ Miller keeps serving lexical-only. [Continuous testing](#continuous-testing) is 
 default: `tests status` is a cheap read that starts nothing; `tests start` / `miller tests serve` is the
 only daemon start. Set `MILLER_CT=off` for a permanent zero-work switch. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
-[40 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
+[supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
 across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had
 gaps. The full argument is
@@ -69,14 +69,14 @@ continuous testing (`tests enable`) then start it (`tests start`); status never 
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
-- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.26.3/miller-1.26.3-aarch64-apple-darwin.tar.gz),
-  [macOS x64](https://github.com/anortham/miller/releases/download/v1.26.3/miller-1.26.3-x86_64-apple-darwin.tar.gz),
-  [Linux x64](https://github.com/anortham/miller/releases/download/v1.26.3/miller-1.26.3-x86_64-unknown-linux-gnu.tar.gz),
-  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.26.3/miller-1.26.3-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
+- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-aarch64-apple-darwin.tar.gz),
+  [macOS x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-apple-darwin.tar.gz),
+  [Linux x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-unknown-linux-gnu.tar.gz),
+  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.29.1/miller-1.29.1-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
   sidecar, extract it, and point your MCP client at the binary. No .NET SDK or Node.js required.
 - **Any other MCP harness:** same binary, plus a routing block from `miller rules --harness <name>`.
 - **Source checkout (development):** needs the .NET 10 SDK, then
-  `bash scripts/restore-julie-extract.sh && dotnet build Miller.slnx -c Release`.
+  `bash scripts/restore-julie-extract.sh && bash scripts/restore-semantic-sidecar.sh && dotnet build Miller.slnx -c Release`.
 
 The minimal MCP config for clients you configure by hand (such as Antigravity in `~/.gemini/config/mcp_config.json`):
 
@@ -85,7 +85,7 @@ The minimal MCP config for clients you configure by hand (such as Antigravity in
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.26.3-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.29.1-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
@@ -183,8 +183,8 @@ or registered root path. The CLI also accepts `current` and `primary` and adds `
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.42.0 ships hand-written extractors
-for **40 languages**:
+Miller indexes what the pinned extractor parses. Source builds pin `julie-extract` 3.7.2,
+which supports **42 languages** (published Miller v1.29.1 bundles 2.42.0 with 40):
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
   `.hh`, `.hxx`, `.h++`), Go (`.go`), Zig (`.zig`), Swift (`.swift`), Java (`.java`),
@@ -199,7 +199,7 @@ for **40 languages**:
 - **Data, docs, and query:** SQL (`.sql`), JSON (`.json`, `.jsonl`, `.jsonc`), YAML (`.yml`, `.yaml`),
   TOML (`.toml`), XML (`.xml`, `.xsd`, `.wsdl`, and .NET project files such as `.csproj`, `.fsproj`,
   `.vbproj`, `.props`, `.targets`, `.slnx`, `.nuspec`, `.resx`), Markdown (`.md`, `.markdown`),
-  Regex (`.regex`)
+  Regex (`.regex`), Go modules (`go.mod`), Go checksums (`go.sum`)
 
 Depth is not uniform, and it should not be: the programming languages get symbols with real signatures,
 doc comments, identifiers, relationships, types, complexity metrics, and structural facts, while the
@@ -350,9 +350,10 @@ MCP client (Claude Code / Cursor / Codex / Antigravity)
 
 Design choices that follow from this:
 
-- The versioned family store is on by default: one producer-owned store serves a repository family,
-  while each checkout reads its own coherent view. Set `MILLER_INDEX_STORE=off` only for legacy
-  standalone compatibility; Miller exports the current view before rolling back.
+- Source builds use julie-extract 3.7.2 and a standalone `.miller/symbols.db` per checkout. Julie 3.x
+  removed the family-store commands. Older store-backed workspaces rebuild from source before
+  switching, preserving imported content and the original shared store. See the
+  [Julie 3.x migration guide](docs/julie-3-migration.md). Published v1.29.1 still uses Julie 2.42.0.
 - Lexical ranking stays deterministic in C#. The default-on semantic arm lives in a separate
   `vectors.db` and is fused after ranking, so disabling it (`MILLER_SEMANTIC=off`) leaves lexical
   output byte-identical.

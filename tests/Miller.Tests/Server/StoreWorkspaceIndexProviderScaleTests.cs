@@ -30,7 +30,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public void UnpublishedViewRecoversWithoutTheDowngradeOverride()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-unpublished-recovery-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -130,7 +130,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [InlineData(true)]
     public async Task BootstrapImportsAViewThatTheStoreNeverPublished(bool interruptedAfterViewCreation)
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(
             Path.GetTempPath(),
             "miller-store-bootstrap-unpublished-" + Guid.NewGuid().ToString("N"));
@@ -207,7 +207,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task AnOlderExtractorRefusesToImportIntoANewerFamily()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(
             Path.GetTempPath(),
             "miller-store-bootstrap-newer-family-" + Guid.NewGuid().ToString("N"));
@@ -403,7 +403,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task MissingFamilyStoreRootRebindsFromLegacyArtifact()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-partial-seed-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -497,7 +497,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task CliPrimaryReadsUseFamilyStoreWhenLegacyArtifactIsAbsent()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-cli-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -605,7 +605,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task StoreOffBootstrapReconcilesAnInterruptedRollbackMarkerFromSource()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-rollback-bootstrap-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -685,7 +685,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task BootstrapMigratesLegacyIntoTheFamilyStoreAndTheNextProcessReusesIt()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-bootstrap-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -838,7 +838,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public void ReleasedStoreAndLegacyArtifactProduceEqualPrimaryReadRows()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         string directory = Path.Combine(
             Path.GetTempPath(),
             "miller-store-read-scale-" + Guid.NewGuid().ToString("N"));

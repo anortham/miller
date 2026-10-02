@@ -54,7 +54,7 @@ public static class StoreMaintenanceRunner
     /// </summary>
     public static Func<string, StoreMaintenanceOutcome>? ForToolsRoot(string? toolsRoot)
     {
-        if (string.IsNullOrWhiteSpace(toolsRoot))
+        if (!JulieExtractVersionProbe.PinnedVersionSupportsStoreCli || string.IsNullOrWhiteSpace(toolsRoot))
             return null;
         string binary = Path.Combine(
             toolsRoot, OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");

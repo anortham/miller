@@ -6,6 +6,7 @@ using Miller.Server.Cli;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -346,11 +347,13 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     public void Refresh_MalformedStorePointer_ForcesSourceReconciliationBeforeServingLegacyArtifact()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        using StoreFixture store = StoreFixture.Create();
         string root = NewRoot("malformed-store-pointer");
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
         registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        StoreWorkspacePointer.Write(root, RegisterStoreMember(registry, store, "target-ws", root));
+        File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
         registry.MarkScanned("target-ws", revision: 1);
         bool? observedForce = null;
         var service = NewService(
@@ -358,10 +361,12 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             scan: (_, _, force, _, _) =>
             {
                 observedForce = force;
+                _ = SymbolsLevelArtifact.Create(Path.GetDirectoryName(dbPath)!);
                 return Report(root, dbPath, "target-ws", revision: 2);
             },
             acquireLock: _ => new NoopLease(),
-            storeClient: new UnexpectedStoreClient());
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false);
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
@@ -375,19 +380,22 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     public void Refresh_MalformedStorePointer_ClearsRollbackMarkersAfterSourceReconciliation()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        using StoreFixture store = StoreFixture.Create();
         string root = NewRoot("malformed-store-pointer-markers");
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        StoreWorkspacePointer.Write(root, RegisterStoreMember(registry, store, "target-ws", root));
         File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
         File.WriteAllText(Path.Combine(root, ".miller", "store-rollback.pending"), "stale-pending");
         File.WriteAllText(Path.Combine(root, ".miller", "store-rollback.recovery"), "stale-recovery");
-        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
             scan: (_, _, force, _, _) =>
             {
                 Assert.True(force);
+                _ = SymbolsLevelArtifact.Create(Path.GetDirectoryName(dbPath)!);
                 return Report(root, dbPath, "target-ws", revision: 2);
             },
             acquireLock: _ => new NoopLease(),
@@ -406,12 +414,14 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     public void Refresh_MalformedStorePointer_HonorsAutomaticBackoffThenReconciles()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        using StoreFixture store = StoreFixture.Create();
         string root = NewRoot("malformed-store-pointer-backoff");
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         string pointerPath = Path.Combine(root, ".miller", "store.json");
-        File.WriteAllText(pointerPath, "not-json");
         registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        StoreWorkspacePointer.Write(root, RegisterStoreMember(registry, store, "target-ws", root));
+        File.WriteAllText(pointerPath, "not-json");
         registry.MarkScanned("target-ws", revision: 1);
         DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
         var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
@@ -424,11 +434,13 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             {
                 scanCount++;
                 observedForce = force;
+                _ = SymbolsLevelArtifact.Create(Path.GetDirectoryName(dbPath)!);
                 return Report(root, dbPath, "target-ws", revision: 2);
             },
             acquireLock: _ => new NoopLease(),
             failurePolicyFor: (_, _) => policy,
-            storeClient: new UnexpectedStoreClient());
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false);
 
         WorkspaceRefreshResult deferred = service.Refresh("target-ws");
 
@@ -521,12 +533,16 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             acquireLock: _ => new NoopLease(),
             failurePolicyFor: (_, _) => policy,
             storeClient: new UnexpectedStoreClient(),
-            deleteStorePointer: _ => throw new IOException("pointer is locked"));
+            deleteStorePointer: _ => throw new InvalidOperationException("pointer is locked"));
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
         Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
         Assert.False(result.Scanned);
+        Assert.StartsWith(
+            "Source reconciliation completed, but rollback cleanup failed:",
+            result.Error,
+            StringComparison.Ordinal);
         Assert.Contains("pointer is locked", result.Error, StringComparison.Ordinal);
         Assert.Null(policy.Read());
         WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
@@ -536,7 +552,43 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_RollbackExportFailure_MarksRegistryErrorAndPreservesStoreBinding()
+    public void Refresh_RollbackExportDelegateFailureMarksRegistryErrorAndPreservesStoreBinding()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("rollback-export-delegate-failure");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        var binding = new StoreFamilyBinding(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Path.Combine(root, "family-store"),
+            "view-a",
+            PathCanonicalizer.CanonicalizeRoot(root),
+            StoreBindingState.Ready);
+        StoreWorkspacePointer.Write(root, binding);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan must not run after export failure"),
+            acquireLock: _ => new NoopLease(),
+            readArtifactId: _ => "legacy-before",
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false,
+            exportStoreRollback: (_, _, _, _) => throw new IOException("producer export failed"));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal("legacy-before", result.ArtifactId);
+        Assert.Contains("producer export failed", result.Error, StringComparison.Ordinal);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal(result.Error, row.LastError);
+        Assert.Equal(binding.FamilyId, StoreWorkspacePointer.Read(root)?.FamilyId);
+    }
+
+    [Fact]
+    public void Refresh_LatestRollbackSourceRebuildFailureMarksRegistryErrorAndPreservesStoreBinding()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("rollback-export-failure");
@@ -553,7 +605,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan must not run after rollback failure"),
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("source scan failed"),
             acquireLock: _ => new NoopLease(),
             readArtifactId: _ => "legacy-before",
             storeClient: new UnexpectedStoreClient(),
@@ -564,7 +616,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
         Assert.False(result.Scanned);
         Assert.Equal("legacy-before", result.ArtifactId);
-        Assert.Contains("Store rollback export failed", result.Error, StringComparison.Ordinal);
+        Assert.Contains("source scan failed", result.Error, StringComparison.Ordinal);
         WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
         Assert.Equal(WorkspaceRegistryState.Error, row.State);
         Assert.Equal(result.Error, row.LastError);
@@ -1972,6 +2024,29 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         string root = Path.Combine(_dir, name + "-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static StoreFamilyBinding RegisterStoreMember(
+        WorkspaceRegistry registry,
+        StoreFixture store,
+        string workspaceId,
+        string workspaceRoot)
+    {
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspaceRoot);
+        StoreFamilyRegistryRow family = registry.AdoptStoreFamily(
+            store.Binding.FamilyId,
+            "rollback-family-" + workspaceId,
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storeRoot: store.Binding.StoreRoot);
+        Assert.Equal(store.Binding.StoreRoot, family.StoreRoot);
+        registry.UpsertStoreMember(
+            workspaceId,
+            family.FamilyId,
+            store.Binding.ViewId,
+            canonicalRoot,
+            WorkspaceRootIdentity.Unknown);
+        return store.Binding with { WorkspaceRoot = canonicalRoot };
     }
 
     // workspaceId is retained only for caller readability/registry setup; the nested v1 report carries no

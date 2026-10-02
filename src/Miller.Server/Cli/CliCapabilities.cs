@@ -184,7 +184,7 @@ internal static class CliCapabilities
         sb.AppendLine($"sqlite_schema_version: {contract.SqliteSchemaVersion}");
         sb.AppendLine($"extract_contract_version: {contract.ExtractContractVersion}");
         sb.AppendLine($"report_schema_version: {contract.ReportSchemaVersion}");
-        sb.AppendLine($"jsonl_schema_version: {contract.JsonlSchemaVersion}");
+        sb.AppendLine($"jsonl_schema_version: {contract.JsonlSchemaVersion?.ToString() ?? "null"}");
         sb.AppendLine($"hash_algorithm: {contract.HashAlgorithm}");
         sb.AppendLine($"search_sidecar_schema_version: {SearchIndexWriter.SchemaVersion}");
         sb.AppendLine($"content_corpus_schema_version: {ContentCorpusSchema.SchemaVersion}");
@@ -238,7 +238,10 @@ internal static class CliCapabilities
             w.WriteNumber("sqlite_schema_version", contract.SqliteSchemaVersion);
             w.WriteNumber("extract_contract_version", contract.ExtractContractVersion);
             w.WriteNumber("report_schema_version", contract.ReportSchemaVersion);
-            w.WriteNumber("jsonl_schema_version", contract.JsonlSchemaVersion);
+            if (contract.JsonlSchemaVersion is { } jsonlSchemaVersion)
+                w.WriteNumber("jsonl_schema_version", jsonlSchemaVersion);
+            else
+                w.WriteNull("jsonl_schema_version");
             w.WriteString("hash_algorithm", contract.HashAlgorithm);
             w.WriteEndObject();
 

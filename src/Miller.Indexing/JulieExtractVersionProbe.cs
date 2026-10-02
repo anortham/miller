@@ -16,6 +16,18 @@ public static class JulieExtractVersionProbe
 {
     private static readonly Regex Semver = new(@"\d+\.\d+\.\d+", RegexOptions.Compiled);
 
+    /// <summary>Whether the pinned producer version has the family-store CLI used by Miller.</summary>
+    public static bool PinnedVersionSupportsStoreCli => SupportsStoreCli(MillerExtractContract.PinnedJulieExtractVersion);
+
+    /// <summary>Whether a reported producer version is in the supported family-store CLI range.</summary>
+    public static bool SupportsStoreCli(string? versionOutput)
+    {
+        string? version = ParseVersion(versionOutput);
+        return Version.TryParse(version, out Version? parsed)
+            && parsed is { Major: 2 }
+            && parsed >= new Version(2, 42, 0);
+    }
+
     /// <summary>Extract the first <c>X.Y.Z</c> token from a <c>julie-extract --version</c> line, or null if none.</summary>
     public static string? ParseVersion(string? versionOutput)
     {

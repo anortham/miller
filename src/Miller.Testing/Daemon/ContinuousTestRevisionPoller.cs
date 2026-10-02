@@ -50,7 +50,8 @@ public sealed record ContinuousTestRevisionObservation(
     bool IndexFresh,
     string Status,
     DateTimeOffset ObservedAt,
-    bool Rebuild = false);
+    bool Rebuild = false,
+    string? Reason = null);
 
 public sealed record ContinuousTestRevisionPollRequest
 {
@@ -222,7 +223,14 @@ public sealed class ContinuousTestRevisionPoller
         }
 
         if (observation.Freshness is not { } freshness || !observation.IndexFresh)
-            return Read(request.WorkspaceId, observation.Freshness, observation.Status, "degraded", observation: observation);
+        {
+            return Read(
+                request.WorkspaceId,
+                observation.Freshness,
+                observation.Status,
+                UnavailableObservationReason(observation),
+                observation: observation);
+        }
 
         if (observation.Rebuild || IdentityChanged(freshness))
         {
@@ -266,7 +274,14 @@ public sealed class ContinuousTestRevisionPoller
             }
 
             if (observation.Freshness is not { } retriedFreshness || !observation.IndexFresh)
-                return Read(request.WorkspaceId, observation.Freshness, observation.Status, "degraded", observation: observation);
+            {
+                return Read(
+                    request.WorkspaceId,
+                    observation.Freshness,
+                    observation.Status,
+                    UnavailableObservationReason(observation),
+                    observation: observation);
+            }
             if (observation.Rebuild || IdentityChanged(retriedFreshness))
             {
                 return Read(request.WorkspaceId, retriedFreshness, observation.Status, "rebuild", observation: observation) with
@@ -306,6 +321,13 @@ public sealed class ContinuousTestRevisionPoller
             impact?.ToRevision);
     }
 
+    private static string UnavailableObservationReason(ContinuousTestRevisionObservation observation) =>
+        observation.Reason is { Length: > 0 } detail
+            ? $"{observation.Status}: {detail}"
+            : observation.Status == "source_rebuild_required"
+                ? "source_rebuild_required"
+                : "degraded";
+
     public ContinuousTestRevisionPollResult ApplyRead(
         ContinuousTestRevisionPollRequest request,
         ContinuousTestRevisionReadResult readResult)
@@ -315,9 +337,15 @@ public sealed class ContinuousTestRevisionPoller
 
         if (readResult.RebuildDetected)
         {
-            if (_lastObserved != readResult.Freshness && readResult.Freshness is { } rebuilt)
-                request.OnRebuild?.Invoke(rebuilt);
-            _lastObserved = readResult.Freshness;
+            if (_lastObserved != readResult.Freshness && readResult.Freshness is { } rebuilt
+                && request.OnRebuild is { } onRebuild)
+            {
+                onRebuild(rebuilt);
+                SaveCursor(rebuilt);
+                _lastFresh = rebuilt;
+                _lastObserved = rebuilt;
+            }
+
             return Result(request.WorkspaceId, readResult.Freshness, readResult.Status, 0, "rebuild");
         }
 
@@ -331,7 +359,8 @@ public sealed class ContinuousTestRevisionPoller
             return Result(request.WorkspaceId, first, readResult.Status, 0, "status-only");
         }
 
-        if (readResult.Reason is "missing_revision" or "degraded" or "same_revision" or "unavailable_delta" or "no_projects")
+        if (readResult.Status is "degraded" or "source_rebuild_required"
+            || readResult.Reason is "missing_revision" or "same_revision" or "unavailable_delta" or "no_projects")
         {
             return Result(request.WorkspaceId, readResult.Freshness, readResult.Status, 0, readResult.Reason) with
             {
@@ -531,8 +560,39 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
                 ObservedAt: DateTimeOffset.UtcNow,
                 Rebuild: rebuild));
         }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or InvalidOperationException or FamilyStoreReadException)
+        catch (FamilyStoreReadException exception)
+        {
+            bool requiresSourceRebuild = false;
+            if (exception.Failure == FamilyStoreReadFailure.BindingNotReady)
+            {
+                try
+                {
+                    requiresSourceRebuild = WorkspaceReadSessionFactory.StorePointerRequiresSourceRebuild(workspaceRoot);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            return Task.FromResult<ContinuousTestRevisionObservation?>(new ContinuousTestRevisionObservation(
+                workspaceId,
+                Freshness: null,
+                IndexFresh: false,
+                Status: requiresSourceRebuild ? "source_rebuild_required" : "degraded",
+                ObservedAt: DateTimeOffset.UtcNow,
+                Reason: $"{exception.Failure}: {exception.Message}"));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Task.FromResult<ContinuousTestRevisionObservation?>(new ContinuousTestRevisionObservation(
+                workspaceId,
+                Freshness: null,
+                IndexFresh: false,
+                Status: "degraded",
+                ObservedAt: DateTimeOffset.UtcNow,
+                Reason: exception.Message));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return Task.FromResult<ContinuousTestRevisionObservation?>(new ContinuousTestRevisionObservation(
                 workspaceId,

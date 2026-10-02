@@ -37,4 +37,29 @@ public sealed class ContentCorpusReadLocatorTests
                 Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void DisabledStoreReadTreatsMalformedPointerAsRebuildRequired()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-content-locator-" + Guid.NewGuid().ToString("N"));
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        File.WriteAllText(Path.Combine(millerDir, "store.json"), "malformed");
+        try
+        {
+            FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() =>
+                ContentCorpusReadLocator.Resolve(
+                    Path.Combine(millerDir, "symbols.db"),
+                    root,
+                    storeEnabled: false));
+
+            Assert.Equal(FamilyStoreReadFailure.BindingNotReady, error.Failure);
+            Assert.Contains("rebuild the standalone artifact", error.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
 }

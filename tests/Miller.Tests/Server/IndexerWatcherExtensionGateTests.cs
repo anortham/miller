@@ -138,6 +138,22 @@ public sealed class IndexerWatcherExtensionGateTests
     }
 
     [Fact]
+    public void GateActive_ExcludedDirectoryEventsDoNotReachExtractOps()
+    {
+        using var temp = new TempDir();
+        var (service, ops) = NewLeader(temp.Path);
+        service.SetSupportedExtensionsForTest(CsOnly);
+        string excludedDirectory = System.IO.Path.Combine(temp.Path, ".env");
+        Directory.CreateDirectory(excludedDirectory);
+
+        service.HandleChangedForTest(WatcherChangeTypes.Created, excludedDirectory);
+        service.DrainForTest(headChanged: false);
+
+        Assert.Empty(ops.UpdatedPaths);
+        Assert.Equal(0, ops.ScanCount);
+    }
+
+    [Fact]
     public void NoGate_NullSet_KeepsTheHistoricalAcceptEverythingBehavior()
     {
         using var temp = new TempDir();

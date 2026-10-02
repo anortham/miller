@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
@@ -56,6 +57,19 @@ public static class StoreRollbackExporter
         string workspaceRoot,
         string legacyDatabasePath,
         IJulieStoreClient client,
+        IDisposable? heldWriterLease = null) =>
+        ExportIfRequired(
+            workspaceRoot,
+            legacyDatabasePath,
+            client,
+            JulieExtractVersionProbe.PinnedVersionSupportsStoreCli,
+            heldWriterLease);
+
+    internal static StoreRollbackExportResult ExportIfRequired(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        IJulieStoreClient client,
+        bool storeCliSupported,
         IDisposable? heldWriterLease = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -89,6 +103,15 @@ public static class StoreRollbackExporter
                 {
                     TryDeletePendingMarker(workspaceRoot);
                     return new StoreRollbackExportResult(false, null);
+                }
+
+                if (!storeCliSupported)
+                {
+                    return new StoreRollbackExportResult(
+                        false,
+                        "The pinned julie-extract has no family-store export command. Miller will rebuild the " +
+                        "standalone artifact from source before retiring this store pointer.",
+                        RequiresSourceRebuild: true);
                 }
 
                 if (TryCompletePendingCleanup(workspaceRoot, legacyDatabasePath, pointer, client) is { } pendingResult)
@@ -143,15 +166,204 @@ public static class StoreRollbackExporter
     }
 
     internal static string? DeletePointerAfterSourceRebuild(
+        WorkspaceRegistry registry,
         string workspaceRoot,
         string legacyDatabasePath,
+        string workspaceId,
+        long revision,
         IDisposable? heldWriterLease = null)
     {
+        ArgumentNullException.ThrowIfNull(registry);
         using SingleWriterLock? ownedWriterLease = heldWriterLease is null
             ? AcquireWriterLease(legacyDatabasePath)
             : null;
+
+        StoreWorkspacePointerDocument? pointer = null;
+        bool malformedPointer = false;
+        try
+        {
+            pointer = StoreWorkspacePointer.Read(workspaceRoot);
+        }
+        catch (StorePointerFormatException)
+        {
+            malformedPointer = true;
+        }
+
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspaceRoot);
+        WorkspaceRegistryRow? registeredWorkspace = registry.Get(workspaceId);
+        if (registeredWorkspace is null ||
+            !ArtifactRootIdentity.Matches(registeredWorkspace.CanonicalRoot, canonicalRoot))
+        {
+            throw new IOException(
+                "Cannot safely migrate family content because the registered workspace root does not match " +
+                "the source workspace.");
+        }
+
+        StoreMemberRegistryRow? member = registry.GetStoreMember(workspaceId);
+        StoreFamilyRegistryRow? family = null;
+        string? viewId = null;
+        string? familyContentPath = null;
+        if (member is not null)
+        {
+            EnsureRegisteredMemberRoot(member.WorkspaceRoot, canonicalRoot);
+            family = registry.GetStoreFamily(member.FamilyId)
+                ?? throw new IOException("The registered family for this store member is unavailable.");
+            EnsureStoreRootReachable(family.StoreRoot, family.FamilyId);
+            viewId = member.ViewId;
+            familyContentPath = StoreSidecarCatalog.PathFor(
+                family.StoreRoot,
+                StoreSidecarKind.Content,
+                member.ViewId);
+        }
+        else if (pointer is not null)
+        {
+            family = registry.GetStoreFamily(pointer.FamilyId)
+                ?? throw new IOException(
+                    "Cannot safely retry store pointer cleanup because its registered family is unavailable.");
+            EnsureStoreRootReachable(family.StoreRoot, family.FamilyId);
+            viewId = pointer.ViewId;
+            familyContentPath = StoreSidecarCatalog.PathFor(
+                family.StoreRoot,
+                StoreSidecarKind.Content,
+                pointer.ViewId);
+        }
+
+        if (pointer is not null)
+        {
+            if (family is null ||
+                !ArtifactRootIdentity.Matches(pointer.WorkspaceRoot, canonicalRoot) ||
+                (member is not null && (member.FamilyId != pointer.FamilyId ||
+                    !string.Equals(member.ViewId, pointer.ViewId, StringComparison.Ordinal))) ||
+                !ArtifactRootIdentity.Matches(
+                    PathCanonicalizer.CanonicalizeRoot(pointer.StoreRoot),
+                    PathCanonicalizer.CanonicalizeRoot(family.StoreRoot)))
+            {
+                throw new IOException(
+                    "Cannot safely retire the store pointer because its workspace/family/view identity does not " +
+                    "match the registered member.");
+            }
+        }
+        else if (malformedPointer && (member is null || family is null || viewId is null))
+        {
+            throw new IOException(
+                "Cannot safely retire the malformed store pointer because no matching registered family/view " +
+                "identity is available. Repair the workspace store membership and retry the source rebuild.");
+        }
+
+        var contentSources = new List<string>();
+        if (familyContentPath is not null && family is not null &&
+            ContentSourceExists(familyContentPath, family.StoreRoot, family.FamilyId))
+            contentSources.Add(familyContentPath);
+
+        string contentDatabasePath = Path.Combine(
+            Path.GetDirectoryName(legacyDatabasePath)
+                ?? throw new InvalidOperationException(
+                    $"Cannot determine the .miller directory for index DB path '{legacyDatabasePath}'."),
+            "content.db");
+        ContentCorpusWriter.Write(
+            contentDatabasePath,
+            legacyDatabasePath,
+            workspaceRoot,
+            workspaceId,
+            revision,
+            preserveExternalContentFrom: contentSources);
+
+        if (malformedPointer && member is not null && family is not null)
+        {
+            StoreWorkspacePointer.Write(
+                workspaceRoot,
+                new StoreFamilyBinding(
+                    member.FamilyId,
+                    family.StoreRoot,
+                    member.ViewId,
+                    canonicalRoot,
+                    StoreBindingState.Ready));
+        }
+
+        if (member is not null && !registry.RemoveStoreMember(workspaceId, member.FamilyId, member.ViewId))
+        {
+            throw new IOException(
+                "The standalone artifact was rebuilt, but the registered family/view changed before migration " +
+                "could detach it. The shared store was left untouched.");
+        }
+
         StoreWorkspacePointer.Delete(workspaceRoot);
         return TryDeletePendingMarker(workspaceRoot);
+    }
+
+    private static void EnsureStoreRootReachable(string storeRoot, Guid familyId)
+    {
+        try
+        {
+            string generationName = File.ReadAllText(Path.Combine(storeRoot, "CURRENT")).Trim();
+            if (!Regex.IsMatch(generationName, @"\Agen-[0-9]{3,}\z", RegexOptions.CultureInvariant))
+            {
+                throw new IOException(
+                    $"The registered family store root '{storeRoot}' has an invalid CURRENT pointer.");
+            }
+
+            string databasePath = PathCanonicalizer.CanonicalizeFile(
+                storeRoot,
+                Path.Combine(generationName, "store.db"));
+            if (!File.Exists(databasePath))
+                throw new IOException($"The registered family store root '{storeRoot}' has no serving store database.");
+
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM store_meta WHERE key = 'family_id'";
+            if (!Guid.TryParse(command.ExecuteScalar() as string, out Guid actualFamilyId) || actualFamilyId != familyId)
+            {
+                throw new IOException(
+                    $"The registered family store root '{storeRoot}' does not contain family '{familyId:D}'.");
+            }
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new IOException($"The registered family store root '{storeRoot}' is unavailable.", ex);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new IOException($"The registered family store root '{storeRoot}' is unavailable.", ex);
+        }
+        catch (SqliteException ex)
+        {
+            throw new IOException($"The registered family store root '{storeRoot}' cannot be read.", ex);
+        }
+    }
+
+    private static void EnsureRegisteredMemberRoot(string memberRoot, string canonicalRoot)
+    {
+        if (!ArtifactRootIdentity.Matches(memberRoot, canonicalRoot))
+        {
+            throw new IOException(
+                "Cannot safely migrate family content because the registered member root does not match the " +
+                "source workspace.");
+        }
+    }
+
+    private static bool ContentSourceExists(string path, string storeRoot, Guid familyId)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            EnsureStoreRootReachable(storeRoot, familyId);
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            EnsureStoreRootReachable(storeRoot, familyId);
+            return false;
+        }
     }
 
     private static StoreRollbackExportResult Export(

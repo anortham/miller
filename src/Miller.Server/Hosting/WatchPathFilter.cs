@@ -47,6 +47,8 @@ namespace Miller.Server.Hosting;
 /// </summary>
 public static class WatchPathFilter
 {
+    private const string ExactFileNamePrefix = "file:";
+
     // Whole-segment skip set. NOT an extension list — these are directory names anywhere in the path.
     // Must CONTAIN julie-extract's published hard_exclude_directories (the extractor refuses these regardless
     // of ignore files; Miller's watcher should not spawn subprocesses for them either).
@@ -57,10 +59,19 @@ public static class WatchPathFilter
         ".svn",
         ".miller",
         ".julie",
+        ".code-kb",
+        ".claude",
+        ".venv",
+        "venv",
+        ".env",
+        ".tox",
+        ".idea",
+        ".vscode",
         ".vs",
         ".cache",
         ".memories",
         ".worktrees",
+        "worktrees",
         "node_modules",
         "vendor",
         "target",
@@ -97,13 +108,15 @@ public static class WatchPathFilter
         ShouldProcess(root, absolutePath, supportedExtensions: null);
 
     /// <summary>
-    /// As <see cref="ShouldProcess(string,string)"/>, additionally gating on julie's claimed extension set
-    /// (<c>julie-extract languages --json</c>). A null or EMPTY set gates nothing — fail soft to the
+    /// As <see cref="ShouldProcess(string,string)"/>, additionally gating on julie's claimed source-name set
+    /// (<c>julie-extract languages --json</c>): extensions plus exact names for basename-selected languages. A
+    /// null or EMPTY set gates nothing — fail soft to the
     /// historical accept-by-default behavior when the languages probe failed or returned nothing usable.
     /// The set is membership-only here (pure, fast-suite-testable); fetching it is the caller's edge.
-    /// Paths with no explicit extension are kept fail-soft because the extension-only catalog cannot prove they
-    /// are unsupported. Ignore-policy files (<c>.gitignore</c>/<c>.julieignore</c>) are still dropped from
-    /// per-file dispatch — their special handling runs through <see cref="ShouldForceRescan"/>, which the watcher
+    /// Paths with no explicit extension are kept fail-soft because the catalog cannot prove they are unsupported.
+    /// Strict source discovery uses exact-filename entries to recognize basename-selected languages.
+    /// Ignore-policy files (<c>.gitignore</c>/<c>.julieignore</c>) are still dropped from per-file dispatch —
+    /// their special handling runs through <see cref="ShouldForceRescan"/>, which the watcher
     /// consults FIRST, so policy-change rescans still fire.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="root"/> or <paramref name="absolutePath"/> is null.</exception>
@@ -122,10 +135,7 @@ public static class WatchPathFilter
         if (supportedExtensions is null || supportedExtensions.Count == 0)
             return false;
         string name = LastPathSegment(absolutePath);
-        int dot = name.LastIndexOf('.');
-        if (dot <= 0 || dot == name.Length - 1)
-            return false;
-        if (!supportedExtensions.Contains(name[(dot + 1)..].ToLowerInvariant()))
+        if (!IsSupportedSourceName(name, supportedExtensions))
             return false;
         return ShouldProcess(root, absolutePath, supportedExtensions);
     }
@@ -133,18 +143,27 @@ public static class WatchPathFilter
     public static bool ShouldProcess(string root, string absolutePath, IReadOnlySet<string>? supportedExtensions)
         => ShouldProcess(root, absolutePath, supportedExtensions, MillerHome.ResolveMillerDirectory());
 
+    internal static bool ShouldProcessDirectory(string root, string absolutePath)
+        => ShouldProcess(
+            root,
+            absolutePath,
+            supportedExtensions: null,
+            millerDirectory: MillerHome.ResolveMillerDirectory(),
+            pathIsDirectory: true);
+
     internal static bool ShouldProcess(
         string root,
         string absolutePath,
         IReadOnlySet<string>? supportedExtensions,
-        string millerDirectory)
+        string millerDirectory,
+        bool pathIsDirectory = false)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
 
         if (IsWorkspaceRootItself(root, absolutePath))
             return false;
-        if (HasSkippedSegment(root, absolutePath))
+        if (HasSkippedSegment(root, absolutePath, includeTerminalSegment: pathIsDirectory))
             return false;
         if (ExtractSourceLimits.HasGeneratedSuffix(absolutePath, SegmentComparison))
             return false;
@@ -211,16 +230,13 @@ public static class WatchPathFilter
         return relative is not null && (relative.Length == 0 || relative == ".");
     }
 
-    private static bool HasSkippedSegment(string root, string absolutePath)
+    private static bool HasSkippedSegment(string root, string absolutePath, bool includeTerminalSegment = false)
     {
         string[] segments = SkipCandidateSegments(root, absolutePath);
-        for (int i = 0; i < segments.Length; i++)
+        int segmentCount = includeTerminalSegment ? segments.Length : Math.Max(0, segments.Length - 1);
+        for (int i = 0; i < segmentCount; i++)
         {
             if (SkipSegments.Contains(segments[i]))
-                return true;
-            if (i > 0
-                && SegmentComparer.Equals(segments[i - 1], ".claude")
-                && SegmentComparer.Equals(segments[i], "worktrees"))
                 return true;
         }
         return false;
@@ -253,10 +269,6 @@ public static class WatchPathFilter
     private static string[] SplitSegments(string path) =>
         path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
 
-    // Pure extension gate over julie's claimed set. The set holds lowercase, dot-less extensions exactly as
-    // `languages --json` reports them — nothing is hardcoded here. A file with no extension (Dockerfile, a
-    // dotfile, a trailing dot) remains fail-soft because the extension-only catalog cannot prove it is
-    // unsupported; julie can still no-op cheaply if it does not recognize the path.
     private static bool HasUnsupportedExtension(string absolutePath, IReadOnlySet<string>? supportedExtensions)
     {
         if (supportedExtensions is null || supportedExtensions.Count == 0)
@@ -266,7 +278,17 @@ public static class WatchPathFilter
         int dot = name.LastIndexOf('.');
         if (dot <= 0 || dot == name.Length - 1)
             return IgnorePolicyFiles.Contains(name);
-        return !supportedExtensions.Contains(name[(dot + 1)..].ToLowerInvariant());
+        return !IsSupportedSourceName(name, supportedExtensions);
+    }
+
+    private static bool IsSupportedSourceName(string name, IReadOnlySet<string> supportedExtensions)
+    {
+        string normalizedName = name.ToLowerInvariant();
+        if (supportedExtensions.Contains(ExactFileNamePrefix + normalizedName))
+            return true;
+        int dot = normalizedName.LastIndexOf('.');
+        return dot > 0 && dot < normalizedName.Length - 1
+            && supportedExtensions.Contains(normalizedName[(dot + 1)..]);
     }
 
     /// <summary>

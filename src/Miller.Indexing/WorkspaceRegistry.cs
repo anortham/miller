@@ -890,6 +890,31 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    public bool RemoveStoreMember(string workspaceId, Guid familyId, string viewId)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        ValidateRequired(viewId, nameof(viewId));
+        if (familyId == Guid.Empty)
+            throw new ArgumentException("A family id is required.", nameof(familyId));
+
+        lock (_gate)
+        {
+            StoreMemberRegistryRow? member = GetStoreMemberUnderLock(workspaceId);
+            if (member is null)
+                return true;
+            if (member.FamilyId != familyId || !string.Equals(member.ViewId, viewId, StringComparison.Ordinal))
+                return false;
+
+            using var command = _connection.CreateCommand();
+            command.CommandText = "DELETE FROM store_members WHERE workspace_id = $workspace_id AND family_id = $family_id AND view_id = $view_id;";
+            command.Parameters.AddWithValue("$workspace_id", workspaceId);
+            command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+            command.Parameters.AddWithValue("$view_id", viewId);
+            return command.ExecuteNonQuery() == 1;
+        }
+    }
+
     public WorkspaceRegistryRow? Get(string workspaceId)
     {
         ThrowIfDisposed();

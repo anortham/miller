@@ -62,7 +62,8 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<bool> _storeEnabled;
     private readonly IJulieStoreClient? _storeClient;
     private readonly Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult> _exportStoreRollback;
-    private readonly Func<string, string, IDisposable, string?> _deleteStorePointerAfterSourceRebuild;
+    private readonly Func<string, string, string, long, IDisposable, string?>
+        _deleteStorePointerAfterSourceRebuild;
     private readonly IndexerSidecarConverger _sidecarConverger;
     private readonly IIndexerPhaseSink _phaseSink;
 
@@ -184,9 +185,10 @@ public sealed class CrossWorkspaceRefreshService
         _acquireLock = acquireLock;
         _readLatestRevision = readLatestRevision;
         _readArtifactId = readArtifactId ?? ReadArtifactId;
+        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _readStoreProbe = readStoreProbe
             ?? ((dbPath, root, workspaceId) =>
-                WorkspaceReadSessionFactory.Probe(dbPath, root, workspaceId, storeEnabled: true));
+                WorkspaceReadSessionFactory.Probe(dbPath, root, workspaceId, storeEnabled: _storeEnabled()));
         _requestFullScan = requestFullScan ?? LeaderScanRequestQueue.RequestFullScan;
         _requestIncrementalReconcile = requestIncrementalReconcile
             ?? LeaderScanRequestQueue.RequestIncrementalReconcile;
@@ -205,19 +207,19 @@ public sealed class CrossWorkspaceRefreshService
         _governorForceWait = governorForceWait ?? ScanGovernor.WaitFromEnvironment();
         _failurePolicyFor = failurePolicyFor
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
-        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _storeClient = storeClient;
         _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(NullLogger<CrossWorkspaceRefreshService>.Instance);
         _exportStoreRollback = exportStoreRollback ?? StoreRollbackExporter.ExportIfRequired;
         if (deleteStorePointer is null)
         {
             _deleteStorePointerAfterSourceRebuild =
-                static (root, databasePath, lease) =>
-                    StoreRollbackExporter.DeletePointerAfterSourceRebuild(root, databasePath, lease);
+                (root, databasePath, workspaceId, revision, lease) =>
+                    StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+                        _registry, root, databasePath, workspaceId, revision, lease);
         }
         else
         {
-            _deleteStorePointerAfterSourceRebuild = (root, _, _) =>
+            _deleteStorePointerAfterSourceRebuild = (root, _, _, _, _) =>
             {
                 deleteStorePointer(root);
                 return null;
@@ -453,6 +455,8 @@ public sealed class CrossWorkspaceRefreshService
                     string? markerCleanupWarning = _deleteStorePointerAfterSourceRebuild(
                         row.CanonicalRoot,
                         row.IndexDbPath,
+                        row.WorkspaceId,
+                        revision,
                         lease);
                     if (markerCleanupWarning is not null)
                     {
@@ -461,7 +465,7 @@ public sealed class CrossWorkspaceRefreshService
                             markerCleanupWarning;
                     }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
                 {
                     pointerCleanupError =
                         $"Source reconciliation completed, but rollback cleanup failed: {ex.Message}";

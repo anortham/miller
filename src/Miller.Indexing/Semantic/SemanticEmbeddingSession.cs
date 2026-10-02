@@ -774,6 +774,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         var values = new float[dims];
         int position = 0;
         double sumOfSquares = 0;
+        bool isZero = true;
         foreach (JsonElement component in element.EnumerateArray())
         {
             if (component.ValueKind != JsonValueKind.Number || !component.TryGetDouble(out double value))
@@ -781,12 +782,12 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
             values[position++] = (float)value;
             sumOfSquares += value * value;
+            isZero &= value == 0;
         }
 
-        // A zero vector is the contract's substitution for an item that failed to encode, so it is exempt from
-        // the norm bar; anything else must arrive L2-normalized.
+        // The sidecar reserves the exact zero vector for per-item encoding failures.
         double norm = Math.Sqrt(sumOfSquares);
-        if (norm > NormTolerance && Math.Abs(norm - 1.0) > NormTolerance)
+        if (!isZero && Math.Abs(norm - 1.0) > NormTolerance)
         {
             throw new SidecarTransportException(
                 $"vector at index {index} has L2 norm {norm.ToString("F6", CultureInfo.InvariantCulture)}, " +

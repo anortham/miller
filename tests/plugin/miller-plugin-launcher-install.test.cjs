@@ -16,6 +16,16 @@ function tempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-home-'));
 }
 
+async function exitedProcessId() {
+  const child = childProcess.spawn(process.execPath, ['-e', '']);
+  const pid = child.pid;
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+  return pid;
+}
+
 async function listenOn(handler) {
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -324,6 +334,45 @@ test('sweepStaleInstallLeftovers removes a killed attempt stage directory and pa
   assert.equal(fs.existsSync(keeper), true);
 });
 
+test('promotion lock keeps a stale timestamp owned by a live process', () => {
+  const lockDir = path.join(tempHome(), '.package-promotion.lock');
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'owner'), `${process.pid}\nactive`);
+  const staleAt = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockDir, staleAt, staleAt);
+
+  assert.equal(launcher.stalePromotionLock(lockDir), false);
+});
+
+test('a stale reclaimer cannot replace a newer promotion lock', async () => {
+  const deadPid = await exitedProcessId();
+  const lockDir = path.join(tempHome(), '.package-promotion.lock');
+  const staleToken = 'interrupted';
+  const tombstoneDir = `${lockDir}.stale-${staleToken}`;
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'owner'), `${process.pid}\ncurrent`);
+  fs.mkdirSync(tombstoneDir);
+  fs.writeFileSync(path.join(tombstoneDir, 'owner'), `${deadPid}\n${staleToken}`);
+
+  assert.equal(launcher.retireStalePromotionLock(lockDir, { pid: deadPid, token: staleToken }), false);
+  assert.equal(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8'), `${process.pid}\ncurrent`);
+});
+
+test('an ownerless lock cleanup directory does not block acquisition', () => {
+  const targetRoot = tempHome();
+  const stageDir = path.join(targetRoot, 'stage');
+  const orphanedReleaseDir = path.join(targetRoot, '.package-promotion-lock-release-abandoned');
+  fs.mkdirSync(stageDir);
+  fs.mkdirSync(orphanedReleaseDir);
+  let acquired = false;
+
+  launcher.withPackagePromotionLock(targetRoot, stageDir, () => { acquired = true; });
+
+  assert.equal(acquired, true);
+  assert.equal(fs.existsSync(path.join(targetRoot, '.package-promotion-lock')), false);
+  assert.equal(fs.existsSync(orphanedReleaseDir), true);
+});
+
 function seedVersion(cacheRoot, version, target, usedAt) {
   const targetRoot = path.join(cacheRoot, version, target);
   fs.mkdirSync(path.join(targetRoot, 'package'), { recursive: true });
@@ -401,10 +450,59 @@ function archiveFixture(binaryName, extension) {
   return fs.readFileSync(archivePath);
 }
 
+function startInstallProcess(home, cacheRoot, config, platformInfo, baseUrl) {
+  const launcherPath = path.join(repoRoot, 'bin', 'miller-plugin-launcher.cjs');
+  const source = [
+    "const fs = require('node:fs');",
+    `const launcher = require(${JSON.stringify(launcherPath)});`,
+    'launcher.ensureMillerPackage('
+      + 'JSON.parse(process.env.MILLER_INSTALL_CONFIG), '
+      + 'JSON.parse(process.env.MILLER_INSTALL_PLATFORM), '
+      + 'process.env.MILLER_INSTALL_CACHE, '
+      + '{ baseUrl: process.env.MILLER_INSTALL_BASE_URL })'
+      + '.then(binaryPath => process.stdout.write(JSON.stringify({ binaryPath, ino: fs.statSync(binaryPath).ino })))'
+      + '.catch(error => { process.stderr.write(error.stack || String(error)); process.exitCode = 1; });',
+  ].join('\n');
+  const child = childProcess.spawn(process.execPath, ['-e', source], {
+    env: {
+      ...process.env,
+      MILLER_HOME: home,
+      MILLER_INSTALL_CACHE: cacheRoot,
+      MILLER_INSTALL_CONFIG: JSON.stringify(config),
+      MILLER_INSTALL_PLATFORM: JSON.stringify(platformInfo),
+      MILLER_INSTALL_BASE_URL: baseUrl,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+
+  const result = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code !== 0) {
+        reject(new Error(`install child exited with ${code ?? signal}: ${stderr}`));
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(new Error(`install child returned invalid output: ${stdout}`, { cause: error }));
+      }
+    });
+  });
+
+  return { child, result };
+}
+
 test('ensureMillerPackage installs from a served archive and records every stage in the launcher log', async () => {
   const platformInfo = launcher.detectPlatform();
   const archive = archiveFixture(platformInfo.binaryName, platformInfo.archiveExtension);
   const digest = crypto.createHash('sha256').update(archive).digest('hex');
+  const deadPid = await exitedProcessId();
 
   const { server, origin } = await listenOn((request, response) => {
     if (request.url.endsWith('.sha256')) {
@@ -419,6 +517,13 @@ test('ensureMillerPackage installs from a served archive and records every stage
 
   const home = tempHome();
   const cacheRoot = path.join(home, 'cache');
+  const targetRoot = path.join(cacheRoot, '9.9.9', platformInfo.target);
+  const packageDir = path.join(targetRoot, 'package');
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(path.join(packageDir, 'partial'), 'incomplete');
+  const staleLockDir = path.join(targetRoot, '.package-promotion.lock');
+  fs.mkdirSync(staleLockDir);
+  fs.writeFileSync(path.join(staleLockDir, 'owner'), `${deadPid}\ninterrupted`);
   const now = new Date();
   const config = { version: '9.9.9', repository: `127.0.0.1:${server.address().port}` };
   const originalHome = process.env.MILLER_HOME;
@@ -434,6 +539,9 @@ test('ensureMillerPackage installs from a served archive and records every stage
 
     assert.equal(binaryPath, path.join(cacheRoot, '9.9.9', platformInfo.target, 'package', platformInfo.binaryName));
     assert.equal(fs.existsSync(binaryPath), true);
+    assert.equal(fs.existsSync(path.join(packageDir, 'partial')), false);
+    assert.equal(fs.existsSync(staleLockDir), false);
+    assert.equal(fs.existsSync(`${staleLockDir}.stale-interrupted`), true);
 
     const log = readLog(home, now);
     for (const stage of ['cache miss', 'sidecar download begin', 'archive download end', 'list end', 'extract end', 'promote end']) {
@@ -455,6 +563,60 @@ test('ensureMillerPackage installs from a served archive and records every stage
     } else {
       process.env.MILLER_HOME = originalHome;
     }
+    await closeServer(server);
+  }
+});
+
+test('parallel cold starts keep the first promoted package intact', async () => {
+  const platformInfo = launcher.detectPlatform();
+  const archive = archiveFixture(platformInfo.binaryName, platformInfo.archiveExtension);
+  const digest = crypto.createHash('sha256').update(archive).digest('hex');
+  const archiveResponses = [];
+  let bothArchivesRequested;
+  const archivesRequested = new Promise((resolve) => { bothArchivesRequested = resolve; });
+  const { server, origin } = await listenOn((request, response) => {
+    if (request.url.endsWith('.sha256')) {
+      response.writeHead(200, { 'content-length': String(digest.length) });
+      response.end(digest);
+      return;
+    }
+
+    archiveResponses.push(response);
+    if (archiveResponses.length === 2) {
+      bothArchivesRequested();
+    }
+  });
+
+  const home = tempHome();
+  const cacheRoot = path.join(home, 'cache');
+  const config = { version: '9.9.9', repository: 'anortham/miller' };
+  const installs = [
+    startInstallProcess(home, cacheRoot, config, platformInfo, origin),
+    startInstallProcess(home, cacheRoot, config, platformInfo, origin),
+  ];
+  const sendArchive = (response) => {
+    response.writeHead(200, { 'content-length': String(archive.length) });
+    response.end(archive);
+  };
+
+  try {
+    await archivesRequested;
+    sendArchive(archiveResponses[0]);
+    const winner = await Promise.race(installs.map(({ result }, index) => result.then((value) => ({ index, value }))));
+    sendArchive(archiveResponses[1]);
+    const results = await Promise.all(installs.map(({ result }) => result));
+    const binaryPath = path.join(cacheRoot, '9.9.9', platformInfo.target, 'package', platformInfo.binaryName);
+
+    assert.equal(results.every((result) => result.binaryPath === binaryPath), true);
+    assert.equal(results[0].ino, results[1].ino);
+    assert.equal(fs.statSync(binaryPath).ino, results[winner.index].ino);
+  } finally {
+    for (const { child } of installs) {
+      if (child.exitCode === null) {
+        child.kill();
+      }
+    }
+    await Promise.all(installs.map(({ result }) => result.catch(() => {})));
     await closeServer(server);
   }
 });

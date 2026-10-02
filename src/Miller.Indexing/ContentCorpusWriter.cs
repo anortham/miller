@@ -18,7 +18,8 @@ public static partial class ContentCorpusWriter
         string workspaceRoot,
         string? workspaceId,
         long revision,
-        TimeSpan? writeLockTimeout = null)
+        TimeSpan? writeLockTimeout = null,
+        IReadOnlyList<string>? preserveExternalContentFrom = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
@@ -47,7 +48,7 @@ public static partial class ContentCorpusWriter
                 measurement: null);
             using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
-                int preserved = PreserveExternalSources(tempPath, fullPath);
+                int preserved = PreserveExternalSources(tempPath, preserveExternalContentFrom, fullPath);
                 SqliteConnection.ClearAllPools();
                 for (int attempt = 1; ; attempt++)
                 {
@@ -114,7 +115,7 @@ public static partial class ContentCorpusWriter
                 measurement);
             using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
-                int preserved = PreserveExternalSources(tempPath, fullPath);
+                int preserved = PreserveExternalSources(tempPath, null, fullPath);
                 SqliteConnection.ClearAllPools();
                 for (int attempt = 1; ; attempt++)
                 {
@@ -278,135 +279,215 @@ public static partial class ContentCorpusWriter
         return metadata.ExecuteNonQuery() == 1;
     }
 
-    private static int PreserveExternalSources(string tempPath, string existingPath)
+    private static int PreserveExternalSources(
+        string tempPath,
+        IReadOnlyList<string>? requiredSources,
+        string localPath)
     {
-        if (!File.Exists(existingPath))
-            return 0;
-        if (!HasSqliteHeader(existingPath))
-            return 0;
-
-        bool importsProven = false;
-        try
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var requiredPaths = new HashSet<string>(pathComparer);
+        var paths = new List<string>();
+        foreach (string source in requiredSources ?? [])
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = tempPath,
-                Mode = SqliteOpenMode.ReadWrite,
-                Pooling = false,
-            }.ToString());
-            connection.Open();
+            ArgumentException.ThrowIfNullOrWhiteSpace(source);
+            string fullSource = Path.GetFullPath(source);
+            if (requiredPaths.Add(fullSource))
+                paths.Add(fullSource);
+        }
 
-            using (var attach = connection.CreateCommand())
+        string fullLocalPath = Path.GetFullPath(localPath);
+        if (!paths.Contains(fullLocalPath, pathComparer))
+            paths.Add(fullLocalPath);
+
+        int preserved = 0;
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = new Uri(Path.GetFullPath(tempPath)).AbsoluteUri,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using (var ids = connection.CreateCommand())
+        {
+            ids.CommandText = "CREATE TEMP TABLE preserved_source_ids (source_id TEXT PRIMARY KEY);";
+            ids.ExecuteNonQuery();
+        }
+
+        foreach (string sourcePath in paths)
+        {
+            bool required = requiredPaths.Contains(sourcePath);
+            if (!FileExistsForPreservation(sourcePath))
             {
-                attach.CommandText = "ATTACH DATABASE $existing AS old;";
-                attach.Parameters.AddWithValue("$existing", Path.GetFullPath(existingPath));
-                attach.ExecuteNonQuery();
+                if (required)
+                    throw new FileNotFoundException("A required imported-content source is missing.", sourcePath);
+                continue;
             }
 
+            if (!HasSqliteHeader(sourcePath))
+            {
+                if (required)
+                {
+                    throw CreatePreservationFailure(
+                        fullLocalPath,
+                        sourcePath,
+                        new InvalidDataException($"Required imported-content source '{sourcePath}' is not a SQLite database."));
+                }
+                continue;
+            }
+
+            bool attached = false;
+            bool importsProven = false;
             try
             {
+                using (var attach = connection.CreateCommand())
+                {
+                    attach.CommandText = "ATTACH DATABASE $existing AS old;";
+                    attach.Parameters.AddWithValue("$existing", ReadOnlySqliteUri(sourcePath));
+                    attach.ExecuteNonQuery();
+                }
+                attached = true;
+
                 int expectedSourceCount = CountExternalSources(connection);
                 if (expectedSourceCount == 0)
-                    return 0;
+                    continue;
                 importsProven = true;
+                using var tx = connection.BeginTransaction();
+                ExecuteNonQuery(connection, "DELETE FROM preserved_source_ids;");
+                int selectedSourceCount = ExecuteNonQuery(connection, """
+                        INSERT INTO preserved_source_ids (source_id)
+                        SELECT source_id
+                        FROM old.content_sources
+                        WHERE content_kind IN ($external, $web)
+                          AND status = 'active'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM content_sources AS current
+                              WHERE current.source_id = old.content_sources.source_id);
+                        """);
+                if (selectedSourceCount == 0)
+                {
+                    tx.Commit();
+                    continue;
+                }
                 if (!HasCompatibleExternalSourceShape(connection))
                 {
                     throw new InvalidOperationException(
                         "Existing content.db imported-content tables are incompatible with the current corpus.");
                 }
 
-                using var tx = connection.BeginTransaction();
                 int sourceCount = ExecuteNonQuery(connection, """
-                    INSERT INTO content_sources
-                        (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
-                         language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
-                    SELECT source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
-                           language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc
-                    FROM old.content_sources
-                    WHERE content_kind IN ($external, $web)
-                      AND status = 'active';
+                        INSERT INTO content_sources
+                            (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                             language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
+                        SELECT s.source_id, s.content_kind, s.workspace_id, s.workspace_revision, s.path, s.url,
+                               s.display_path, s.language, s.content_hash, s.source_bytes, s.line_count, s.is_test,
+                               s.status, s.indexed_at_utc
+                        FROM old.content_sources s
+                        JOIN preserved_source_ids p ON p.source_id = s.source_id;
                     """);
-                if (sourceCount != expectedSourceCount)
+                if (sourceCount != selectedSourceCount)
                 {
                     throw new InvalidOperationException(
-                        $"Expected to preserve {expectedSourceCount} imported sources but copied {sourceCount}.");
+                        $"Expected to preserve {selectedSourceCount} imported sources but copied {sourceCount}.");
                 }
 
                 ExecuteNonQuery(connection, """
-                    INSERT INTO content_chunks
-                        (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
-                         line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
-                         containing_symbol_id, containing_symbol_name)
-                    SELECT c.chunk_id, c.source_id, c.content_kind, c.path, c.url, c.display_path, c.language,
-                           c.line_start, c.line_end, c.byte_start, c.byte_end, c.raw_text, c.doc_len,
-                           c.is_test, c.source_bytes, c.containing_symbol_id, c.containing_symbol_name
-                    FROM old.content_chunks c
-                    JOIN old.content_sources s ON s.source_id = c.source_id
-                    WHERE s.content_kind IN ($external, $web)
-                      AND s.status = 'active';
+                        INSERT INTO content_chunks
+                            (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
+                             line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
+                             containing_symbol_id, containing_symbol_name)
+                        SELECT c.chunk_id, c.source_id, c.content_kind, c.path, c.url, c.display_path, c.language,
+                               c.line_start, c.line_end, c.byte_start, c.byte_end, c.raw_text, c.doc_len,
+                               c.is_test, c.source_bytes, c.containing_symbol_id, c.containing_symbol_name
+                        FROM old.content_chunks c
+                        JOIN preserved_source_ids p ON p.source_id = c.source_id;
                     """);
                 ExecuteNonQuery(connection, """
-                    INSERT INTO content_symbol_spans
-                        (source_id, symbol_id, symbol_name, path, start_line, end_line)
-                    SELECT sp.source_id, sp.symbol_id, sp.symbol_name, sp.path, sp.start_line, sp.end_line
-                    FROM old.content_symbol_spans sp
-                    JOIN old.content_sources s ON s.source_id = sp.source_id
-                    WHERE s.content_kind IN ($external, $web)
-                      AND s.status = 'active';
+                        INSERT INTO content_symbol_spans
+                            (source_id, symbol_id, symbol_name, path, start_line, end_line)
+                        SELECT sp.source_id, sp.symbol_id, sp.symbol_name, sp.path, sp.start_line, sp.end_line
+                        FROM old.content_symbol_spans sp
+                        JOIN preserved_source_ids p ON p.source_id = sp.source_id;
                     """);
                 ExecuteNonQuery(connection, """
-                    INSERT INTO content_fts(chunk_id, body)
-                    SELECT f.chunk_id, f.body
-                    FROM old.content_fts f
-                    JOIN old.content_chunks c ON c.chunk_id = f.chunk_id
-                    JOIN old.content_sources s ON s.source_id = c.source_id
-                    WHERE s.content_kind IN ($external, $web)
-                      AND s.status = 'active';
+                        INSERT INTO content_fts(chunk_id, body)
+                        SELECT f.chunk_id, f.body
+                        FROM old.content_fts f
+                        JOIN old.content_chunks c ON c.chunk_id = f.chunk_id
+                        JOIN preserved_source_ids p ON p.source_id = c.source_id;
                     """);
                 UpdateMetaCounts(connection);
                 tx.Commit();
-                return sourceCount;
+                preserved += sourceCount;
+            }
+            catch (Exception ex) when (
+                ex is SqliteException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                if (required || importsProven)
+                    throw CreatePreservationFailure(fullLocalPath, sourcePath, ex);
+                throw new InvalidOperationException(
+                    $"Content rebuild could not read the existing derived corpus at '{sourcePath}'.",
+                    ex);
             }
             finally
             {
-                using var detach = connection.CreateCommand();
-                detach.CommandText = "DETACH DATABASE old;";
-                detach.ExecuteNonQuery();
+                if (attached)
+                {
+                    using var detach = connection.CreateCommand();
+                    detach.CommandText = "DETACH DATABASE old;";
+                    detach.ExecuteNonQuery();
+                }
             }
         }
-        catch (Exception ex) when (
-            ex is SqliteException or InvalidOperationException or IOException
-                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+
+        return preserved;
+    }
+
+    private static ContentImportPreservationException CreatePreservationFailure(
+        string contentDbPath,
+        string sourcePath,
+        Exception error)
+    {
+        RecordPreservationFailure(contentDbPath, error.Message);
+        return new ContentImportPreservationException(
+            $"Content rebuild refused because Miller could not preserve imported content from '{sourcePath}'. " +
+            "The existing content.db was left unchanged.",
+            error);
+    }
+
+    private static bool FileExistsForPreservation(string path)
+    {
+        try
         {
-            if (importsProven)
-            {
-                RecordPreservationFailure(existingPath, ex.Message);
-                throw new ContentImportPreservationException(
-                    $"Content rebuild refused because Miller could not preserve imported content from '{existingPath}'. " +
-                    "The existing content.db was left unchanged.",
-                    ex);
-            }
-            throw new InvalidOperationException(
-                $"Content rebuild could not read the existing derived corpus at '{existingPath}'.",
-                ex);
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
         }
     }
+
+    private static string ReadOnlySqliteUri(string path) => new Uri(Path.GetFullPath(path)).AbsoluteUri + "?mode=ro";
 
     internal static string? TryReadPreservationFailure(string contentDbPath)
     {
         try
         {
             string markerPath = PreservationFailurePathFor(contentDbPath);
-            if (!File.Exists(markerPath) || !File.Exists(contentDbPath))
+            if (!File.Exists(markerPath))
                 return null;
             PreservationFailureStamp? stamp =
                 JsonSerializer.Deserialize(
                     File.ReadAllText(markerPath),
                     ContentCorpusWriterJsonContext.Default.PreservationFailureStamp);
+            if (stamp is null || stamp.ContentDbExists != File.Exists(contentDbPath))
+                return null;
+            if (!stamp.ContentDbExists)
+                return stamp.Length == 0 && stamp.LastWriteUtcTicks == 0 ? stamp.Error : null;
+
             var info = new FileInfo(contentDbPath);
-            return stamp is not null &&
-                stamp.Length == info.Length &&
-                stamp.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks
+            return stamp.Length == info.Length && stamp.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks
                     ? stamp.Error
                     : null;
         }
@@ -421,8 +502,13 @@ public static partial class ContentCorpusWriter
     {
         try
         {
-            var info = new FileInfo(contentDbPath);
-            var stamp = new PreservationFailureStamp(info.Length, info.LastWriteTimeUtc.Ticks, error);
+            bool contentDbExists = File.Exists(contentDbPath);
+            var info = contentDbExists ? new FileInfo(contentDbPath) : null;
+            var stamp = new PreservationFailureStamp(
+                contentDbExists ? info!.Length : 0,
+                contentDbExists ? info!.LastWriteTimeUtc.Ticks : 0,
+                error,
+                contentDbExists);
             File.WriteAllText(
                 PreservationFailurePathFor(contentDbPath),
                 JsonSerializer.Serialize(
@@ -458,7 +544,11 @@ public static partial class ContentCorpusWriter
     private static string PreservationFailurePathFor(string contentDbPath) =>
         Path.GetFullPath(contentDbPath) + PreservationFailureSuffix;
 
-    private sealed record PreservationFailureStamp(long Length, long LastWriteUtcTicks, string Error);
+    private sealed record PreservationFailureStamp(
+        long Length,
+        long LastWriteUtcTicks,
+        string Error,
+        bool ContentDbExists = true);
 
     [JsonSerializable(typeof(PreservationFailureStamp))]
     private sealed partial class ContentCorpusWriterJsonContext : JsonSerializerContext;

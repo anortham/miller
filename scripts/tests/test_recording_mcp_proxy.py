@@ -408,6 +408,10 @@ class RecordingMcpProxyTests(unittest.TestCase):
                 if process.stdin and not process.stdin.closed:
                     process.stdin.close()
                 process.wait(timeout=10)
+                if process.stdout and not process.stdout.closed:
+                    process.stdout.close()
+                if process.stderr and not process.stderr.closed:
+                    process.stderr.close()
 
     def test_product_crash_is_recorded_without_stdout_contamination(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -640,7 +644,7 @@ class RecordingMcpProxyTests(unittest.TestCase):
             root = Path(directory)
             events_path = root / "events.jsonl"
             child_pid_path = root / "child-pid"
-            environment = {**os.environ, "MILLER_RECORDING_PROXY_TIMEOUT_SECONDS": "0.1", "MILLER_RECORDING_PROXY_EOF_GRACE_SECONDS": "5"}
+            environment = {**os.environ, "MILLER_RECORDING_PROXY_TIMEOUT_SECONDS": "1", "MILLER_RECORDING_PROXY_EOF_GRACE_SECONDS": "5"}
             completed = subprocess.run(
                 _proxy_command(events_path, root, ["--mode", "hang", "--child-pid-file", str(child_pid_path)]),
                 input=b"",
@@ -661,17 +665,39 @@ class RecordingMcpProxyTests(unittest.TestCase):
             events_path = root / "events.jsonl"
             child_pid_path = root / "child-pid"
             environment = {**os.environ, "MILLER_RECORDING_PROXY_TIMEOUT_SECONDS": "5", "MILLER_RECORDING_PROXY_EOF_GRACE_SECONDS": "0.1"}
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 _proxy_command(events_path, root, ["--mode", "hang", "--child-pid-file", str(child_pid_path)]),
-                input=b"",
-                capture_output=True,
-                timeout=10,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=environment,
             )
-            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+            assert process.stdin is not None
+            assert process.stdout is not None
+            assert process.stderr is not None
+            try:
+                _wait_for_file(child_pid_path)
+                child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+                process.stdin.close()
+                returncode = process.wait(timeout=10)
+                stderr = process.stderr.read()
+            finally:
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream and not stream.closed:
+                        stream.close()
             events = _events(events_path)
 
-        self.assertEqual(70, completed.returncode)
+        self.assertEqual(70, returncode, stderr.decode())
         self.assertEqual("controller_eof", next(event for event in events if event["event"] == "proxy_failure")["reason"])
         self.assertTrue(_wait_for_process_exit(child_pid))
 

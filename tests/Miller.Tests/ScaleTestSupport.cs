@@ -12,11 +12,9 @@ namespace Miller.Tests;
 /// julie-spawning test needs — locating the pinned <c>.tools/julie-extract</c> and skipping (never
 /// failing) when restore has not been run — so the launch signal lives in exactly one place.
 ///
-/// That single signal is what the <see cref="Conventions.ScaleTraitConventionTests"/> drift guard
-/// keys on: any test that calls <see cref="RequireJulieServer"/> (or <see cref="LocateJulieServer"/>)
-/// spawns the real subprocess and MUST therefore carry <c>[Trait("Category","Scale")]</c> so the
-/// default fast suite excludes it. Before this helper existed the locator was copy-pasted into seven
-/// files, so there was no reliable signal a guard could trust.
+/// The launch signals are what <see cref="Conventions.ScaleTraitConventionTests"/> checks: any test
+/// that calls <see cref="RequireJulieServer"/>, <see cref="RequireJulieStoreServer"/>, or
+/// <see cref="LocateJulieServer"/> must carry <c>[Trait("Category","Scale")]</c>.
 ///
 /// <see cref="RequireSemanticSidecar"/> is the same arrangement for the second live binary Miller
 /// spawns, the pinned <c>julie-semantic-sidecar</c>. It is a separate signal rather than a widened
@@ -140,6 +138,14 @@ public static class ScaleTestSupport
         Assert.SkipWhen(binary is null,
             "julie-extract not found in .tools/. Run scripts/restore-julie-extract.sh to enable the Scale test.");
         return binary!;
+    }
+
+    public static string RequireJulieStoreServer()
+    {
+        string binary = RequireJulieServer();
+        Assert.SkipWhen(!Miller.Indexing.JulieExtractVersionProbe.PinnedVersionSupportsStoreCli,
+            "The pinned julie-extract does not provide the family-store CLI required by this historical Scale test.");
+        return binary;
     }
 
     /// <summary>

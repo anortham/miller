@@ -220,6 +220,57 @@ public sealed class CtStickyUnavailableDeltaTests
     }
 
     [Fact]
+    public async Task A_source_rebuild_refusal_publishes_guidance_without_pausing_auto_runs()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-source-rebuild-").FullName;
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot>? run = null;
+        try
+        {
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                Freshness: null,
+                IndexFresh: false,
+                Status: "source_rebuild_required",
+                ObservedAt: DateTimeOffset.UtcNow,
+                Reason: "BindingNotReady: active store pointer prevents standalone reads"));
+            run = ContinuousTestDaemonHost.RunAsync(
+                root,
+                new ContinuousTestDaemonHostOptions
+                {
+                    Enabled = true,
+                    WorkspaceId = EngineTestSupport.WorkspaceId,
+                    Enqueuer = new RecordingEnqueuer(),
+                    Poller = new ContinuousTestRevisionPoller(source),
+                    PollInterval = TimeSpan.FromMilliseconds(1),
+                },
+                cts.Token);
+
+            CtDaemonStatusRecord status = await WaitForRecordAsync(
+                root,
+                record => record.Reason.StartsWith("source_rebuild_required:", StringComparison.Ordinal));
+
+            Assert.Equal(CtDaemonLifecycleState.Running, status.State);
+            Assert.False(status.AutoRunsPaused);
+            Assert.Null(status.PauseReason);
+            Assert.Contains("BindingNotReady:", status.Reason, StringComparison.Ordinal);
+            Assert.Contains("active store pointer prevents standalone reads", status.Reason, StringComparison.Ordinal);
+            Assert.Contains("open or refresh this workspace to rebuild from source", status.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            if (run is not null)
+            {
+                try { await run; } catch (OperationCanceledException) { }
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void An_old_status_record_without_the_pause_fields_reads_not_paused()
     {
         const string json =

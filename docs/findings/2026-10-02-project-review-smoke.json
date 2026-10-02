@@ -1,0 +1,82 @@
+{
+  "dll": "/home/murphy/source/miller/src/Miller.Server/bin/Release/net10.0/miller.dll",
+  "migration_run_root": "/tmp/miller-review-smoke-8itvbsg_",
+  "fresh_cli_mcp_run_root": "/tmp/miller-review-smoke-431ithwe",
+  "migration": {
+    "workspace_id": "9dbc6923a65e906817b16ed75371a0c6376abc917987822a1a942d7df1f365bd",
+    "artifact_metadata": {
+      "artifact_id": "artifact-1790952218537106626",
+      "root_path": "/tmp/miller-review-live-ylb74on3/project",
+      "schema_version": "7",
+      "extract_contract_version": "4",
+      "sqlite_schema_version": "7",
+      "binary_version": "3.7.2",
+      "hash_algorithm": "blake3",
+      "parser_inventory_fingerprint": "sha256:73d636f6cd5104a25089da940499712c3a2c9ed3695b7274f99009f6b9b1829f",
+      "capability_snapshot_fingerprint": "sha256:9d62c4ea04131fc776d09cc9675cb77b93c0bf7e03cca5429c35d54cecf260e2",
+      "created_at": "2026-10-02T14:43:38.531839467Z",
+      "updated_at": "2026-10-02T14:43:38.531839467Z",
+      "index_level": "full"
+    },
+    "indexed_go_files": [
+      "go.mod",
+      "go.sum"
+    ],
+    "verified_original_store_files": [
+      "CURRENT",
+      "coord.db",
+      "sidecars/b34119bac684a3ec4b5944cd32ffedf04ff1ef6effeb3fbfa0f43d97ccab9c37.cursor-v1.json",
+      "sidecars/search-b34119bac684a3ec4b5944cd32ffedf04ff1ef6effeb3fbfa0f43d97ccab9c37.db",
+      "sidecars/content-b34119bac684a3ec4b5944cd32ffedf04ff1ef6effeb3fbfa0f43d97ccab9c37.db",
+      "sidecars/content.lock",
+      "sidecars/sidecar-converger.lock",
+      "gen-001/store.db-wal",
+      "gen-001/store.db"
+    ],
+    "family_store_pointer_removed": true,
+    "family_store_membership_removed": true,
+    "fresh_symbol_found": true,
+    "imported_content_found": true
+  },
+  "fresh_cli": {
+    "workspace_id": "f1db98bd284a915ce2f846a6c1c80cebebcb50fd6571204b3ec43c039ad05e52",
+    "julie_version": "3.7.2",
+    "commands": [
+      "cli-search",
+      "cli-inspect",
+      "cli-context",
+      "cli-trace",
+      "cli-impact",
+      "cli-patterns",
+      "cli-report",
+      "cli-tests-status"
+    ],
+    "symbol_export_rows": 4,
+    "class_symbol_id": "462f9c3c86aadfbd8d45e9f53996794f",
+    "run_symbol_id": "a3c8084a77977ae7dd8dc3508b41f929",
+    "context_items": 4,
+    "trace_resolved": true,
+    "impact_traversal": "exhausted",
+    "report_index_symbols": 4,
+    "tests_kill_switch": true
+  },
+  "mcp": {
+    "workspace_id": "338b79ddb9c7e8a5dce3f302a3055909791dfdcac0218dc6d8bceb5a3e2ae1b2",
+    "tools": [
+      "content",
+      "context",
+      "edit",
+      "impact",
+      "inspect",
+      "patterns",
+      "search",
+      "tests",
+      "trace",
+      "workspace"
+    ],
+    "server_name": "miller",
+    "search_symbol_id": "83bef3f194a209f3ec9b16de5ec1da5f",
+    "search_method_id": "db59427789b3f729d362095b737b3488"
+  },
+  "harness_note": "The first CLI attempt exposed an overstrict inspect assertion; inspect correctly returns the requested method, and final verification matched its symbol ID, signature, evidence, and body to search."
+}

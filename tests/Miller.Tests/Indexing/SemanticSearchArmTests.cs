@@ -1,16 +1,22 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
 
-public sealed class SemanticSearchArmTests
+[Collection(StoreEnvironmentCollection.Name)]
+public sealed class SemanticSearchArmTests : IDisposable
 {
     private const string Root = "/ws";
 
     private static readonly SemanticEncoderPin Pin = MillerSemanticContract.DefaultEncoder;
+
+    private readonly string? _originalStoreMode =
+        Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
 
     private static SemanticSessionOptions FastOptions => new()
     {
@@ -154,6 +160,32 @@ public sealed class SemanticSearchArmTests
         Assert.True(result.Served, result.UnavailableReason);
         Assert.Single(result.Hits);
     }
+
+    [Fact]
+    public async Task RetainedStorePointerDegradesWithoutOpeningAStoreReaderWhenStoreModeIsOff()
+    {
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, null);
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        using IDisposable? scope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
+        var port = new RecordingPort();
+        port.Freshness.Enqueue(("artifact-1", 7));
+        var sessions = new RecordingSessionFactory();
+        var arm = new SemanticSearchArm(fixture.Binding.WorkspaceRoot, enabled: true, port.Factory, sessions.Open);
+
+        SemanticQueryResult result = await arm.QuerySymbolsAsync(
+            "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticFallbackKind.VectorsStale, result.Diagnostics!.Fallback);
+        Assert.Equal(0, sessions.OpenCount);
+        Assert.Empty(port.RequestedK);
+        Assert.Empty(reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    public void Dispose() =>
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, _originalStoreMode);
 
     [Fact]
     public async Task GenerationChangeDuringEmbedding_IsStaleBeforeKnnServes()

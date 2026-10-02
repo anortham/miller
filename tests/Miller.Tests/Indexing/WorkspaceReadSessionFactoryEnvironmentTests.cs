@@ -1,3 +1,4 @@
+using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Tests.Support;
@@ -69,43 +70,28 @@ public sealed class WorkspaceReadSessionFactoryEnvironmentTests : IDisposable
     }
 
     [Fact]
-    public async Task CtPollingAdmitsAndClosesOneSessionWithoutStartingTestingOrSemantics()
+    public async Task CtPollingRequiresRebuildForAStorePointerWithoutOpeningTheReader()
     {
-        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, null);
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
         using IDisposable? scope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
-        var source = new MillerArtifactRevisionSource();
-        ContinuousTestRevisionObservation? observation = await source.RefreshAsync("workspace-a", fixture.Binding.WorkspaceRoot,
+        ContinuousTestRevisionObservation? observation = await new MillerArtifactRevisionSource().RefreshAsync(
+            "workspace-a",
+            fixture.Binding.WorkspaceRoot,
             TestContext.Current.CancellationToken);
         Assert.NotNull(observation);
-        Assert.True(observation.IndexFresh);
-        Assert.Equal(2, observation.Freshness!.Value.Revision);
-        Assert.False(observation.Rebuild);
-        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
-        Assert.Equal(0, reader.Owed);
-        reader.Events.Clear();
-        ContinuousTestImpactResult? impact = await new MillerFactImpactSource().ImpactAsync(
-            fixture.Binding.WorkspaceRoot, observation.Freshness.Value, observation.Freshness.Value,
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(impact);
-        Assert.Equal(ContinuousTestImpactOutcome.Empty, impact.Outcome);
-        Assert.Empty(impact.ChangedPaths);
-        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.False(observation.IndexFresh);
+        Assert.Equal("source_rebuild_required", observation.Status);
+        Assert.True(WorkspaceReadSessionFactory.StorePointerRequiresSourceRebuild(fixture.Binding.WorkspaceRoot));
+        Assert.Empty(reader.Events);
         Assert.Equal(0, reader.Owed);
         Assert.False(File.Exists(Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "ct.db")));
         Assert.False(File.Exists(Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "ct.enabled")));
     }
 
     [Theory]
-    [InlineData(null, true)]
-    [InlineData("", true)]
-    [InlineData("   ", true)]
-    [InlineData("1", true)]
-    [InlineData("true", true)]
-    [InlineData("on", true)]
-    [InlineData("enabled", true)]
     [InlineData("0", false)]
     [InlineData("false", false)]
     [InlineData("off", false)]
@@ -117,6 +103,74 @@ public sealed class WorkspaceReadSessionFactoryEnvironmentTests : IDisposable
             configuredValue);
 
         Assert.Equal(expected, WorkspaceReadSessionFactory.StoreEnabledFromEnvironment());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void StoreModeDefaultsToPinnedProducerCapability(string? configuredValue)
+    {
+        Environment.SetEnvironmentVariable(
+            WorkspaceReadSessionFactory.StoreEnvironmentVariable,
+            configuredValue);
+
+        Assert.Equal(
+            JulieExtractVersionProbe.PinnedVersionSupportsStoreCli,
+            WorkspaceReadSessionFactory.StoreEnabledFromEnvironment());
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("true")]
+    [InlineData("on")]
+    [InlineData("enabled")]
+    public void ExplicitStoreModeFollowsPinnedProducerCapability(string configuredValue)
+    {
+        Environment.SetEnvironmentVariable(
+            WorkspaceReadSessionFactory.StoreEnvironmentVariable,
+            configuredValue);
+
+        if (JulieExtractVersionProbe.PinnedVersionSupportsStoreCli)
+        {
+            Assert.True(WorkspaceReadSessionFactory.StoreEnabledFromEnvironment());
+            return;
+        }
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => WorkspaceReadSessionFactory.StoreEnabledFromEnvironment());
+        Assert.Contains("has no family-store CLI", exception.Message);
+        Assert.Contains(MillerExtractContract.PinnedJulieExtractVersion, exception.Message);
+    }
+
+    [Fact]
+    public void StorePointerRequiresSourceRebuildOnlyWhenStoreModeIsDisabled()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "off");
+
+        Assert.True(WorkspaceReadSessionFactory.StorePointerRequiresSourceRebuild(fixture.Binding.WorkspaceRoot));
+        Assert.True(StoreWorkspacePointer.Exists(fixture.Binding.WorkspaceRoot));
+    }
+
+    [Fact]
+    public void MalformedStorePointerStillRequiresSourceRebuildWithoutReadingIt()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string pointerPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "store.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(pointerPath)!);
+        File.WriteAllText(pointerPath, "invalid pointer");
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, null);
+
+        var exception = Assert.Throws<FamilyStoreReadException>(() => WorkspaceReadSessionFactory.Open(
+            Path.Combine(fixture.Root, "unused.db"),
+            fixture.Binding.WorkspaceRoot,
+            "workspace-a"));
+
+        Assert.Equal(FamilyStoreReadFailure.BindingNotReady, exception.Failure);
+        Assert.Contains("rebuild the standalone artifact", exception.Message);
+        Assert.True(WorkspaceReadSessionFactory.StorePointerRequiresSourceRebuild(fixture.Binding.WorkspaceRoot));
     }
 
     [Fact]

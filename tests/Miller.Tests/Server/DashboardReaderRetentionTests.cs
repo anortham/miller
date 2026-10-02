@@ -60,7 +60,7 @@ public sealed class DashboardReaderRetentionTests : IDisposable
         DashboardIndexFactsCache.Clear();
         DashboardWorkspaceFacts facts = detail
             ? DashboardData.ReadSnapshot(registryPath, Path.Combine(fixture.Root, "telemetry.db"), "ws-reader", null,
-                () => reader.Client).SelectedWorkspaceFacts!
+                () => reader.Client, storeEnabledOverride: true).SelectedWorkspaceFacts!
             : Assert.Single(DashboardData.ReadIndex(registryPath, null, true, () => reader.Client).Entries).Facts;
 
         Assert.Equal(2, facts.IndexRevision);
@@ -179,7 +179,8 @@ public sealed class DashboardReaderRetentionTests : IDisposable
         var paths = new DashboardPaths(Register(fixture), Path.Combine(fixture.Root, "telemetry.db"),
             Path.Combine(fixture.Root, "selected-tools"), Path.Combine(fixture.Root, "wwwroot"), "http://127.0.0.1:0")
         {
-            ReaderClientOverride = reader.Client
+            ReaderClientOverride = reader.Client,
+            StoreEnabledOverride = true
         };
         DashboardIndexFactsCache.Clear();
         using IHost host = new HostBuilder()

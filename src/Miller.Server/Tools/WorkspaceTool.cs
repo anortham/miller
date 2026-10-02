@@ -1517,13 +1517,15 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult Prune(bool json, bool dryRun)
     {
         WorkspaceContext? current = CurrentWorkspaceOrNull;
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView =
+            StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot);
         WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
             _registry,
             current?.WorkspaceId,
             dryRun,
             maintainStore: StoreMaintenanceRunner.ForToolsRoot(_hostPaths.ToolsRoot),
-            retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
-            awaitProducerRetirement: false,
+            retireView: retireView,
+            awaitProducerRetirement: retireView is null,
             onRetirementOwed: _enqueueRetirement);
         var rendered = new WorkspacePruneResult(
             result.DryRun,
@@ -1584,6 +1586,8 @@ public sealed class WorkspaceTool
 
         WorkspaceRemoveResult result;
         WorkspaceContext? current = CurrentWorkspaceOrNull;
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView =
+            StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot);
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
             // Resolving here rather than inside RemoveById means the row is already unambiguous by the time
@@ -1603,8 +1607,8 @@ public sealed class WorkspaceTool
                     liveRoot: current?.WorkspaceRoot,
                     protectedMillerDir: _hostPaths.MillerDirectory,
                     acquireWriterLock: _acquireWriterLock,
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
-                    awaitProducerRetirement: false,
+                    retireView: retireView,
+                    awaitProducerRetirement: retireView is null,
                     onRetirementOwed: _enqueueRetirement);
         }
         else
@@ -1615,8 +1619,8 @@ public sealed class WorkspaceTool
                 liveRoot: current?.WorkspaceRoot,
                 protectedMillerDir: _hostPaths.MillerDirectory,
                 acquireWriterLock: _acquireWriterLock,
-                retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
-                awaitProducerRetirement: false,
+                retireView: retireView,
+                awaitProducerRetirement: retireView is null,
                 onRetirementOwed: _enqueueRetirement);
         }
 

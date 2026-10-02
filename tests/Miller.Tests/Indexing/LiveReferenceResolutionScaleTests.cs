@@ -73,7 +73,7 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
     [Fact]
     public void StoreExtractAndResolve_QueryTimeMatchesJulieGroundTruth()
     {
-        string binary = ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieStoreServer();
         Assert.SkipUnless(
             QueryTimeResolutionParity.BinarySupportsResolve(binary),
             "Pinned julie-extract does not expose store resolve; skip until a resolve-capable pin is restored or Phase 3 retires this gate.");

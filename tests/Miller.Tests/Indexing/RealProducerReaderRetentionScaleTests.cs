@@ -16,7 +16,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void LegacyStoreWithExpiredDeadClaimActivatesAndAdmitsTheOriginalSnapshot()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         fixture.SeedLegacyExpiredDeadClaim();
 
         using var session = fixture.Open();
@@ -37,7 +37,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void AdmissionRootsTheSnapshotBeforeOpeningAndReleasesAfterClosing()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         using var session = fixture.Open();
         Assert.Equal(new[] { "acquire", "open" }, fixture.Events);
         fixture.AssertRoots(session.Snapshot);
@@ -58,7 +58,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void LostCommittedAcquireReplyReusesOneRegistrationAndOneSnapshot()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output) { LoseFirstAcquireReply = true };
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output) { LoseFirstAcquireReply = true };
         using var session = fixture.Open();
         Assert.Equal(2, fixture.Acquires);
         Assert.True(fixture.SameAcquireNonce, "Acquire retries must use the original nonce.");
@@ -73,7 +73,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void PromotionBetweenAdmissionAndFirstOpenKeepsTheAdmittedPhysicalGeneration()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         fixture.AfterFirstAcquire = () => fixture.Maintain("promote");
         using var session = fixture.Open();
         Assert.Equal("gen-001", session.Snapshot.GenerationName);
@@ -91,7 +91,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void ImportPromotionAndRetirementCannotRetargetOrCollectALiveSnapshot()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         using var old = fixture.Open();
         WorkspaceReadSnapshot admitted = old.Snapshot;
         fixture.AssertRoots(admitted);
@@ -122,7 +122,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void ForeignMaintenanceFenceRefusesAcquisitionWithoutOpeningOrPartialRoots()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         fixture.SetMaintenanceFence();
         var error = Assert.Throws<FamilyStoreReadException>(() => fixture.Open());
         Assert.Equal(ReaderFailure.Busy, Assert.IsType<StoreReaderRegistrationException>(error.InnerException).Failure);
@@ -137,7 +137,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void FailedRenewAndReleaseKeepRootsUntilTheForeignFenceClears()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         using var session = fixture.Open();
         long expires = fixture.CoordinatorLong("SELECT expires_at FROM reader_registrations");
         fixture.SetMaintenanceFence();
@@ -160,7 +160,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void SuccessfulRenewalPreservesTheOriginalSnapshot()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         using var session = fixture.Open();
         long expires = fixture.CoordinatorLong("SELECT expires_at FROM reader_registrations");
         fixture.Import("Replacement");
@@ -176,7 +176,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [Fact]
     public void MissingViewIsMetadataAbsenceButReadyAdmissionIsStaleSnapshot()
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         StoreFamilyBinding absent = fixture.Binding with { ViewId = "never-published" };
         Assert.False(FamilyStoreReadSession.HasViewForImportPreflight(absent with { State = StoreBindingState.Planned }));
         Assert.Equal(0, fixture.Acquires);
@@ -192,7 +192,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
     [InlineData("retire-view")]
     public async Task ConcurrentMaintenanceEitherRetainsTheAdmittedSnapshotOrRefusesWithoutPartialRoots(string action)
     {
-        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieStoreServer(), output);
         using var start = new ManualResetEventSlim();
         WorkspaceReadHandle? session = null;
         FamilyStoreReadException? refusal = null;

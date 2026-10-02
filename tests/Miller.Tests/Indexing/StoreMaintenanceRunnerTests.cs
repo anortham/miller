@@ -1,3 +1,4 @@
+using Miller.Indexing;
 using Miller.Indexing.Store;
 using Xunit;
 
@@ -111,12 +112,16 @@ public sealed class StoreMaintenanceRunnerTests
     }
 
     [Fact]
-    public void AToolsRootWithNoExtractorHandsBackNoCallback()
+    public void ForToolsRootDoesNotBindRetiredStoreCommands()
     {
         Assert.Null(StoreMaintenanceRunner.ForToolsRoot(null));
         Assert.Null(StoreMaintenanceRunner.ForToolsRoot("   "));
-        Assert.Null(StoreMaintenanceRunner.ForToolsRoot(
-            Path.Combine(Path.GetTempPath(), "miller-no-tools-" + Guid.NewGuid().ToString("N"))));
+        string toolsRoot = Path.Combine(Path.GetTempPath(), "miller-tools-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(toolsRoot);
+        File.WriteAllText(Path.Combine(toolsRoot, OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"), "unused");
+        Assert.Equal(
+            JulieExtractVersionProbe.PinnedVersionSupportsStoreCli,
+            StoreMaintenanceRunner.ForToolsRoot(toolsRoot) is not null);
     }
 
     [Fact]

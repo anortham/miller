@@ -24,6 +24,8 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class JulieExtractRunner
 {
+    private const string ExactFileNamePrefix = "file:";
+
     // info opens read-only, takes no flock — `info --db <ABS_DB> --strict-schema --json` (NO --root).
     // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json --jobs <N>
     //   [--ignore-file <ABS_PATH>]... [--force]`.
@@ -266,10 +268,12 @@ public sealed class JulieExtractRunner
     public static IReadOnlyList<string> BuildLanguagesArgs() => new[] { "languages", "--json" };
 
     /// <summary>
-    /// Pure parse of the <c>languages --json</c> capability snapshot into the set of supported file
-    /// extensions (<c>languages.languages[].extensions[]</c>), normalized to lowercase without a leading dot,
-    /// under an <see cref="StringComparer.OrdinalIgnoreCase"/> comparer. Derives ONLY from the JSON — no
-    /// hardcoded extension list anywhere on this path (the multi-language rule: julie owns what is indexable).
+    /// Pure parse of the <c>languages --json</c> capability snapshot into the set of supported file extensions
+    /// plus exact filenames for basename-selected languages, normalized under an
+    /// <see cref="StringComparer.OrdinalIgnoreCase"/> comparer. Extensions come from
+    /// <c>languages.languages[].extensions[]</c>; exact filenames are added only when their language is reported.
+    /// Exact filenames use a <c>file:</c> prefix so they cannot be treated as extensions. This keeps the catalog
+    /// owned by Julie while representing languages whose source detector uses a basename.
     /// Returns an EMPTY set when the shape is missing; throws only on syntactically invalid JSON.
     /// </summary>
     /// <exception cref="JsonException">The text is not valid JSON.</exception>
@@ -286,10 +290,16 @@ public sealed class JulieExtractRunner
         {
             foreach (var language in languages.EnumerateArray())
             {
-                if (language.ValueKind != JsonValueKind.Object
-                    || !language.TryGetProperty("extensions", out var extensions)
+                if (language.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (language.TryGetProperty("language", out var languageName)
+                    && languageName.ValueKind == JsonValueKind.String)
+                    AddSpecialSourceFileNames(languageName.GetString(), set);
+                if (!language.TryGetProperty("extensions", out var extensions)
                     || extensions.ValueKind != JsonValueKind.Array)
                     continue;
+
                 foreach (var extension in extensions.EnumerateArray())
                 {
                     if (extension.ValueKind == JsonValueKind.String
@@ -299,6 +309,28 @@ public sealed class JulieExtractRunner
             }
         }
         return set;
+    }
+
+    private static void AddSpecialSourceFileNames(string? language, ISet<string> sourceNames)
+    {
+        string[] fileNames = language switch
+        {
+            "qmldir" => ["qmldir"],
+            "gomod" => ["go.mod"],
+            "gosum" => ["go.sum"],
+            "ruby" => [
+                "Gemfile", "Rakefile", "Guardfile", "Capfile", "Vagrantfile", "Brewfile", "Podfile",
+                "Fastfile", "Appfile", "Dangerfile", "Berksfile", "Thorfile",
+            ],
+            "toml" => ["Pipfile"],
+            "r" => ["NAMESPACE"],
+            "bash" => [
+                ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".profile", ".envrc",
+            ],
+            _ => [],
+        };
+        foreach (string fileName in fileNames)
+            sourceNames.Add(ExactFileNamePrefix + fileName);
     }
 
     /// <summary>

@@ -24,6 +24,7 @@ const LAST_USED_MARKER = '.last-used';
 const PROGRESS_INTERVAL_MS = 3000;
 const LOG_RETENTION_DAYS = 14;
 const RENAME_RETRY_MS = 5000;
+const PROMOTION_LOCK_WAIT_MS = 30_000;
 
 function millerHome(env = process.env) {
   const configured = String(env.MILLER_HOME || '').trim();
@@ -207,6 +208,91 @@ function renameWithRetry(from, to, deadlineMs = RENAME_RETRY_MS) {
       }
 
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+}
+
+function promotionLockOwner(lockDir) {
+  try {
+    const [pidText, token] = fs.readFileSync(path.join(lockDir, 'owner'), 'utf8').split('\n');
+    const pid = Number(pidText);
+    return Number.isSafeInteger(pid) && pid > 0 && token ? { pid, token } : null;
+  } catch {
+    return null;
+  }
+}
+
+function stalePromotionLock(lockDir, owner = promotionLockOwner(lockDir)) {
+  if (!owner) {
+    return false;
+  }
+
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === 'ESRCH';
+  }
+}
+
+function retireStalePromotionLock(lockDir, owner = promotionLockOwner(lockDir)) {
+  if (!stalePromotionLock(lockDir, owner)) {
+    return false;
+  }
+
+  const tombstone = `${lockDir}.stale-${owner.token}`;
+  try {
+    fs.renameSync(lockDir, tombstone);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT' || fs.existsSync(tombstone)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function withPackagePromotionLock(targetRoot, stageDir, action) {
+  const lockDir = path.join(targetRoot, '.package-promotion.lock');
+  const token = `${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+  const owner = `${process.pid}\n${token}`;
+  const deadline = Date.now() + PROMOTION_LOCK_WAIT_MS;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+
+  for (;;) {
+    retireStalePromotionLock(lockDir);
+    const candidateDir = path.join(stageDir, `.promotion-lock-${token}`);
+    fs.mkdirSync(candidateDir);
+    try {
+      fs.writeFileSync(path.join(candidateDir, 'owner'), owner, { flag: 'wx' });
+      fs.renameSync(candidateDir, lockDir);
+      break;
+    } catch (error) {
+      try {
+        fs.rmSync(candidateDir, { recursive: true, force: true });
+      } catch {}
+
+      if (!fs.existsSync(lockDir)) {
+        throw error;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for package promotion lock ${lockDir}`);
+      }
+
+      Atomics.wait(wait, 0, 0, 50);
+    }
+  }
+
+  try {
+    return action();
+  } finally {
+    if (promotionLockOwner(lockDir)?.token === token) {
+      const releaseDir = path.join(targetRoot, `.package-promotion-lock-release-${token}`);
+      try {
+        fs.renameSync(lockDir, releaseDir);
+        fs.rmSync(releaseDir, { recursive: true, force: true });
+      } catch {}
     }
   }
 }
@@ -804,17 +890,25 @@ async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCach
     const stagedBinary = findBinary(stageDir, platformInfo.binaryName);
     const stagedPackageDir = path.dirname(stagedBinary);
 
-    launcherLog(`promote begin ${packageDir}`);
-    fs.rmSync(packageDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    renameWithRetry(stagedPackageDir, packageDir);
-    movedPackage = stagedPackageDir === stageDir;
-
     if (process.platform !== 'win32') {
-      fs.chmodSync(path.join(packageDir, platformInfo.binaryName), 0o755);
+      fs.chmodSync(stagedBinary, 0o755);
     }
-    clearMacQuarantine(packageDir);
+
+    clearMacQuarantine(stagedPackageDir);
+    launcherLog(`promote begin ${packageDir}`);
+    const promoted = withPackagePromotionLock(targetRoot, stageDir, () => {
+      if (fs.existsSync(binaryPath)) {
+        return false;
+      }
+
+      fs.rmSync(packageDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      renameWithRetry(stagedPackageDir, packageDir);
+      return true;
+    });
+    movedPackage = promoted && stagedPackageDir === stageDir;
+
     markVersionUsed(targetRoot);
-    launcherLog(`promote end binary=${binaryPath}`);
+    launcherLog(promoted ? `promote end binary=${binaryPath}` : `promote skipped; cache filled by another startup binary=${binaryPath}`);
     pruneOldCachedVersions(cacheRoot, config.version, platformInfo);
 
     return binaryPath;
@@ -888,6 +982,9 @@ module.exports = {
   readPluginConfig,
   sweepLauncherLogs,
   sweepStaleInstallLeftovers,
+  stalePromotionLock,
+  retireStalePromotionLock,
+  withPackagePromotionLock,
   validateArchiveEntryNames,
 };
 

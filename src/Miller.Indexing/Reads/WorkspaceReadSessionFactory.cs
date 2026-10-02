@@ -1,3 +1,4 @@
+using System.Threading;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 
@@ -6,6 +7,14 @@ namespace Miller.Indexing.Reads;
 public static class WorkspaceReadSessionFactory
 {
     public const string StoreEnvironmentVariable = "MILLER_INDEX_STORE";
+    private static readonly AsyncLocal<bool?> StoreModeTestOverride = new();
+
+    internal static IDisposable UseStoreModeForTests(bool enabled)
+    {
+        bool? previous = StoreModeTestOverride.Value;
+        StoreModeTestOverride.Value = enabled;
+        return new StoreModeTestScope(previous);
+    }
 
     public static WorkspaceReadHandle Open(
         string legacyDatabasePath,
@@ -73,12 +82,12 @@ public static class WorkspaceReadSessionFactory
         bool enabled = storeEnabled ?? StoreEnabledFromEnvironment();
         if (!enabled)
         {
-            if (Directory.Exists(workspaceRoot) && StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            if (Directory.Exists(workspaceRoot) && StoreWorkspacePointer.Exists(workspaceRoot))
             {
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.BindingNotReady,
-                    $"Store mode is disabled but workspace '{workspaceRoot}' still has an active store pointer; " +
-                    "export the active view before serving the legacy artifact.");
+                    $"Store mode is disabled but workspace '{workspaceRoot}' still has a store pointer; " +
+                    "rebuild the standalone artifact from source before serving it.");
             }
 
             return new WorkspaceReadHandle(LegacyArtifactReadSession.Open(
@@ -118,12 +127,12 @@ public static class WorkspaceReadSessionFactory
         bool enabled = storeEnabled ?? StoreEnabledFromEnvironment();
         if (!enabled)
         {
-            if (Directory.Exists(workspaceRoot) && StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            if (Directory.Exists(workspaceRoot) && StoreWorkspacePointer.Exists(workspaceRoot))
             {
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.BindingNotReady,
-                    $"Store mode is disabled but workspace '{workspaceRoot}' still has an active store pointer; " +
-                    "export the active view before serving the legacy artifact.");
+                    $"Store mode is disabled but workspace '{workspaceRoot}' still has a store pointer; " +
+                    "rebuild the standalone artifact from source before serving it.");
             }
 
             using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(
@@ -184,15 +193,43 @@ public static class WorkspaceReadSessionFactory
 
     public static bool StoreEnabledFromEnvironment()
     {
+        if (StoreModeTestOverride.Value is bool testOverride)
+            return testOverride;
+
         string? value = Environment.GetEnvironmentVariable(StoreEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
-            return true;
+            return JulieExtractVersionProbe.PinnedVersionSupportsStoreCli;
         return value.Trim().ToLowerInvariant() switch
         {
-            "1" or "true" or "on" or "enabled" => true,
+            "1" or "true" or "on" or "enabled" => ExplicitStoreModeEnabled(),
             "0" or "false" or "off" or "disabled" => false,
             _ => throw new InvalidOperationException(
                 $"{StoreEnvironmentVariable} must be on/off, true/false, enabled/disabled, or 1/0."),
         };
+    }
+
+    public static bool StorePointerRequiresSourceRebuild(string workspaceRoot) =>
+        !StoreEnabledFromEnvironment() && StoreWorkspacePointer.Exists(workspaceRoot);
+
+    private static bool ExplicitStoreModeEnabled()
+    {
+        if (JulieExtractVersionProbe.PinnedVersionSupportsStoreCli)
+            return true;
+
+        throw new InvalidOperationException(
+            $"{StoreEnvironmentVariable}=on is unsupported by pinned julie-extract " +
+            $"v{MillerExtractContract.PinnedJulieExtractVersion}; this version has no family-store CLI. " +
+            "Refresh the workspace to rebuild its standalone artifact before using it.");
+    }
+
+    private sealed class StoreModeTestScope(bool? previous) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                StoreModeTestOverride.Value = previous;
+        }
     }
 }

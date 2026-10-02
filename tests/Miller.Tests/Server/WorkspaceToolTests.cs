@@ -2318,7 +2318,7 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Remove_StoreMemberWithoutExtractorUnregistersAndOwesRetirement()
+    public void Remove_StoreMemberWithoutExtractorRefusesAndPreservesWorkspaceAndBinding()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         string appBaseDirectory = NewTempDir("remove-no-extractor");
@@ -2339,6 +2339,9 @@ public sealed class WorkspaceToolTests : IDisposable
             canonicalCommonDir: null,
             commonDirCreatedAtUtc: null,
             storesRoot: NewTempDir("remove-store-family"));
+        Directory.CreateDirectory(family.StoreRoot);
+        string familyMarker = Path.Combine(family.StoreRoot, "family-marker");
+        File.WriteAllText(familyMarker, "preserve this family store");
         harness.Registry.UpsertStoreMember(
             OtherWs,
             family.FamilyId,
@@ -2349,11 +2352,108 @@ public sealed class WorkspaceToolTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(
             harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs, format: "json"));
 
+        Assert.Equal("refused_retirement", document.RootElement.GetProperty("result").GetString());
+        Assert.False(document.RootElement.GetProperty("view_retirement_owed").GetBoolean());
+        Assert.True(Directory.Exists(otherMiller));
+        Assert.Equal("stub", File.ReadAllText(otherDb));
+        Assert.NotNull(harness.Registry.Get(OtherWs));
+        Assert.NotNull(harness.Registry.GetStoreMember(OtherWs));
+        Assert.True(Directory.Exists(family.StoreRoot));
+        Assert.Equal("preserve this family store", File.ReadAllText(familyMarker));
+    }
+
+    [Fact]
+    public void Remove_MigratedStoreMemberCompletesWithoutProducerAndKeepsFamily()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        using StoreFixture store = StoreFixture.Create();
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease(),
+            appBaseDirectory: NewTempDir("remove-migrated-store"));
+        string workspaceRoot = NewTempDir("remove-migrated-store-member");
+        string miller = Path.Combine(workspaceRoot, ".miller");
+        string indexDb = SymbolsLevelArtifact.Create(miller);
+        harness.Registry.UpsertSeen(OtherWs, "migrated-store-member", workspaceRoot, indexDb, WorkspaceRegistryState.Ready);
+        StoreFamilyRegistryRow family = harness.Registry.AdoptStoreFamily(
+            store.Binding.FamilyId,
+            "remove-migrated-store-lineage",
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storeRoot: store.Binding.StoreRoot);
+        harness.Registry.UpsertStoreMember(
+            OtherWs,
+            family.FamilyId,
+            store.Binding.ViewId,
+            workspaceRoot,
+            WorkspaceRootIdentity.Unknown);
+        StoreWorkspacePointer.Write(
+            workspaceRoot,
+            store.Binding with { WorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(workspaceRoot) });
+        _ = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            harness.Registry,
+            workspaceRoot,
+            indexDb,
+            OtherWs,
+            revision: 2);
+
+        using JsonDocument document = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs, format: "json"));
+
         Assert.Equal("removed", document.RootElement.GetProperty("result").GetString());
-        Assert.True(document.RootElement.GetProperty("view_retirement_owed").GetBoolean());
-        Assert.False(Directory.Exists(otherMiller));
         Assert.Null(harness.Registry.Get(OtherWs));
         Assert.Null(harness.Registry.GetStoreMember(OtherWs));
+        Assert.True(Directory.Exists(store.Binding.StoreRoot));
+    }
+
+    [Fact]
+    public void Prune_MigratedStoreMemberDoesNotNeedProducerMaintenance()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        using StoreFixture store = StoreFixture.Create();
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease(),
+            appBaseDirectory: NewTempDir("prune-migrated-store"));
+        string workspaceRoot = NewTempDir("prune-migrated-store-member");
+        string miller = Path.Combine(workspaceRoot, ".miller");
+        string indexDb = SymbolsLevelArtifact.Create(miller);
+        harness.Registry.UpsertSeen(OtherWs, "migrated-store-member", workspaceRoot, indexDb, WorkspaceRegistryState.Ready);
+        StoreFamilyRegistryRow family = harness.Registry.AdoptStoreFamily(
+            store.Binding.FamilyId,
+            "prune-migrated-store-lineage",
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storeRoot: store.Binding.StoreRoot);
+        harness.Registry.UpsertStoreMember(
+            OtherWs,
+            family.FamilyId,
+            store.Binding.ViewId,
+            workspaceRoot,
+            WorkspaceRootIdentity.Unknown);
+        StoreWorkspacePointer.Write(
+            workspaceRoot,
+            store.Binding with { WorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(workspaceRoot) });
+        _ = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+            harness.Registry,
+            workspaceRoot,
+            indexDb,
+            OtherWs,
+            revision: 2);
+        Directory.Delete(workspaceRoot, recursive: true);
+
+        using JsonDocument document = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "prune", format: "json"));
+
+        Assert.Single(document.RootElement.GetProperty("pruned").EnumerateArray());
+        Assert.Null(harness.Registry.Get(OtherWs));
+        Assert.Null(harness.Registry.GetStoreMember(OtherWs));
+        Assert.NotNull(harness.Registry.GetStoreFamily(family.FamilyId));
+        Assert.True(Directory.Exists(store.Binding.StoreRoot));
     }
 
     [Fact]

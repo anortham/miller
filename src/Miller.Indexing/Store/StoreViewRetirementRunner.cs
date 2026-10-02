@@ -38,7 +38,7 @@ public static class StoreViewRetirementRunner
     /// </summary>
     public static Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? ForToolsRoot(string? toolsRoot)
     {
-        if (string.IsNullOrWhiteSpace(toolsRoot))
+        if (!JulieExtractVersionProbe.PinnedVersionSupportsStoreCli || string.IsNullOrWhiteSpace(toolsRoot))
             return null;
 
         try
