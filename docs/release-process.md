@@ -122,12 +122,12 @@ When bumping `julie-extract`, update the archive hashes, `MillerExtractContract.
 its explicit expected-version tests, README, and third-party notice together. Restore the published
 binary before verification.
 
-Fresh family stores use their creator's product version as `min_reader_version`. A pin bump therefore
-also requires explicit qualification of `FamilyStoreReadSession.ReaderContractCapability`: compare the
-producer's reader/schema/coordinator contracts, test a newly created store with the published binary,
-and advance the capability only after that evidence supports it. Keep the capability independent of
-the download pin and retain rejection tests for the next unsupported version. Run the real-producer
-retention and sidecar cursor Scale tests before starting the full Windows release gate.
+Julie 3 removed family-store and export commands. Qualify the current standalone extraction contract
+and all supported languages with the published binary. For upgrades from Julie 2, verify source rebuild,
+import preservation, exact registry-member retirement, and failure paths that retain the pointer and
+original family data. Never advance the legacy `FamilyStoreReadSession.ReaderContractCapability` merely
+to match the download pin; it describes the independently supported older read contract. Historical
+real-producer store tests are capability-skipped when the pinned producer lacks those commands.
 
 To bump the semantic pin:
 
