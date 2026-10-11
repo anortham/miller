@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '17 9 * * *'
   workflow_dispatch:
 
 # Fast CI and the sqlite-vec spike intentionally build without restoring the pinned tool packages. Windows/Scale
@@ -54,13 +52,13 @@ jobs:
         run: dotnet build Miller.slnx --no-restore -c Release
 
       # Default suite = unit + contract. Scale/integration tests are [Trait("Category","Scale")] and excluded here;
-      # they run in a separate scheduled job. Wall-clock performance is measured on a controlled local machine,
+      # they run in a separate manual-dispatch job. Wall-clock performance is measured on a controlled local machine,
       # not inferred from hosted-runner duration.
       - name: Test (default suite)
         run: dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale"
 
   scale-test:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -79,7 +77,7 @@ jobs:
   # There is no per-push Windows test job. Hosted windows-2025 runners cost ~14 minutes per push and
   # flake under load (antivirus file holds, slow disks), so Windows verification moved to the local
   # win-test KVM guest as a REQUIRED PRE-RELEASE step — see docs/release-process.md "Windows
-  # verification". The schedule/dispatch-only windows-scale-smoke below stays, as does the win-x64
+  # verification". The dispatch-only windows-scale-smoke below stays, as does the win-x64
   # AOT spike leg.
 
   # P0 HARD GATE for the semantic integration program: sqlite-vec must load and function under a
@@ -89,7 +87,7 @@ jobs:
   # which is NOT part of Miller.slnx. Making it a REQUIRED BRANCH CHECK is a user-owned
   # branch-protection change; see docs/findings/2026-07-19-sqlite-vec-aot-spike.md.
   sqlite-vec-aot-spike:
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -116,7 +114,7 @@ jobs:
         run: bash scripts/spike-sqlite-vec.sh --rid ${{ matrix.rid }}
 
   windows-scale-smoke:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
